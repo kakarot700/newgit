@@ -2,9 +2,13 @@
 //! HEAD, and the actor registry.
 
 pub mod config;
+pub mod ignore;
+pub mod index;
 pub mod ostore;
 pub mod refs;
 pub mod txn;
+pub mod walk;
+pub mod workspace;
 
 use std::path::{Path, PathBuf};
 

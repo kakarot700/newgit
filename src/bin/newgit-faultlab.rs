@@ -112,6 +112,37 @@ fn run(args: &[String]) -> Result<()> {
             );
             Ok(())
         }
+        "snapshot" => {
+            // snapshot <root> <message> [workspace]
+            let root = std::path::Path::new(&args[2]);
+            let repo = Repo::open(root)?;
+            let author = repo.default_actor()?;
+            let req = newgit::ops::snapshot::SnapshotRequest {
+                workspace: args.get(4).cloned().unwrap_or_else(|| "main".into()),
+                message: args[3].clone(),
+                author,
+                timestamp_ms: Some(1_700_000_000_000),
+                tz_offset_min: 0,
+                goal: None,
+                change: None,
+                extras: Default::default(),
+            };
+            let out = newgit::ops::snapshot::snapshot(&repo, &req)?;
+            println!(
+                "OK {} files={} hashed={} reused={}",
+                out.oid, out.entries, out.hashed, out.reused
+            );
+            Ok(())
+        }
+        "workspace-create" => {
+            // workspace-create <root> <name>
+            let root = std::path::Path::new(&args[2]);
+            let repo = Repo::open(root)?;
+            let actor = repo.default_actor()?;
+            let info = newgit::repo::workspace::create(&repo, &args[3], None, actor)?;
+            println!("OK {}", info.name);
+            Ok(())
+        }
         other => {
             eprintln!("faultlab: unknown command {other:?}");
             Ok(())

@@ -11,8 +11,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod cli;
 pub mod error;
 pub mod object;
+pub mod obs;
+pub mod ops;
 pub mod repo;
 pub mod util;
 

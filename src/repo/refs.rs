@@ -9,6 +9,38 @@ use crate::object::ObjectId;
 use crate::repo::config::Limits;
 use crate::repo::txn::{self, Cas, RecoveryReport, RefLogEntry, ReflogLine, TxnOp, TxnReport};
 
+/// Validate a ref name, optionally allowing the system namespace
+/// `workspaces/<name>` (used internally by the workspace engine; user-facing
+/// APIs must use `check_ref_name`).
+pub fn check_ref_name_system(name: &str) -> Result<()> {
+    if let Some(rest) = name.strip_prefix("workspaces/") {
+        if !rest.is_empty() && !rest.contains('/') {
+            return check_workspace_segment(rest);
+        }
+    }
+    check_ref_name(name)
+}
+
+/// Single-segment grammar shared by ref segments and workspace names.
+pub fn check_workspace_segment(seg: &str) -> Result<()> {
+    if seg.is_empty() || seg.len() > 255 {
+        return Err(Error::InvalidRef(format!("bad name length: {seg:?}")));
+    }
+    if seg == "." || seg == ".." || seg.ends_with('.') || seg.ends_with(".lock") {
+        return Err(Error::InvalidRef(format!("illegal name {seg:?}")));
+    }
+    for b in seg.bytes() {
+        let ok = b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-');
+        if !ok {
+            return Err(Error::InvalidRef(format!(
+                "name contains forbidden byte {:?}: {seg:?}",
+                b as char
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a user-facing ref name (STORAGE_FORMAT.md §5).
 pub fn check_ref_name(name: &str) -> Result<()> {
     if name.is_empty() {

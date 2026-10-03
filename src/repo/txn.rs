@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use crate::error::{Error, Result};
 use crate::object::ObjectId;
 use crate::repo::config::Limits;
-use crate::repo::refs::check_ref_name;
+use crate::repo::refs::check_ref_name_system;
 use crate::util::{base64, fault, fsx};
 
 static TXN_CTR: AtomicU64 = AtomicU64::new(0);
@@ -70,6 +70,8 @@ pub enum TxnOp {
     },
     /// Write a small metadata file relative to `.newgit/` (e.g. `HEAD`).
     File { rel: String, data: Vec<u8> },
+    /// Delete a small metadata file relative to `.newgit/` (idempotent).
+    FileDelete { rel: String },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -181,6 +183,9 @@ impl Journal {
                         base64::encode(data),
                     ));
                 }
+                TxnOp::FileDelete { rel } => {
+                    out.push_str(&format!("FDEL {}\n", base64::encode(rel.as_bytes()),));
+                }
             }
         }
         out.push_str("END\n");
@@ -231,7 +236,7 @@ impl Journal {
                 }
                 let name = String::from_utf8(base64::decode(f[0])?)
                     .map_err(|_| Error::Malformed("REF name not utf-8".into()))?;
-                check_ref_name(&name)?;
+                check_ref_name_system(&name)?;
                 if f[1] != "ZERO" {
                     return Err(Error::Malformed(
                         "journal REF old field must be ZERO (final-state journals)".into(),
@@ -274,6 +279,16 @@ impl Journal {
                     ));
                 }
                 ops.push(TxnOp::File { rel, data });
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("FDEL ") {
+                let rel = String::from_utf8(base64::decode(rest.trim())?)
+                    .map_err(|_| Error::Malformed("FDEL rel not utf-8".into()))?;
+                fsx::check_rel_path(&rel, 255)?;
+                if rel.starts_with("objects/") || rel.starts_with("txn/") {
+                    return Err(Error::Malformed(format!("FDEL may not target {rel:?}")));
+                }
+                ops.push(TxnOp::FileDelete { rel });
                 continue;
             }
             return Err(Error::Malformed(format!("bad journal line: {line:?}")));
@@ -486,6 +501,14 @@ fn apply_journal(ng: &Path, journal: &Journal, limits: &Limits) -> Result<()> {
                 fault::fault("txn:file_write_err")?;
                 fsx::atomic_write(&path, data)?;
             }
+            TxnOp::FileDelete { rel } => {
+                let path = ng.join(rel);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(Error::io(&path, e)),
+                }
+            }
         }
     }
 
@@ -520,25 +543,33 @@ fn validate_ops(ops: &[TxnOp], limits: &Limits) -> Result<()> {
     for op in ops {
         match op {
             TxnOp::Ref { name, log, .. } => {
-                check_ref_name(name)?;
+                check_ref_name_system(name)?;
                 if log.message.len() > 4096 {
                     return Err(Error::Limit("reflog message too long".into()));
                 }
             }
             TxnOp::File { rel, data } => {
-                fsx::check_rel_path(rel, limits.max_path_component)?;
+                check_file_op_rel(rel, limits)?;
                 if data.len() as u64 > 1 << 20 {
                     return Err(Error::Limit(
                         "txn FILE op larger than 1 MiB (not a metadata write?)".into(),
                     ));
                 }
-                // Refuse to journal anything inside the object store or txn
-                // dir through the generic FILE op.
-                if rel.starts_with("objects/") || rel.starts_with("txn/") {
-                    return Err(Error::Invalid(format!("FILE op may not target {rel:?}")));
-                }
+            }
+            TxnOp::FileDelete { rel } => {
+                check_file_op_rel(rel, limits)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn check_file_op_rel(rel: &str, limits: &Limits) -> Result<()> {
+    fsx::check_rel_path(rel, limits.max_path_component)?;
+    // Refuse to journal anything inside the object store or txn dir through
+    // generic FILE/FDEL ops.
+    if rel.starts_with("objects/") || rel.starts_with("txn/") {
+        return Err(Error::Invalid(format!("FILE op may not target {rel:?}")));
     }
     Ok(())
 }
@@ -548,12 +579,12 @@ fn validate_ops(ops: &[TxnOp], limits: &Limits) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 pub fn ref_path(ng: &Path, name: &str) -> Result<PathBuf> {
-    check_ref_name(name)?;
+    check_ref_name_system(name)?;
     Ok(ng.join("refs").join(name))
 }
 
 pub fn reflog_path(ng: &Path, name: &str) -> Result<PathBuf> {
-    check_ref_name(name)?;
+    check_ref_name_system(name)?;
     Ok(ng.join("logs").join("refs").join(name))
 }
 

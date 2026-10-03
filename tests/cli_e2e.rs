@@ -1,0 +1,339 @@
+//! End-to-end CLI tests: drive the real binary in a subprocess, assert on
+//! stdout/stderr/exit codes and on-disk state (TEST_MATRIX "E2E").
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn newgit_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_newgit")
+}
+
+struct Run {
+    out: String,
+    err: String,
+    code: i32,
+}
+
+fn ng(cwd: &Path, args: &[&str]) -> Run {
+    let o = Command::new(newgit_bin())
+        .current_dir(cwd)
+        .args(args)
+        .env_remove("NEWGIT_FAULTS")
+        .output()
+        .expect("spawn newgit");
+    Run {
+        out: String::from_utf8_lossy(&o.stdout).to_string(),
+        err: String::from_utf8_lossy(&o.stderr).to_string(),
+        code: o.status.code().unwrap_or(-1),
+    }
+}
+
+fn ok(cwd: &Path, args: &[&str]) -> String {
+    let r = ng(cwd, args);
+    assert_eq!(r.code, 0, "newgit {args:?} failed: {}{}", r.out, r.err);
+    r.out
+}
+
+fn tmp() -> (tempfile::TempDir, PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().to_path_buf();
+    (d, p)
+}
+
+fn write(dir: &Path, rel: &str, content: &[u8]) {
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, content).unwrap();
+}
+
+#[test]
+fn full_workflow_e2e() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("proj");
+    std::fs::create_dir(&proj).unwrap();
+
+    // init
+    let out = ok(&proj, &["init"]);
+    assert!(out.contains("initialized newgit repository"));
+    assert!(proj.join(".newgit/config").exists());
+
+    // unborn status is clean
+    let out = ok(&proj, &["status"]);
+    assert!(out.contains("unborn"));
+    assert!(out.contains("clean"));
+
+    // create files → status shows added
+    write(&proj, "src/main.rs", b"fn main() {}\n");
+    write(&proj, "README.md", b"# hi\n");
+    let out = ok(&proj, &["status"]);
+    assert!(out.contains("README.md"));
+    assert!(out.contains("src/main.rs"));
+    assert!(out.contains("added"));
+
+    // snapshot
+    let out = ok(&proj, &["snapshot", "-m", "initial import"]);
+    assert!(out.contains("snapshot"));
+    assert!(out.contains("files: 2"));
+
+    // status clean again
+    let out = ok(&proj, &["status"]);
+    assert!(out.contains("clean"));
+
+    // modify + snapshot again
+    write(&proj, "src/main.rs", b"fn main() { println!(\"hi\"); }\n");
+    let out = ok(&proj, &["status"]);
+    assert!(out.contains("modified"));
+    ok(&proj, &["snapshot", "-m", "add greeting"]);
+
+    // history shows both, newest first
+    let out = ok(&proj, &["history"]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].contains("add greeting"));
+    assert!(lines[1].contains("initial import"));
+
+    // hash-object + cat round trip
+    let oid = ok(&proj, &["hash-object", "README.md", "--write"])
+        .trim()
+        .to_string();
+    assert_eq!(oid.len(), 64);
+    let raw = Command::new(newgit_bin())
+        .current_dir(&proj)
+        .args(["cat", &oid, "--raw"])
+        .output()
+        .unwrap();
+    assert_eq!(raw.stdout, b"# hi\n");
+
+    // cat structured
+    let out = ok(&proj, &["cat", &oid[..12], "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"]["type"], "blob");
+    assert_eq!(v["data"]["size"], 5);
+
+    // workspace flow via CLI
+    ok(&proj, &["workspace", "create", "agent-a"]);
+    let wsdir = proj.join(".newgit/workspaces/agent-a/files");
+    assert!(wsdir.join("README.md").exists());
+    write(&wsdir, "feature.txt", b"agent work");
+    let out = ok(&proj, &["status", "-w", "agent-a"]);
+    assert!(out.contains("feature.txt"));
+    ok(
+        &proj,
+        &[
+            "snapshot",
+            "-w",
+            "agent-a",
+            "-m",
+            "agent change",
+            "--author",
+            "agent:test-1",
+        ],
+    );
+    let out = ok(&proj, &["workspace", "list"]);
+    assert!(out.contains("agent-a"));
+    assert!(out.contains("*main"));
+    // main is untouched
+    let out = ok(&proj, &["status"]);
+    assert!(out.contains("clean"));
+    // history of the workspace: agent snapshot + the two main snapshots it
+    // was based on
+    let out = ok(&proj, &["history", "-w", "agent-a", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let entries = v["data"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["snapshot"]["message"], "agent change");
+    assert_eq!(entries[1]["snapshot"]["message"], "add greeting");
+    assert_eq!(entries[2]["snapshot"]["message"], "initial import");
+    // discard dirty workspace refused, forced ok
+    write(&wsdir, "dirty.txt", b"x");
+    let r = ng(&proj, &["workspace", "discard", "agent-a"]);
+    assert_eq!(r.code, 5, "conflict exit code; stderr={}", r.err);
+    let r = ng(&proj, &["workspace", "discard", "agent-a", "--force"]);
+    assert_eq!(r.code, 0, "{}", r.err);
+    assert!(!wsdir.exists());
+}
+
+#[test]
+fn json_envelope_and_errors() {
+    let (_d, dir) = tmp();
+    std::fs::create_dir(dir.join("p")).unwrap();
+    let proj = dir.join("p");
+    ok(&proj, &["init"]);
+
+    // success envelope
+    let out = ok(&proj, &["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"]["clean"], true);
+
+    // error envelope: unknown command
+    let r = ng(&proj, &["frobnicate"]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("unknown command"));
+
+    // error envelope json
+    let r = ng(&proj, &["--json", "frobnicate"]);
+    assert_eq!(r.code, 2);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"]["category"], "invalid");
+
+    // missing required flag
+    let r = ng(&proj, &["snapshot"]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("--message"));
+
+    // not a repository
+    let other = dir.join("notrepo");
+    std::fs::create_dir(&other).unwrap();
+    let r = ng(&other, &["status"]);
+    assert_eq!(r.code, 3);
+    assert!(r.err.contains("not a newgit repository"));
+
+    // missing object
+    let r = ng(&proj, &["cat", &"ab".repeat(32)]);
+    assert_eq!(r.code, 3);
+
+    // ambiguous/short prefix
+    let r = ng(&proj, &["cat", "ab"]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("at least 4"));
+}
+
+#[test]
+fn version_and_help() {
+    let (_d, dir) = tmp();
+    let out = ok(&dir, &["version"]);
+    assert!(out.starts_with("newgit "));
+    let out = ok(&dir, &["version", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["data"]["version"].is_string());
+    let out = ok(&dir, &["help"]);
+    assert!(out.contains("snapshot"));
+    assert!(out.contains("workspace"));
+    let out = ok(&dir, &["help", "workspace"]);
+    assert!(out.contains("discard"));
+    // no args → usage error
+    let r = ng(&dir, &[]);
+    assert_eq!(r.code, 2);
+}
+
+#[test]
+fn actor_config_flow() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("p2");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    ok(
+        &proj,
+        &[
+            "actor",
+            "set-default",
+            "--id",
+            "human:alice",
+            "--name",
+            "Alice L",
+        ],
+    );
+    let out = ok(&proj, &["actor", "show", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["actor"]["id"], "human:alice");
+    assert_eq!(v["data"]["actor"]["kind"], "human");
+    write(&proj, "x.txt", b"x");
+    ok(&proj, &["snapshot", "-m", "by alice"]);
+    let out = ok(&proj, &["history", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let snap = &v["data"][0]["snapshot"];
+    assert_eq!(snap["message"], "by alice");
+    // author resolves to the configured actor
+    let author_oid = snap["author"].as_str().unwrap();
+    let out = ok(&proj, &["cat", author_oid, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["data"]["id"], "human:alice");
+}
+
+#[test]
+fn repo_flag_and_discovery() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("p3");
+    std::fs::create_dir_all(proj.join("deep/deeper")).unwrap();
+    ok(&proj, &["init"]);
+    // -C from anywhere
+    let out = ok(&dir, &["-C", proj.to_str().unwrap(), "status"]);
+    assert!(out.contains("workspace: main"));
+    // discovery from a deep subdirectory
+    let out = ok(&proj.join("deep/deeper"), &["status"]);
+    assert!(out.contains("workspace: main"));
+    // --repo pointing at a non-repo
+    let r = ng(
+        &dir,
+        &["--repo", dir.join("nope").to_str().unwrap(), "status"],
+    );
+    assert_eq!(r.code, 3);
+}
+
+#[test]
+fn deterministic_snapshot_via_cli() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("p4");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "f.txt", b"stable");
+    ok(&proj, &["actor", "set-default", "--id", "process:ci"]);
+    let out = ok(
+        &proj,
+        &[
+            "snapshot",
+            "-m",
+            "det",
+            "--time",
+            "1700000000000",
+            "--tz",
+            "330",
+            "--json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let oid1 = v["data"]["oid"].as_str().unwrap().to_string();
+    // reset the ref and redo identically → same object id
+    // (uses the API-level reset through a second init in a fresh repo with
+    // identical inputs)
+    let proj2 = dir.join("p5");
+    std::fs::create_dir(&proj2).unwrap();
+    ok(&proj2, &["init"]);
+    write(&proj2, "f.txt", b"stable");
+    ok(&proj2, &["actor", "set-default", "--id", "process:ci"]);
+    let out = ok(
+        &proj2,
+        &[
+            "snapshot",
+            "-m",
+            "det",
+            "--time",
+            "1700000000000",
+            "--tz",
+            "330",
+            "--json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let oid2 = v["data"]["oid"].as_str().unwrap().to_string();
+    assert_eq!(
+        oid1, oid2,
+        "identical inputs must produce identical snapshots"
+    );
+}
+
+#[test]
+fn debug_logging_goes_to_stderr_jsonl() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("p6");
+    std::fs::create_dir(&proj).unwrap();
+    let r = ng(&proj, &["--debug", "init"]);
+    assert_eq!(r.code, 0);
+    assert!(r.err.contains("\"event\":\"cli_start\"") || r.err.contains("cli_start"));
+    assert!(r.err.contains("op_id"));
+    // stdout stays clean for scripts
+    assert!(r.out.contains("initialized"));
+}

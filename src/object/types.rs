@@ -291,6 +291,7 @@ fn check_set_sorted(list: &[ObjectId], what: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum EntryMode {
     File = 0,
@@ -429,6 +430,7 @@ impl Tree {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum ActorKind {
     Human = 0,
@@ -657,6 +659,7 @@ impl Snapshot {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum GoalStatus {
     Open = 0,
@@ -748,6 +751,7 @@ impl Goal {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum ChangeStatus {
     Draft = 0,
@@ -866,6 +870,7 @@ impl Change {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Verdict {
     Pass = 0,
@@ -1096,6 +1101,7 @@ impl Evaluation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum ProposalState {
     Open = 0,
@@ -1288,7 +1294,8 @@ fn check_extras(m: &BTreeMap<String, String>) -> Result<()> {
 // Object enum: canonical encoding + identity + decoding
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Object {
     Blob(Vec<u8>),
     Tree(Tree),

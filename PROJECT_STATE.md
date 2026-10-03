@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 2 COMPLETE — repo skeleton, refs, WAL transactions, crash recovery.
-- **Classification:** NOT PRODUCTION READY (core engine in progress; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **74/74** ✓ (49 unit + 4 concurrency + 10 property + 10 txn-recovery + 1 version).
+- **Phase:** Iteration 3 COMPLETE — workspaces, snapshots, status, history, CLI foundation.
+- **Classification:** NOT PRODUCTION READY (no diff/merge yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **120/120** ✓ (75 unit + 7 cli-e2e + 4 concurrency + 13 ops + 10 property + 10 txn-recovery + 1 version).
 
 ## Environment / how to resume
 
@@ -33,8 +33,13 @@ src/
   util/{hex,varint,fsx,fault}.rs   # codecs, atomic writes, locks, fault injection
   object/{id,types,envelope}.rs    # ObjectId, 9 object types w/ canonical codec, NGOB envelope
   repo/{config,ostore,refs,txn,mod}.rs  # store, refs (CAS+reflog), WAL transactions, Repo facade
+  repo/{ignore,index,walk,workspace}.rs  # .newgitignore engine, NGIX cache, safe walk, workspaces
+  ops/{tree,snapshot,checkout,status,history}.rs  # core operations
+  cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
+  obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
-tests/{common,txn_recovery,concurrency_refs,property_core,version}.rs
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,cli_e2e}.rs
+docs/{STORAGE_FORMAT,CLI}.md
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
 ```
@@ -77,20 +82,46 @@ None.
   parallel multi-ref txns; concurrent object writes; concurrent recovery);
   10 property suites (codecs, canonical-form invariants, bit-flip detection).
 
+## What iteration 3 added (verified)
+
+- .newgitignore engine (gitignore subset: wildcards, **, anchoring, negation,
+  dir-only; last rule wins; pruning only without negations).
+- Safe workspace walk: limits (depth/component/size), symlink record-don't-follow,
+  control-char/NUL filename rejection, non-UTF-8 names skipped with warnings,
+  .newgit/.git skipped, special files skipped with warnings.
+- NGIX index cache (status accelerator; corrupt/missing index rebuilds silently —
+  invariant-tested).
+- Workspaces: main (repo root) + named (.newgit/workspaces/<name>/files),
+  journaled create (ref+meta atomic), discard with dirty-refusal + --force,
+  per-workspace op locks, position refs workspaces/<name>.
+- Snapshot op: walk → hash (index fast path) → build_tree → Snapshot object →
+  CAS ref update in one txn; deterministic with --time/--author.
+- Checkout: FreshWorkspace/Overwrite modes, refuses symlink-component
+  traversal, restores exec bits + symlinks, feeds index.
+- Status: added/modified/deleted classification, list truncation, warnings.
+- History: deterministic newest-first traversal (ts DESC, oid DESC).
+- CLI `newgit`: init/status/snapshot/history/log/cat/hash-object/workspace/
+  actor/config/version/help; --json envelope; stable exit codes; --debug JSONL
+  diagnostics on stderr; hand-rolled arg parser with typo rejection.
+- Crash tests: snap:before_txn (harmless), snap:after_txn (committed),
+  workspace-create txn crash (ref/meta converge).
+- E2E: 7 subprocess suites incl. full workflow, JSON errors, exit codes,
+  cross-repo snapshot determinism.
+
 ## Current task (next iteration)
 
-**Iteration 3: workspaces + snapshots + status + CLI foundation.**
+**Iteration 4: diff engine.**
 Completion condition:
-1. Workspace create/list/discard/checkpoint with per-workspace locks + metadata.
-2. Filesystem walk → Tree building (limits, symlink policy, ignore file).
-3. `newgit` CLI binary: init, snapshot, status, history, log, cat, hash-object,
-   workspace ops; `--json` output; stable exit codes; E2E subprocess tests.
-4. Index cache (NGIX) accelerates status; deleting index is always safe.
-5. Docs: docs/CLI.md; PROJECT_STATE/TEST_MATRIX updated; commit.
+1. Myers O(ND) line diff + unified & JSON output; binary detection; rename
+   detection (exact + similarity); mode-change reporting.
+2. `newgit diff [a] [b] [--name-only|--json|--unified]` for snapshots,
+   workspaces, and arbitrary trees.
+3. Property tests: patch application reconstructs target; determinism.
+4. Large-file guards (limits) + tests. Docs updated; commit.
 
 ## Next tasks (ordered)
 
-4. Workspaces + tree building from filesystem + snapshot/status/history ops + CLI foundation (`init`, `snapshot`, `status`, `history`, `log`, `cat`, `hash-object`).
+5. Workspaces + tree building from filesystem + snapshot/status/history ops + CLI foundation (`init`, `snapshot`, `status`, `history`, `log`, `cat`, `hash-object`).
 4. Diff engine (Myers line diff, rename detection, binary handling, JSON+unified output).
 5. Merge engine (3-way tree + diff3 content merge, conflicts, integrate/rollback).
 6. Goals/Changes/Actors/Evidence/Evaluations/Proposals ops + CLI.

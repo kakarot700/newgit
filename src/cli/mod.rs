@@ -1,0 +1,756 @@
+//! NewGit CLI: dispatch, output envelopes, and command implementations.
+//!
+//! Conventions (docs/CLI.md):
+//! * every command supports `--json` (machine-readable envelope),
+//! * exit codes are stable (`src/error.rs::exit_code`),
+//! * errors are actionable: they say what to do next,
+//! * no command ever prints file contents except explicit `cat --raw`,
+//! * no command ever prints secrets (there are none locally; remote tokens
+//!   are handled in iteration 9 with the same rule).
+
+pub mod args;
+
+use std::path::{Path, PathBuf};
+
+use args::{Args, COMMON_ALIASES};
+use serde_json::{json, Value};
+
+use crate::error::{exit_code, Error, Result};
+use crate::object::types::{Actor, ActorKind, Object};
+use crate::object::ObjectId;
+use crate::ops::{history, snapshot as snap_op, status as status_op};
+use crate::repo::workspace;
+use crate::repo::Repo;
+use crate::util::{base64, timefmt};
+use crate::{obs, VERSION};
+
+#[derive(Debug)]
+pub struct Ctx {
+    pub json: bool,
+    pub repo: Option<PathBuf>,
+}
+
+enum Output {
+    Text(String),
+    Json(Value),
+    Raw(Vec<u8>),
+}
+
+const GLOBAL_FLAGS: &[&str] = &["json", "debug", "repo"];
+
+pub fn run(argv: Vec<String>) -> i32 {
+    // Extract globals anywhere in argv.
+    let mut json = false;
+    let mut debug = false;
+    let mut repo: Option<PathBuf> = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut i = 1;
+    let tokens = &argv[..];
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "--json" => json = true,
+            "--debug" => debug = true,
+            "--repo" | "-C" => {
+                i += 1;
+                match tokens.get(i) {
+                    Some(p) => repo = Some(PathBuf::from(p)),
+                    None => {
+                        eprintln!("newgit: --repo requires a path");
+                        return exit_code::USAGE;
+                    }
+                }
+            }
+            other => rest.push(other.to_string()),
+        }
+        i += 1;
+    }
+    obs::init(debug);
+    let ctx = Ctx { json, repo };
+    obs::event("cli_start", &[("args", json!(rest)), ("json", json!(json))]);
+    let result = dispatch(&ctx, &rest);
+    match result {
+        Ok(out) => {
+            emit(&ctx, out);
+            obs::event("cli_ok", &[]);
+            exit_code::OK
+        }
+        Err(e) => {
+            obs::error_event(&e);
+            if ctx.json {
+                println!(
+                    "{}",
+                    json!({ "ok": false, "error": { "category": e.category(), "message": e.to_string() } })
+                );
+            } else {
+                eprintln!("newgit: error[{}]: {e}", e.category());
+            }
+            e.exit_code()
+        }
+    }
+}
+
+fn emit(ctx: &Ctx, out: Output) {
+    match out {
+        Output::Text(t) => {
+            if !t.is_empty() {
+                println!("{t}");
+            }
+        }
+        Output::Json(v) => {
+            let wrapped = if ctx.json {
+                json!({ "ok": true, "data": v })
+            } else {
+                v
+            };
+            println!("{wrapped}");
+        }
+        Output::Raw(b) => {
+            use std::io::Write;
+            let stdout = std::io::stdout();
+            let mut lock = stdout.lock();
+            let _ = lock.write_all(&b);
+            let _ = lock.flush();
+        }
+    }
+}
+
+fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
+    let (cmd, tail) = match argv.split_first() {
+        Some((c, t)) => (c.as_str(), t),
+        None => return Err(Error::Invalid("no command given; try `newgit help`".into())),
+    };
+    match cmd {
+        "version" | "--version" | "-V" => cmd_version(ctx),
+        "help" | "--help" | "-h" => cmd_help(tail),
+        "init" => cmd_init(ctx, tail),
+        "status" => cmd_status(ctx, tail),
+        "snapshot" => cmd_snapshot(ctx, tail),
+        "history" | "log" => cmd_history(ctx, tail),
+        "cat" | "cat-object" => cmd_cat(ctx, tail),
+        "hash-object" => cmd_hash_object(ctx, tail),
+        "workspace" | "ws" => cmd_workspace(ctx, tail),
+        "actor" => cmd_actor(ctx, tail),
+        "config" => cmd_config(ctx, tail),
+        other => Err(Error::Invalid(format!(
+            "unknown command {other:?}; try `newgit help`"
+        ))),
+    }
+}
+
+fn open_repo(ctx: &Ctx) -> Result<Repo> {
+    match &ctx.repo {
+        Some(p) => Repo::open(p),
+        None => {
+            let cwd = std::env::current_dir().map_err(Error::from)?;
+            Repo::discover(&cwd)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// commands
+// ---------------------------------------------------------------------------
+
+fn cmd_version(ctx: &Ctx) -> Result<Output> {
+    if ctx.json {
+        Ok(Output::Json(json!({ "version": VERSION })))
+    } else {
+        Ok(Output::Text(format!("newgit {VERSION}")))
+    }
+}
+
+fn cmd_help(tail: &[String]) -> Result<Output> {
+    let topic = tail.first().map(String::as_str);
+    let text = match topic {
+        None | Some("help") => HELP_MAIN,
+        Some("workspace") => HELP_WORKSPACE,
+        Some("snapshot") => HELP_SNAPSHOT,
+        Some(t) => {
+            return Err(Error::Invalid(format!(
+                "no help topic {t:?}; try `newgit help`"
+            )))
+        }
+    };
+    Ok(Output::Text(text.to_string()))
+}
+
+const HELP_MAIN: &str = "\
+newgit — agent-native version control
+
+Usage: newgit [--repo <path>] [--json] [--debug] <command> [args]
+
+Core:
+  init [<dir>]                 create a repository
+  status [-w <ws>] [--all]     compare workspace against its position
+  snapshot -m <msg> [-w <ws>]  capture the workspace as an immutable snapshot
+  history [--from <ref|oid>] [-n <N>]   walk snapshot history (alias: log)
+  cat <oid> [--raw]            inspect an object (JSON; --raw dumps blobs)
+  hash-object <file> [--write] compute (and optionally store) a blob id
+
+Workspaces:
+  workspace create <name> [--base <ref|oid>]
+  workspace list | show <name> | discard <name> [--force]
+
+Identity:
+  actor show                   show the default actor
+  actor set-default --id <actor-id> [--name <display>]
+  config show                  show repository configuration
+
+Global:
+  version, help [<topic>]
+  --json     machine-readable envelope {ok, data|error}
+  --repo/-C  operate on a repository root explicitly
+
+Exit codes: 0 ok · 2 usage · 3 repo state · 4 race (retry) · 5 conflict ·
+6 limit · 7 auth · 70 internal bug";
+
+const HELP_WORKSPACE: &str = "\
+newgit workspace — isolated areas for concurrent human/agent work
+
+  workspace create <name> [--base <ref|oid>]
+      Materialize <base> (default: HEAD) into .newgit/workspaces/<name>/files
+      and create the position ref workspaces/<name>.
+
+  workspace list
+      All workspaces with positions.
+
+  workspace show <name>
+      Metadata + status summary.
+
+  workspace discard <name> [--force]
+      Delete position ref + files. Refuses without --force when the
+      workspace has unsnapshotted changes.
+
+Names: [A-Za-z0-9._-], ≤255 bytes, not '.'/'..', no trailing dot/.lock.";
+
+const HELP_SNAPSHOT: &str = "\
+newgit snapshot — capture a workspace as an immutable snapshot
+
+  snapshot -m <message> [-w <workspace>]
+           [--time <unix-ms>] [--tz <minutes>]
+           [--author <actor-id> [--author-name <display>]]
+           [--goal <oid>] [--change <oid>]
+
+The workspace position ref is updated with compare-and-swap; concurrent
+snapshot attempts on the same workspace fail with exit code 4 (retry).
+--time/--tz exist for deterministic tests and imports; default is now/UTC.";
+
+fn cmd_init(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(GLOBAL_FLAGS)?;
+    let dir = PathBuf::from(a.pos(0).unwrap_or("."));
+    std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+    let repo = Repo::init(&dir)?;
+    obs::event(
+        "init",
+        &[("root", json!(repo.root().display().to_string()))],
+    );
+    if ctx.json {
+        Ok(Output::Json(json!({
+            "root": repo.root(),
+            "ng": repo.ng(),
+            "head": "refs/main (unborn)",
+        })))
+    } else {
+        Ok(Output::Text(format!(
+            "initialized newgit repository in {}",
+            repo.ng().display()
+        )))
+    }
+}
+
+fn cmd_status(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &["workspace", "limit"], COMMON_ALIASES)?;
+    a.reject_unknown(&["workspace", "limit", "all", "json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN);
+    let limit = if a.flag("all") {
+        usize::MAX
+    } else {
+        a.opt("limit")
+            .map(|v| {
+                v.parse::<usize>()
+                    .map_err(|_| Error::Invalid(format!("bad --limit {v:?}")))
+            })
+            .transpose()?
+            .unwrap_or(50)
+    };
+    let _span = obs::span("status");
+    let st = status_op::status(&repo, ws, limit)?;
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&st).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut out = String::new();
+    out.push_str(&format!(
+        "workspace: {} @ {}\n",
+        st.workspace,
+        match st.head {
+            Some(h) => h.short(),
+            None => "unborn".into(),
+        }
+    ));
+    if st.clean {
+        out.push_str("clean: no changes\n");
+    } else {
+        for (label, list) in [
+            ("added", &st.added),
+            ("modified", &st.modified),
+            ("deleted", &st.deleted),
+        ] {
+            if !list.is_empty() {
+                out.push_str(&format!("{label} ({}):\n", list.len()));
+                for p in list {
+                    out.push_str(&format!("  {p}\n"));
+                }
+            }
+        }
+        if st.truncated {
+            out.push_str("(lists truncated; use --all)\n");
+        }
+    }
+    if st.ignored > 0 {
+        out.push_str(&format!("ignored: {}\n", st.ignored));
+    }
+    for w in &st.warnings {
+        out.push_str(&format!("warning: {w}\n"));
+    }
+    Ok(Output::Text(out.trim_end().to_string()))
+}
+
+fn resolve_actor(repo: &Repo, a: &Args) -> Result<ObjectId> {
+    match a.opt("author") {
+        None => repo.default_actor(),
+        Some(id) => {
+            let name = a.opt("author-name").unwrap_or(id);
+            let kind = match id.split_once(':') {
+                Some(("human", _)) => ActorKind::Human,
+                Some(("agent", _)) => ActorKind::Agent,
+                Some(("process", _)) => ActorKind::Process,
+                _ => ActorKind::Anonymous,
+            };
+            let actor = Actor {
+                kind,
+                id: id.to_string(),
+                display_name: name.to_string(),
+                tool: "newgit-cli".into(),
+                tool_version: VERSION.into(),
+                pubkey: None,
+                extras: Default::default(),
+            };
+            repo.register_actor(&actor)
+        }
+    }
+}
+
+fn resolve_oid_arg(repo: &Repo, s: &str, what: &str) -> Result<ObjectId> {
+    ObjectId::from_hex(s).or_else(|_| {
+        repo.objects
+            .resolve_prefix(s)
+            .map_err(|e| Error::Invalid(format!("{what} {s:?}: {e}")))
+    })
+}
+
+fn cmd_snapshot(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(
+        tail,
+        &[
+            "message",
+            "workspace",
+            "time",
+            "tz",
+            "author",
+            "author-name",
+            "goal",
+            "change",
+        ],
+        COMMON_ALIASES,
+    )?;
+    a.reject_unknown(&[
+        "message",
+        "workspace",
+        "time",
+        "tz",
+        "author",
+        "author-name",
+        "goal",
+        "change",
+        "json",
+        "debug",
+        "repo",
+    ])?;
+    let repo = open_repo(ctx)?;
+    let message = a.req("message")?.to_string();
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN).to_string();
+    let author = resolve_actor(&repo, &a)?;
+    let timestamp_ms = a
+        .opt("time")
+        .map(|v| {
+            v.parse::<i64>()
+                .map_err(|_| Error::Invalid(format!("bad --time {v:?} (unix millis)")))
+        })
+        .transpose()?;
+    let tz: i16 = a
+        .opt("tz")
+        .map(|v| {
+            v.parse::<i16>()
+                .map_err(|_| Error::Invalid(format!("bad --tz {v:?} (minutes)")))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let goal = a
+        .opt("goal")
+        .map(|g| resolve_oid_arg(&repo, g, "goal"))
+        .transpose()?;
+    let change = a
+        .opt("change")
+        .map(|c| resolve_oid_arg(&repo, c, "change"))
+        .transpose()?;
+    let req = snap_op::SnapshotRequest {
+        workspace: ws,
+        message,
+        author,
+        timestamp_ms,
+        tz_offset_min: tz,
+        goal,
+        change,
+        extras: Default::default(),
+    };
+    let _span = obs::span("snapshot");
+    let out = snap_op::snapshot(&repo, &req)?;
+    obs::event(
+        "snapshot_created",
+        &[
+            ("oid", json!(out.oid.to_hex())),
+            ("workspace", json!(req.workspace)),
+            ("entries", json!(out.entries)),
+        ],
+    );
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&out).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut t = format!(
+        "snapshot {} on {} ({})\n  files: {} (hashed {}, reused {})",
+        out.oid.short(),
+        req.workspace,
+        out.ref_name,
+        out.entries,
+        out.hashed,
+        out.reused
+    );
+    for w in &out.warnings {
+        t.push_str(&format!("\nwarning: {w}"));
+    }
+    Ok(Output::Text(t))
+}
+
+fn cmd_history(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &["from", "limit", "workspace"], COMMON_ALIASES)?;
+    a.reject_unknown(&["from", "limit", "workspace", "json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let limit = a
+        .opt("limit")
+        .map(|v| {
+            v.parse::<usize>()
+                .map_err(|_| Error::Invalid(format!("bad --limit {v:?}")))
+        })
+        .transpose()?
+        .unwrap_or(20);
+    let from = match a.opt("from") {
+        Some(spec) => Some(resolve_base_or_oid(&repo, spec)?),
+        None => match a.opt("workspace") {
+            Some(ws) => workspace::position(&repo, ws)?,
+            None => None, // HEAD
+        },
+    };
+    let _span = obs::span("history");
+    let entries = history::history(&repo, from, limit)?;
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&entries).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut out = String::new();
+    for e in &entries {
+        let author_short = match repo.objects.get(&e.snapshot.author) {
+            Ok(Object::Actor(a)) => a.display_name,
+            _ => e.snapshot.author.short(),
+        };
+        out.push_str(&format!(
+            "{} {} {} {}\n",
+            e.oid.short(),
+            timefmt::iso8601_utc(e.snapshot.timestamp_ms),
+            author_short,
+            e.snapshot.message.lines().next().unwrap_or("")
+        ));
+    }
+    if entries.is_empty() {
+        out.push_str("(no history — unborn position)\n");
+    }
+    Ok(Output::Text(out.trim_end().to_string()))
+}
+
+fn resolve_base_or_oid(repo: &Repo, spec: &str) -> Result<ObjectId> {
+    workspace::resolve_base(repo, Some(spec))?.ok_or_else(|| Error::RefNotFound(spec.to_string()))
+}
+
+fn cmd_cat(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["raw", "json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let spec = a.pos_req(0, "object-id")?;
+    let oid = resolve_oid_arg(&repo, spec, "object")?;
+    let obj = repo.objects.get(&oid)?;
+    if a.flag("raw") {
+        return match &obj {
+            Object::Blob(b) => Ok(Output::Raw(b.clone())),
+            other => Err(Error::Invalid(format!(
+                "--raw is only valid for blobs (this is a {} object)",
+                other.type_tag().name()
+            ))),
+        };
+    }
+    let value = match &obj {
+        Object::Blob(b) => json!({
+            "id": oid,
+            "type": "blob",
+            "size": b.len(),
+            "content_base64": if ctx.json { base64::encode(b) } else { format!("<{} bytes; use --raw>", b.len()) },
+        }),
+        other => {
+            let mut v = serde_json::to_value(other).map_err(|e| Error::Bug(e.to_string()))?;
+            if let Value::Object(ref mut m) = v {
+                m.insert("id".into(), json!(oid));
+            }
+            v
+        }
+    };
+    Ok(Output::Json(value))
+}
+
+fn cmd_hash_object(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["write", "json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let file = Path::new(a.pos_req(0, "file")?);
+    let oid = if a.flag("write") {
+        repo.objects.put_blob_from_file(file)?
+    } else {
+        let data = std::fs::read(file).map_err(|e| Error::io(file, e))?;
+        Object::Blob(data).id()
+    };
+    if ctx.json {
+        Ok(Output::Json(
+            json!({ "oid": oid, "wrote": a.flag("write") }),
+        ))
+    } else {
+        Ok(Output::Text(oid.to_hex()))
+    }
+}
+
+fn cmd_workspace(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let (sub, rest) =
+        match tail.split_first() {
+            Some((s, r)) => (s.as_str(), r),
+            None => return Err(Error::Invalid(
+                "usage: newgit workspace <create|list|show|discard>; see `newgit help workspace`"
+                    .into(),
+            )),
+        };
+    let repo = open_repo(ctx)?;
+    match sub {
+        "create" => {
+            let a = Args::parse(rest, &["base"], COMMON_ALIASES)?;
+            a.reject_unknown(&["base", "json", "debug", "repo"])?;
+            let name = a.pos_req(0, "workspace-name")?.to_string();
+            workspace::check_workspace_name(&name)?;
+            let base = workspace::resolve_base(&repo, a.opt("base"))?;
+            let actor = resolve_actor(&repo, &a)?;
+            let info = workspace::create(&repo, &name, base, actor)?;
+            obs::event("workspace_created", &[("name", json!(name))]);
+            if ctx.json {
+                Ok(Output::Json(
+                    serde_json::to_value(&info).map_err(|e| Error::Bug(e.to_string()))?,
+                ))
+            } else {
+                Ok(Output::Text(format!(
+                    "created workspace {}\n  dir: {}\n  position: {}",
+                    info.name,
+                    info.dir.display(),
+                    info.head_oid
+                        .map(|o| o.to_hex())
+                        .unwrap_or_else(|| "unborn".into()),
+                )))
+            }
+        }
+        "list" | "ls" => {
+            let a = Args::parse(rest, &[], COMMON_ALIASES)?;
+            a.reject_unknown(&["json", "debug", "repo"])?;
+            let list = workspace::list(&repo)?;
+            if ctx.json {
+                return Ok(Output::Json(
+                    serde_json::to_value(&list).map_err(|e| Error::Bug(e.to_string()))?,
+                ));
+            }
+            let mut out = String::new();
+            for w in &list {
+                out.push_str(&format!(
+                    "{}{}\tposition={}\tbase={}\n",
+                    if w.is_main { "*" } else { " " },
+                    w.name,
+                    w.head_oid
+                        .map(|o| o.short())
+                        .unwrap_or_else(|| "unborn".into()),
+                    w.base_oid.map(|o| o.short()).unwrap_or_else(|| "-".into()),
+                ));
+            }
+            Ok(Output::Text(out.trim_end().to_string()))
+        }
+        "show" => {
+            let a = Args::parse(rest, &[], COMMON_ALIASES)?;
+            let name = a.pos_req(0, "workspace-name")?;
+            let info = workspace::info(&repo, name)?;
+            let st = status_op::status(&repo, name, 10)?;
+            if ctx.json {
+                let mut v = serde_json::to_value(&info).map_err(|e| Error::Bug(e.to_string()))?;
+                if let Value::Object(ref mut m) = v {
+                    m.insert(
+                        "status".into(),
+                        serde_json::to_value(&st).unwrap_or_default(),
+                    );
+                }
+                Ok(Output::Json(v))
+            } else {
+                Ok(Output::Text(format!(
+                    "workspace: {}\n  dir: {}\n  ref: {}\n  position: {}\n  base: {}\n  clean: {}",
+                    info.name,
+                    info.dir.display(),
+                    info.ref_name,
+                    info.head_oid
+                        .map(|o| o.to_hex())
+                        .unwrap_or_else(|| "unborn".into()),
+                    info.base_oid
+                        .map(|o| o.to_hex())
+                        .unwrap_or_else(|| "-".into()),
+                    st.clean,
+                )))
+            }
+        }
+        "discard" | "rm" => {
+            let a = Args::parse(rest, &[], COMMON_ALIASES)?;
+            a.reject_unknown(&["force", "json", "debug", "repo"])?;
+            let name = a.pos_req(0, "workspace-name")?;
+            workspace::discard(&repo, name, a.flag("force"))?;
+            obs::event("workspace_discarded", &[("name", json!(name))]);
+            if ctx.json {
+                Ok(Output::Json(json!({ "discarded": name })))
+            } else {
+                Ok(Output::Text(format!("discarded workspace {name}")))
+            }
+        }
+        other => Err(Error::Invalid(format!(
+            "unknown workspace subcommand {other:?}; see `newgit help workspace`"
+        ))),
+    }
+}
+
+fn cmd_actor(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let (sub, rest) = match tail.split_first() {
+        Some((s, r)) => (s.as_str(), r),
+        None => {
+            return Err(Error::Invalid(
+                "usage: newgit actor <show|set-default>".into(),
+            ))
+        }
+    };
+    let repo = open_repo(ctx)?;
+    match sub {
+        "show" => {
+            let oid = repo.default_actor()?;
+            let obj = repo.objects.get(&oid)?;
+            let actor = obj.as_actor()?.clone();
+            if ctx.json {
+                Ok(Output::Json(json!({ "oid": oid, "actor": actor })))
+            } else {
+                Ok(Output::Text(format!(
+                    "{}\n  kind: {}\n  id: {}\n  tool: {} {}",
+                    oid,
+                    actor.kind.name(),
+                    actor.id,
+                    actor.tool,
+                    actor.tool_version
+                )))
+            }
+        }
+        "set-default" => {
+            let a = Args::parse(rest, &["id", "name"], COMMON_ALIASES)?;
+            let id = a.req("id")?.to_string();
+            let name = a.opt("name").unwrap_or(&id).to_string();
+            let mut cfg = repo.config.clone();
+            cfg.default_actor_id = Some(id.clone());
+            cfg.default_actor_name = Some(name.clone());
+            cfg.save(&repo.ng().join("config"))?;
+            // register immediately so the actor object exists
+            let kind = match id.split_once(':') {
+                Some(("human", _)) => ActorKind::Human,
+                Some(("agent", _)) => ActorKind::Agent,
+                Some(("process", _)) => ActorKind::Process,
+                _ => ActorKind::Anonymous,
+            };
+            let actor = Actor {
+                kind,
+                id,
+                display_name: name,
+                tool: "newgit-cli".into(),
+                tool_version: VERSION.into(),
+                pubkey: None,
+                extras: Default::default(),
+            };
+            let oid = repo.register_actor(&actor)?;
+            if ctx.json {
+                Ok(Output::Json(json!({ "oid": oid })))
+            } else {
+                Ok(Output::Text(format!("default actor set: {oid}")))
+            }
+        }
+        other => Err(Error::Invalid(format!(
+            "unknown actor subcommand {other:?}"
+        ))),
+    }
+}
+
+fn cmd_config(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let (sub, rest) = match tail.split_first() {
+        Some((s, r)) => (s.as_str(), r),
+        None => return Err(Error::Invalid("usage: newgit config show".into())),
+    };
+    let repo = open_repo(ctx)?;
+    let a = Args::parse(rest, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo"])?;
+    match sub {
+        "show" => {
+            if ctx.json {
+                let mut m = serde_json::Map::new();
+                for (k, v) in repo.config.limits.to_map() {
+                    m.insert(k, json!(v));
+                }
+                m.insert("format_version".into(), json!(repo.config.format_version));
+                if let Some(id) = &repo.config.default_actor_id {
+                    m.insert("default_actor_id".into(), json!(id));
+                }
+                if let Some(n) = &repo.config.default_actor_name {
+                    m.insert("default_actor_name".into(), json!(n));
+                }
+                Ok(Output::Json(Value::Object(m)))
+            } else {
+                Ok(Output::Text(repo.config.serialize()))
+            }
+        }
+        other => Err(Error::Invalid(format!(
+            "unknown config subcommand {other:?}"
+        ))),
+    }
+}

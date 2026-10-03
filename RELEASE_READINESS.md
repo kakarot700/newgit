@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 2 of 12 complete).
+**Current classification: NOT PRODUCTION READY** (iteration 3 of 12 complete).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -11,10 +11,9 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## FUNCTIONALITY
 - [x] core repository operations (init/open/discover/refs/txn/HEAD/actors) — iteration 2 ✅ (74 tests)
-- [ ] snapshots / status / history — iteration 3
+- [x] snapshots / status / history / workspaces — iteration 3 ✅ (13 ops + 7 e2e suites)
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
 - [ ] changes / goals / evidence / proposals — iteration 6
-- [ ] workspaces — iteration 3
 - [ ] integration (merge) + rollback — iteration 5
 - [ ] verification (fsck) — iteration 7
 - [ ] Git compatibility path — iteration 8
@@ -35,8 +34,8 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [ ] access control (remote authn/authz) tested — iteration 9
 
 ## QUALITY
-- [x] unit tests (37) — iteration 1
-- [ ] integration / E2E / property / fuzz / regression suites — iterations 2–9
+- [x] unit tests (75) + integration (23) + e2e (7) + property (10) — iterations 1–3
+- [x→partial] integration/E2E/property suites ✅ it2–3; fuzz + chaos due it7; regression discipline active
 
 ## PERFORMANCE
 - [ ] representative benchmarks — iteration 11
@@ -46,7 +45,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## DOCUMENTATION
 - [x] README, ARCHITECTURE, STORAGE_FORMAT, SECURITY_MODEL, THREAT_MODEL — iteration 1
-- [ ] CLI reference, protocol reference, agent guide, migration guide, contributor/testing/troubleshooting/deployment — iterations 3–11
+- [x→partial] CLI reference ✅ it3; protocol reference, agent guide, migration guide, contributor/testing/troubleshooting/deployment — iterations 8–11
 
 ## RELEASE
 - [ ] clean reproducible build + artifacts + checksums — iteration 11

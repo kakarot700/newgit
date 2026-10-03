@@ -15,11 +15,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - Journaled transactions (write-ahead, idempotent redo), 5 crash-recovery
   scenarios via child-process aborts, 4 concurrency suites. ✅ (74 tests total)
 
-## Iteration 3 — Workspaces, snapshots, status, CLI foundation  [ ]
-- Workspace create/list/discard/checkpoint; filesystem walk with limits+symlink safety.
-- Tree building, `snapshot`, `status` (index-accelerated), `history`/`log`.
-- CLI binary: hand-rolled parser, `--json`, exit codes, `init`, `hash-object`, `cat`.
-- E2E tests through the CLI subprocess.
+## Iteration 3 — Workspaces, snapshots, status, CLI foundation  [x]
+- Workspace create/list/show/discard; safe walk (limits, symlink policy,
+  ignores); tree building; snapshot/status/history ops. ✅
+- CLI binary `newgit` (11 commands, `--json`, stable exit codes, --debug
+  JSONL); docs/CLI.md. ✅
+- E2E subprocess tests (7 suites) + ops integration (13) + crash tests for
+  snapshot/workspace-create. ✅ (120 tests total)
 
 ## Iteration 4 — Diff engine  [ ]
 - Myers line diff, unified + JSON output, rename detection, binary/large-file handling.

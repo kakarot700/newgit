@@ -4,6 +4,24 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 3 — 2026-10-04)
+- `.newgitignore` engine (gitignore subset, deterministic, documented).
+- Safe workspace walk with limits, symlink policy (record, never follow),
+  filename validation, and skip-with-warning behavior.
+- NGIX workspace index (status cache; corruption-safe by design).
+- Workspaces: main + named, journaled create/discard, position refs,
+  per-workspace locks, dirty-discard protection.
+- Operations: snapshot (CAS-journaled), status, history (deterministic
+  order), tree build/flatten (cycle-safe), checkout (symlink-traversal safe).
+- CLI binary `newgit`: 11 commands, `--json` envelope, stable exit codes,
+  `--debug` structured diagnostics; docs/CLI.md.
+- Crash tests for snapshot and workspace creation; 45 new tests (total 120).
+
+### Fixed (iteration 3)
+- NGIX index double-length-prefix decode bug (caught by ops test — index
+  reuse silently disabled; now regression-tested both levels).
+- base64/cli-arg test-harness bugs (token splitting, fs limits vs OS limits).
+
 ### Added (iteration 2 — 2026-10-04)
 - Repository facade: idempotent `init`, crash-recovering `open`, walk-up
   `discover`, HEAD (symbolic/detached) via journaled updates, actor registry
