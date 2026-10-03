@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 1 of 12).
+**Current classification: NOT PRODUCTION READY** (iteration 2 of 12 complete).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -10,7 +10,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] no unexplained architectural debt blocking release — DECISIONS.md D-001…D-007
 
 ## FUNCTIONALITY
-- [ ] core repository operations (init/open/refs/txn) — iteration 2
+- [x] core repository operations (init/open/discover/refs/txn/HEAD/actors) — iteration 2 ✅ (74 tests)
 - [ ] snapshots / status / history — iteration 3
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
 - [ ] changes / goals / evidence / proposals — iteration 6
@@ -21,9 +21,9 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## RELIABILITY
 - [x] crash-safe object writes (tmp→fsync→rename→dir fsync) + fault hooks — iteration 1
-- [ ] crash recovery for transactions — iteration 2
+- [x] crash recovery for transactions (forward recovery, quarantine, dedup) — iteration 2 ✅ (5 abort scenarios)
 - [x] corruption detection (digest, misfiling, truncation, bombs) — iteration 1
-- [ ] concurrency testing (refs/txn races) — iteration 2/5
+- [x→partial] concurrency testing: refs/txn races ✅ iteration 2; integration races due iteration 5
 - [ ] failure injection suite end-to-end — iterations 2–7
 - [ ] recovery verification (chaos) — iteration 7
 

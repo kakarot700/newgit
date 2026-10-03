@@ -29,18 +29,25 @@ pub fn fault_action(name: &str) -> FaultAction {
         Ok(v) if !v.is_empty() => v,
         _ => return FaultAction::None,
     };
-    // parse "name" or "name#N" entries
+    // Spec entries are either:
+    // * an exact point name ("txn:apply#1" matches the point of that name), or
+    // * "pointname#N" meaning: fire on the Nth (1-based) hit of "pointname".
     let mut want_nth: Option<u64> = None;
     let mut matched = false;
     for entry in spec.split(',') {
-        let (ename, nth) = match entry.split_once('#') {
-            Some((a, b)) => (a, b.parse::<u64>().ok()),
-            None => (entry, None),
-        };
-        if ename == name {
+        if entry == name {
             matched = true;
-            want_nth = nth;
+            want_nth = None;
             break;
+        }
+        if let Some((ename, nth)) = entry.split_once('#') {
+            if ename == name {
+                if let Ok(n) = nth.parse::<u64>() {
+                    matched = true;
+                    want_nth = Some(n);
+                    break;
+                }
+            }
         }
     }
     if !matched {

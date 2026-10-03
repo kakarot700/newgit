@@ -110,22 +110,30 @@ impl FileLock {
                     return Ok(FileLock { path: lock_path });
                 }
                 Err(e) => {
-                    // Inspect existing lock for staleness.
+                    // Inspect the existing lock: reclaim it when the holder
+                    // is provably dead (recorded pid not alive) or when it
+                    // is older than the stale timeout. Aborted/killed
+                    // processes never run Drop, so this reclamation is the
+                    // crash-recovery path for locks.
                     let age = lock_age(&lock_path);
-                    if let Some(age) = age {
-                        if age > stale_after {
-                            // Reclaim: remove and retry once.
-                            let _ = std::fs::remove_file(&lock_path);
-                            if try_create_lock(&lock_path).is_ok() {
-                                return Ok(FileLock { path: lock_path });
-                            }
+                    let holder = read_lock_info(&lock_path);
+                    let holder_dead = holder
+                        .map(|(pid, _)| pid != std::process::id() && !pid_alive(pid))
+                        .unwrap_or(false);
+                    let timed_out = age.map(|a| a > stale_after).unwrap_or(false);
+                    if holder_dead || timed_out {
+                        // Reclaim: remove and retry once.
+                        let _ = std::fs::remove_file(&lock_path);
+                        if try_create_lock(&lock_path).is_ok() {
+                            return Ok(FileLock { path: lock_path });
                         }
                     }
                     if SystemTime::now() >= deadline {
                         return Err(Error::LockBusy(format!(
-                            "{} (held for {:?})",
+                            "{} (held for {:?}, holder pid {:?})",
                             lock_path.display(),
-                            age.unwrap_or(Duration::ZERO)
+                            age.unwrap_or(Duration::ZERO),
+                            holder.map(|(pid, _)| pid)
                         )));
                     }
                     drop(e);
@@ -176,6 +184,38 @@ fn lock_age(lock_path: &Path) -> Option<Duration> {
     let m = std::fs::metadata(lock_path).ok()?;
     let t = m.modified().ok()?;
     SystemTime::now().duration_since(t).ok()
+}
+
+/// Parse `pid=<n> time=<secs>` from a lock file.
+fn read_lock_info(lock_path: &Path) -> Option<(u32, u64)> {
+    let text = std::fs::read_to_string(lock_path).ok()?;
+    let mut pid = None;
+    let mut time = None;
+    for part in text.split_whitespace() {
+        if let Some(v) = part.strip_prefix("pid=") {
+            pid = v.parse::<u32>().ok();
+        } else if let Some(v) = part.strip_prefix("time=") {
+            time = v.parse::<u64>().ok();
+        }
+    }
+    Some((pid?, time.unwrap_or(0)))
+}
+
+/// Is a process with this pid currently alive?
+/// Linux: /proc probe. Elsewhere: conservatively assume alive (reclamation
+/// then relies on the stale timeout — documented in STORAGE_FORMAT.md).
+fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Path::new(&format!("/proc/{pid}")).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 /// Read a file fully, rejecting files larger than `max` before reading.
@@ -302,6 +342,37 @@ mod tests {
         drop(_l1);
         let _l2 =
             FileLock::acquire(&p, Duration::from_millis(100), Duration::from_secs(60)).unwrap();
+    }
+
+    #[test]
+    fn dead_holder_lock_is_reclaimed() {
+        // Simulates a lock left behind by an aborted/killed process:
+        // the recorded pid is beyond any possible Linux pid (pid_max ≤ 2^22),
+        // so the holder is provably dead and the lock must be reclaimed
+        // *without* waiting for the stale timeout.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("res");
+        let lp = lock_path_for(&p);
+        std::fs::write(&lp, "pid=99999999 time=1").unwrap();
+        let start = std::time::Instant::now();
+        let _l =
+            FileLock::acquire(&p, Duration::from_millis(500), Duration::from_secs(3600)).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "dead-holder lock must be reclaimed immediately"
+        );
+    }
+
+    #[test]
+    fn live_holder_lock_is_not_stolen() {
+        // Our own pid is provably alive: the lock must NOT be reclaimed by
+        // the pid rule; acquisition times out with LockBusy.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("res");
+        let lp = lock_path_for(&p);
+        std::fs::write(&lp, format!("pid={} time=1", std::process::id())).unwrap();
+        let r = FileLock::acquire(&p, Duration::from_millis(50), Duration::from_secs(3600));
+        assert!(matches!(r, Err(Error::LockBusy(_))));
     }
 
     #[test]

@@ -2,6 +2,36 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-010 · All ref mutations go through the transaction engine (Iteration 2)
+**Context:** Single-ref updates could bypass journaling, creating two code
+paths with different crash semantics.
+**Decision:** Even one-ref updates execute as 1-op WAL transactions.
+**Consequences:** Uniform recovery; slight overhead (journal write per ref
+update) — acceptable, measurable in iteration 11 benchmarks.
+
+## D-009 · Commit point = journal fsync; forward recovery (Iteration 2)
+**Context:** A crash between journal write and application leaves intent
+durable but effects missing. Undo-style recovery would need old-value
+journals; redo needs only final state.
+**Decision:** Journals record final state only. Once the RUNNING journal is
+durable, the transaction WILL complete (recovery redoes application).
+Application is idempotent; reflog lines carry the txn id and readers dedupe,
+so redo re-appends are invisible. Corrupt journals are quarantined
+(`*.journal.corrupt`), never applied, never deleted silently.
+**Consequences:** Simple, testable all-or-nothing semantics; `execute()`
+returns error before the journal only on CAS failure (no effects at all).
+
+## D-008 · Lock reclamation by holder liveness (Iteration 2)
+**Context:** `abort()`/SIGKILL never runs destructors, so O_EXCL lock files
+outlive their holders and blocked recovery for the full stale timeout (5 min)
+in tests — and would in production crashes too.
+**Decision:** Lock files record `pid`/`time`. On contention, reclaim iff the
+recorded pid is provably dead (Linux `/proc/<pid>` probe) or age exceeds the
+stale timeout. Non-Linux platforms fall back to the timeout (conservative).
+**Consequences:** Fast crash recovery; pid-reuse can only delay reclamation
+(never steal a live lock). Tested: `dead_holder_lock_is_reclaimed`,
+`live_holder_lock_is_not_stolen`.
+
 ## D-007 · Git interoperability via fast-export/fast-import (Iteration 1)
 **Context:** Full git object-format compatibility (sha1 packs, deltas) would
 require a large dependency (gitoxide) or months of work.

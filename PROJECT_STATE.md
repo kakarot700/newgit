@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 1 COMPLETE — core object/storage layer landed.
-- **Classification:** NOT PRODUCTION READY (early core; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` 37/37 ✓ (see TEST_MATRIX.md for exact commands).
+- **Phase:** Iteration 2 COMPLETE — repo skeleton, refs, WAL transactions, crash recovery.
+- **Classification:** NOT PRODUCTION READY (core engine in progress; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **74/74** ✓ (49 unit + 4 concurrency + 10 property + 10 txn-recovery + 1 version).
 
 ## Environment / how to resume
 
@@ -32,8 +32,9 @@ src/
   error.rs            # Error enum, categories, stable exit codes
   util/{hex,varint,fsx,fault}.rs   # codecs, atomic writes, locks, fault injection
   object/{id,types,envelope}.rs    # ObjectId, 9 object types w/ canonical codec, NGOB envelope
-  repo/{config,ostore}.rs          # Limits/RepoConfig, content-addressed store
-tests/                # (integration tests arrive from iteration 2)
+  repo/{config,ostore,refs,txn,mod}.rs  # store, refs (CAS+reflog), WAL transactions, Repo facade
+  bin/newgit-faultlab.rs           # crash-test harness child process
+tests/{common,txn_recovery,concurrency_refs,property_core,version}.rs
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
 ```
@@ -56,20 +57,40 @@ docs/                 # STORAGE_FORMAT.md (normative)
 
 None.
 
+## What iteration 2 added (verified)
+
+- Repo facade: init (idempotent), open (runs crash recovery), discover (walk-up),
+  HEAD (symbolic/detached, txn-journaled updates), actor registry + default
+  actor resolution (config → env → anonymous), format-version gate.
+- Refs: strict name grammar (reserved namespaces, forbidden chars), CAS updates,
+  delete, list/prefix-walk, reflog with txn-id dedup (crash-redo safe).
+- WAL transaction engine: global txn lock, recovery-first, CAS preconditions
+  before any write, RUNNING journal → apply (idempotent) → COMPLETE marker;
+  commit point = journal fsync (forward recovery); corrupt journals quarantined.
+- FileLock reclaims locks of provably-dead holders (pid liveness via /proc on
+  Linux; stale timeout otherwise) — crash-tested with aborted child processes.
+- Fault points: txn:before_journal, txn:after_journal, txn:apply#<i>,
+  txn:before_complete, txn:after_complete, txn:ref_write_err, txn:file_write_err,
+  ostore:before_write/after_tmp_write/before_rename/after_rename/after_read.
+- Tests: 5 crash-recovery scenarios via faultlab child aborts; 4 concurrency
+  suites (CAS races ⇒ exactly one winner/version + reflog count equality;
+  parallel multi-ref txns; concurrent object writes; concurrent recovery);
+  10 property suites (codecs, canonical-form invariants, bit-flip detection).
+
 ## Current task (next iteration)
 
-**Iteration 2: repository skeleton + refs + transactions + recovery.**
+**Iteration 3: workspaces + snapshots + status + CLI foundation.**
 Completion condition:
-1. `Repo::init/open` with `.newgit/` layout, HEAD, config, actors registry.
-2. Refs module: create/read/update/delete with lock+CAS, invalid-name rejection.
-3. Journaled transaction engine: multi-ref atomic updates; kill-at-fault-point
-   tests prove redo recovery leaves refs all-or-nothing.
-4. Property tests for varint/hex/ObjectId already exist; add ref name rules.
-5. Docs: ARCHITECTURE.md updated; commits coherent.
+1. Workspace create/list/discard/checkpoint with per-workspace locks + metadata.
+2. Filesystem walk → Tree building (limits, symlink policy, ignore file).
+3. `newgit` CLI binary: init, snapshot, status, history, log, cat, hash-object,
+   workspace ops; `--json` output; stable exit codes; E2E subprocess tests.
+4. Index cache (NGIX) accelerates status; deleting index is always safe.
+5. Docs: docs/CLI.md; PROJECT_STATE/TEST_MATRIX updated; commit.
 
 ## Next tasks (ordered)
 
-3. Workspaces + tree building from filesystem + snapshot/status/history ops + CLI foundation (`init`, `snapshot`, `status`, `history`, `log`, `cat`, `hash-object`).
+4. Workspaces + tree building from filesystem + snapshot/status/history ops + CLI foundation (`init`, `snapshot`, `status`, `history`, `log`, `cat`, `hash-object`).
 4. Diff engine (Myers line diff, rename detection, binary handling, JSON+unified output).
 5. Merge engine (3-way tree + diff3 content merge, conflicts, integrate/rollback).
 6. Goals/Changes/Actors/Evidence/Evaluations/Proposals ops + CLI.

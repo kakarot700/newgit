@@ -9,10 +9,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - fsx primitives (atomic write, locks, path safety), fault injection, config/limits.
 - 37 unit tests; clippy/fmt clean.
 
-## Iteration 2 — Repository skeleton, refs, transactions  [ ]
-- `.newgit/` layout, Repo init/open, HEAD handling, actor registry.
-- Refs with validation, lock+CAS updates, reflog.
-- Journaled transactions (write-ahead, idempotent redo), crash-recovery tests.
+## Iteration 2 — Repository skeleton, refs, transactions  [x]
+- `.newgit/` layout, Repo init/open/discover, HEAD handling, actor registry. ✅
+- Refs with validation, lock+CAS updates, reflog (txn-id dedup). ✅
+- Journaled transactions (write-ahead, idempotent redo), 5 crash-recovery
+  scenarios via child-process aborts, 4 concurrency suites. ✅ (74 tests total)
 
 ## Iteration 3 — Workspaces, snapshots, status, CLI foundation  [ ]
 - Workspace create/list/discard/checkpoint; filesystem walk with limits+symlink safety.
