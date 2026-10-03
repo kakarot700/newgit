@@ -1,0 +1,28 @@
+[package]
+name = "newgit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "NewGit: an agent-native version-control system"
+readme = "README.md"
+repository = "https://example.invalid/newgit"
+
+[dependencies]
+sha2 = "0.10"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+debug = false
+strip = true
+
+[profile.dev]
+opt-level = 1

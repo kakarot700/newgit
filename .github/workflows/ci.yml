@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy (all targets)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Unit + integration tests
+        run: cargo test --locked
+      - name: Release-mode tests (chaos/perf-sensitive)
+        run: cargo test --release --locked
+      - name: Chaos suite (bounded)
+        if: hashFiles('tests/chaos.rs') != ''
+        run: NEWGIT_CHAOS_ITERATIONS=200 cargo test --release --locked --test chaos
+      - name: Build release binary
+        run: cargo build --release --locked
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: newgit-linux-x86_64
+          path: target/release/newgit
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-audit (RustSec)
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit
+      - name: cargo-deny (licenses/bans/advisories)
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check advisories bans licenses sources
+      - name: SBOM (cargo metadata)
+        run: |
+          cargo metadata --format-version 1 --locked > sbom-cargo-metadata.json
+          grep -o '"name":"[^"]*"' sbom-cargo-metadata.json | sort -u | head -50
