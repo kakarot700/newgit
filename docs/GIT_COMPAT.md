@@ -23,6 +23,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | author date + tz | `timestamp_ms` (seconds×1000), `tz_offset_min` | exact to the second |
 | committer (when ≠ author) | `extras.git_committer_{name,email,ts_ms,tz}` | exact (restored on export) |
 | original commit sha | `extras.git_sha1` (via `--show-original-ids`) | exact |
+| signed commit | no signature field in NewGit; `signed_commits_stripped` reports source commit IDs whose `gpgsig` header was dropped by `fast-export` | lossy; the signature is neither preserved nor verified |
 | first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact (restored on export) |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
 | empty Git tree | empty NewGit `Tree` object | tested for an empty root commit, returning to empty after deleting the only file, and a consecutive empty commit; exact Git tree id survives export in this fixture |
@@ -166,13 +167,21 @@ environment and does not claim other Git versions or operating systems.
     silently rewriting it through an omitted replacement ref. The Git-visible
     replacement-aware view is not reproduced; this behavior is regression-tested
     for one replacement commit on Git 2.43.0/Linux.
+11. **Git commit signatures are not preserved or verified.** Git 2.43.0's
+    `fast-export` omits commit `gpgsig` headers. Before updating refs, import
+    checks the original commit objects and lists each affected source object ID
+    in `signed_commits_stripped`; export consequently creates unsigned commits.
+    A real, Git-verified SSH-signed commit proves this loss/reporting behavior on
+    Git 2.43.0/Linux. OpenPGP signatures, alternate Git versions, and other
+    signature-header variants are not established by that fixture.
 
 ## CLI details
 
 Both commands support `--json` (`{ok:true,data:<report>}`), `--repo/-C`, and
-emit `obs` events with `--debug`. Reports include every mapped ref, every
-skipped ref, and every stripped tag — an import/export never loses something
-without telling you.
+emit `obs` events with `--debug`. Import reports include mapped refs, skipped
+refs, stripped tag metadata, and source commit IDs whose signatures were
+stripped. This signature report identifies the affected commits; it does not
+preserve signature bytes or establish cryptographic validity.
 
 Exit codes: 0 success · 2 usage/invalid source or target (not a git repo,
 occupied target, submodule, non-snapshot ref) · standard codes otherwise.

@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: prevent unsupported replace refs from silently rewriting ordinary branch history during import (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: report Git commit signatures that `fast-export` strips during import, without implying preservation or verification (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -18,6 +18,15 @@
 - **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
+
+## Current Git compatibility milestone — signed commit signatures (2026-10-04)
+
+- **Defect and real-Git probe:** a Git 2.43.0/Linux repository was created with a real SSH-signed commit. `git verify-commit` verified it and the raw commit object contained `gpgsig`; `git fast-export --all --full-tree --show-original-ids` omitted that signature header without warning. Import previously had no signature-loss report.
+- **Implementation:** while parsing the fast-export stream, import collects its source commit IDs, then uses one streaming `git cat-file --batch` pass over the original objects with replacement substitution disabled. It detects `gpgsig` and `gpgsig-sha256` headers and fills `ImportReport.signed_commits_stripped` before the atomic ref transaction. Text and JSON CLI reports surface those IDs. Signature bytes are neither retained nor cryptographically verified.
+- **Regression and attack:** `tests/git_compat.rs::signed_git_commit_signature_loss_is_reported` verifies the real source signature, raw-object header, header omission in the export stream, exact reported source ID, deep NewGit integrity, unsigned exported commit, and both human/JSON CLI report paths. Independent review found no scanner framing or signature-header correctness issue; it identified a Git/OpenSSH test prerequisite mismatch, addressed by explicitly gating the cryptographic fixture on Git 2.34+ and available `ssh-keygen`.
+- **Boundary and performance:** classify signed commits as **LOSSY**. Evidence is limited to one SSH-signed commit on Git 2.43.0/Linux; OpenPGP, other Git versions, and alternate signature-header variants are not established. Older Git installations may skip this signature-specific fixture while the rest of the Git suite remains available. The additional streaming commit-header pass has not been benchmarked on large histories.
+- **Local verification:** Git interoperability suite **21 passed**; complete debug and release suites **290 passed each**. `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo build --release --locked`, SBOM drift check, and `git diff --check` passed on this combined implementation/documentation state.
+- **Hosted verification policy:** before closing each milestone, confirm GitHub CI and CodeQL against its exact pushed SHA; include both exact run links in the task completion report.
 
 ## Previous Git compatibility milestone — detached `HEAD` and ref integrity (2026-10-04)
 
@@ -147,7 +156,7 @@
   pass. The implementation SHA above passed hosted CI and CodeQL; the
   final state-record head is checked separately before completion.
 
-## Current Git compatibility milestone — replace-ref overlays (2026-10-04)
+## Previous Git compatibility milestone — replace-ref overlays (2026-10-04)
 
 - **Defect and reproduction:** a real Git 2.43.0 fixture created an ordinary
   three-commit branch plus `refs/replace/<target>` pointing to a different

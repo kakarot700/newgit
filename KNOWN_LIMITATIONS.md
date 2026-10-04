@@ -35,8 +35,15 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     and reported tag-metadata loss are surfaced by the import report. Symbolic
     refs outside `HEAD` are unsupported by NewGit's direct-ref model; import
     discovers and reports them because `fast-export --all` omits them. Replace
-    refs are skipped and reported; import disables replacement-object
-    substitution during `fast-export` so an omitted overlay cannot silently
+    refs are skipped and reported; Git commit signature headers are not
+    preserved because `fast-export` omits them. Import scans original commit
+    objects and reports affected source IDs in `signed_commits_stripped`, but
+    does not preserve or verify the signature. One Git-verified SSH-signed
+    commit confirms this behavior on Git 2.43.0/Linux; other signature types and
+    Git versions are untested. Detecting signatures requires a separate
+    streaming `cat-file --batch` pass over exported commit headers; its
+    large-history performance impact has not been benchmarked. Import disables
+    replacement-object substitution during `fast-export` so an omitted overlay cannot silently
     rewrite ordinary branch history. This imports stored objects, not Git's
     replacement-aware view, and is tested for one replacement commit on Git
     2.43.0/Linux. Git LFS

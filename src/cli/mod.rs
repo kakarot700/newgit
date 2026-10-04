@@ -1274,6 +1274,11 @@ fn cmd_import_git(ctx: &Ctx, tail: &[String]) -> Result<Output> {
             "  annotated tag {name}: ref imported, tagger/message metadata stripped (documented)\n"
         ));
     }
+    for sha in &rep.signed_commits_stripped {
+        t.push_str(&format!(
+            "  signed commit {sha}: signature stripped by git fast-export (not preserved or verified)\n"
+        ));
+    }
     if let Some(h) = &rep.head {
         t.push_str(&format!("  HEAD → {h}\n"));
     }

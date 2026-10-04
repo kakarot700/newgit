@@ -1568,3 +1568,154 @@ fn replace_refs_do_not_rewrite_imported_branch_history() {
     assert_eq!(&tip_tree["tip.txt"].1[..], b"tip\n");
     assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
 }
+
+#[test]
+fn signed_git_commit_signature_loss_is_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    let version = git_out(&gdir, &["--version"]);
+    let mut parts = version
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .split('.')
+        .take(3)
+        .map(|part| part.parse::<u32>().unwrap_or(0));
+    let git_version = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
+    if git_version < (2, 34, 0) {
+        eprintln!("skipping SSH-signed commit fixture: Git 2.34 or newer is required");
+        return;
+    }
+    write(&gdir, "base.txt", b"unsigned parent\n");
+    commit(&gdir, "unsigned parent");
+
+    let signing_key = d.path().join("signing_key");
+    let key_path = signing_key.to_str().unwrap();
+    let keygen = match Command::new("ssh-keygen")
+        .args([
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "author@example.com",
+            "-f",
+        ])
+        .arg(&signing_key)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping SSH-signed commit fixture: ssh-keygen is unavailable");
+            return;
+        }
+        Err(error) => panic!("failed to start ssh-keygen: {error}"),
+    };
+    assert!(
+        keygen.status.success(),
+        "ssh-keygen failed: {}",
+        String::from_utf8_lossy(&keygen.stderr)
+    );
+    let public_key = std::fs::read_to_string(signing_key.with_extension("pub")).unwrap();
+    let mut public_fields = public_key.split_whitespace();
+    let key_type = public_fields.next().unwrap();
+    let key_data = public_fields.next().unwrap();
+    let allowed_signers = d.path().join("allowed_signers");
+    std::fs::write(
+        &allowed_signers,
+        format!("author@example.com namespaces=\"git\" {key_type} {key_data}\n"),
+    )
+    .unwrap();
+    git(&gdir, &["config", "gpg.format", "ssh"]);
+    git(&gdir, &["config", "user.signingkey", key_path]);
+    git(
+        &gdir,
+        &[
+            "config",
+            "gpg.ssh.allowedSignersFile",
+            allowed_signers.to_str().unwrap(),
+        ],
+    );
+
+    write(&gdir, "signed.txt", b"signed commit\n");
+    git(&gdir, &["add", "-A"]);
+    git(&gdir, &["commit", "--quiet", "-S", "-m", "signed commit"]);
+    let signed_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&gdir, &["verify-commit", &signed_sha]);
+    let raw_commit = git(&gdir, &["cat-file", "commit", &signed_sha]).stdout;
+    assert!(
+        raw_commit
+            .windows(b"gpgsig -----BEGIN SSH SIGNATURE-----".len())
+            .any(|window| window == b"gpgsig -----BEGIN SSH SIGNATURE-----"),
+        "the Git commit object must contain its SSH signature header"
+    );
+    let stream = git(
+        &gdir,
+        &["fast-export", "--all", "--full-tree", "--show-original-ids"],
+    );
+    assert!(
+        !stream
+            .stdout
+            .windows(b"gpgsig".len())
+            .any(|window| window == b"gpgsig"),
+        "the tested Git fast-export stream omits commit signature headers"
+    );
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert_eq!(report.signed_commits_stripped, vec![signed_sha.clone()]);
+    assert_eq!(report.commits, 2);
+    let by_sha = snapshots_by_git_sha(&repo);
+    assert!(by_sha.contains_key(&signed_sha));
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+
+    let outdir = d.path().join("exported");
+    export_git(&repo, &outdir).unwrap();
+    let exported_commit = git(&outdir, &["cat-file", "commit", "refs/heads/master"]).stdout;
+    assert!(
+        !exported_commit
+            .windows(b"gpgsig".len())
+            .any(|window| window == b"gpgsig"),
+        "the export is unsigned and must not be mistaken for signature preservation"
+    );
+
+    let json_cli = Command::new(env!("CARGO_BIN_EXE_newgit"))
+        .current_dir(repo.root())
+        .args(["import-git", gdir.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        json_cli.status.success(),
+        "newgit import-git --json failed: {}",
+        String::from_utf8_lossy(&json_cli.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json_cli.stdout).unwrap();
+    assert_eq!(
+        json["data"]["signed_commits_stripped"],
+        serde_json::json!([signed_sha])
+    );
+
+    let text_cli = Command::new(env!("CARGO_BIN_EXE_newgit"))
+        .current_dir(repo.root())
+        .args(["import-git", gdir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        text_cli.status.success(),
+        "newgit import-git failed: {}",
+        String::from_utf8_lossy(&text_cli.stderr)
+    );
+    let text = String::from_utf8_lossy(&text_cli.stdout);
+    assert!(
+        text.contains(&format!(
+            "signed commit {signed_sha}: signature stripped by git fast-export"
+        )),
+        "human import report omits the signed commit ID: {text}"
+    );
+}

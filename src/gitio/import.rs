@@ -12,10 +12,11 @@
 //!   differs from author).
 //! * **Loud about losses/refusals**: submodules (gitlinks) abort the import
 //!   with a clear error; annotated-tag messages are stripped (refs are kept)
-//!   and listed in the report; commit-message control characters that the
-//!   NewGit text model cannot represent are refused before refs move;
-//!   refs/remotes/*, refs/stash, refs/notes/*, refs/replace/*, and symbolic
-//!   refs outside HEAD are skipped and listed.
+//!   and listed in the report; commit signatures omitted by fast-export are
+//!   reported by source commit ID (not preserved or verified); commit-message
+//!   control characters that the NewGit text model cannot represent are
+//!   refused before refs move; refs/remotes/*, refs/stash, refs/notes/*,
+//!   refs/replace/*, and symbolic refs outside HEAD are skipped and listed.
 //!
 //! Memory: commit tree states are cached per commit mark so incremental
 //! (non-full-tree) streams and parent inheritance work; with the default
@@ -23,6 +24,7 @@
 //! are bounded by RAM — a documented limitation (KNOWN_LIMITATIONS #20).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -51,6 +53,9 @@ pub struct ImportReport {
     /// Annotated tags whose message/tagger metadata was stripped (the ref
     /// itself IS imported, pointing at its target snapshot).
     pub annotated_tags_stripped: Vec<String>,
+    /// Source commit object IDs with a signature header omitted by
+    /// `git fast-export`; NewGit does not preserve or verify these signatures.
+    pub signed_commits_stripped: Vec<String>,
     /// HEAD after import, if it could be mapped.
     pub head: Option<String>,
 }
@@ -105,6 +110,132 @@ fn list_symbolic_refs(git_dir: &Path) -> Result<HashSet<String>> {
         }
     }
     Ok(refs)
+}
+
+/// `git fast-export` omits commit `gpgsig` headers. Inspect the original
+/// objects in one persistent `cat-file --batch` process so the import report
+/// can name every signature that the stream conversion discards.
+fn list_signed_commits(git_dir: &Path, commit_shas: &[String]) -> Result<Vec<String>> {
+    if commit_shas.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut child = Command::new("git")
+        .args(["-C"])
+        .arg(git_dir)
+        .args(["cat-file", "--batch"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::io(git_dir, e))?;
+
+    let scan = (|| -> Result<Vec<String>> {
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Bug("git cat-file child spawned without stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Bug("git cat-file child spawned without stdout".into()))?;
+        let mut input = BufWriter::new(stdin);
+        let mut output = BufReader::new(stdout);
+        let mut signed = Vec::new();
+
+        for sha in commit_shas {
+            writeln!(input, "{sha}").map_err(|e| Error::io(git_dir, e))?;
+            input.flush().map_err(|e| Error::io(git_dir, e))?;
+
+            let mut record = String::new();
+            output
+                .read_line(&mut record)
+                .map_err(|e| Error::io(git_dir, e))?;
+            let fields: Vec<&str> = record.split_whitespace().collect();
+            if fields.len() != 3 || !fields[0].eq_ignore_ascii_case(sha) || fields[1] != "commit" {
+                return Err(Error::Invalid(format!(
+                    "git cat-file returned an unexpected commit record while checking signature headers: {record:?}"
+                )));
+            }
+            let mut remaining: u64 = fields[2].parse().map_err(|_| {
+                Error::Invalid(format!(
+                    "git cat-file returned an invalid object size while checking commit {sha}"
+                ))
+            })?;
+
+            let mut has_signature = false;
+            let mut found_separator = false;
+            while remaining > 0 {
+                let mut header = Vec::new();
+                let read = output
+                    .read_until(b'\n', &mut header)
+                    .map_err(|e| Error::io(git_dir, e))?;
+                if read == 0 || read as u64 > remaining {
+                    return Err(Error::Invalid(format!(
+                        "truncated Git commit object {sha} while checking signature headers"
+                    )));
+                }
+                remaining -= read as u64;
+                if header == b"\n" || header == b"\r\n" {
+                    found_separator = true;
+                    break;
+                }
+                let field = header
+                    .split(|byte| *byte == b' ')
+                    .next()
+                    .unwrap_or_default();
+                if field == b"gpgsig" || field == b"gpgsig-sha256" {
+                    has_signature = true;
+                }
+            }
+            if !found_separator {
+                return Err(Error::Invalid(format!(
+                    "Git commit object {sha} has no header/body separator"
+                )));
+            }
+
+            while remaining > 0 {
+                let available = output.fill_buf().map_err(|e| Error::io(git_dir, e))?.len();
+                if available == 0 {
+                    return Err(Error::Invalid(format!(
+                        "truncated Git commit object {sha} while checking signature headers"
+                    )));
+                }
+                let consumed = available.min(remaining.min(usize::MAX as u64) as usize);
+                output.consume(consumed);
+                remaining -= consumed as u64;
+            }
+            let mut terminator = [0u8; 1];
+            output
+                .read_exact(&mut terminator)
+                .map_err(|e| Error::io(git_dir, e))?;
+            if terminator != *b"\n" {
+                return Err(Error::Invalid(format!(
+                    "git cat-file returned an invalid record terminator for commit {sha}"
+                )));
+            }
+            if has_signature {
+                signed.push(sha.clone());
+            }
+        }
+        drop(input);
+        drop(output);
+        Ok(signed)
+    })();
+
+    let status = child.wait().map_err(|e| Error::io(git_dir, e))?;
+    if !status.success() {
+        let mut err = String::new();
+        if let Some(stderr) = child.stderr.take() {
+            let mut reader = BufReader::new(stderr);
+            let _ = reader.read_to_string(&mut err);
+        }
+        return Err(Error::Invalid(format!(
+            "git cat-file failed while checking commit signature headers ({status}): {}",
+            err.trim()
+        )));
+    }
+    scan
 }
 
 pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
@@ -188,6 +319,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
     };
     let mut marks: HashMap<u64, ObjectId> = HashMap::new();
     let mut sha_to_oid: HashMap<String, ObjectId> = HashMap::new();
+    let mut commit_git_shas = Vec::new();
     let mut tips: BTreeMap<String, ObjectId> = BTreeMap::new();
     let mut trees: HashMap<u64, BTreeMap<String, (EntryMode, ObjectId)>> = HashMap::new();
     let mut actors: HashMap<(String, String), ObjectId> = HashMap::new();
@@ -206,6 +338,9 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 rep.blobs += 1;
             }
             Event::Commit(c) => {
+                if let Some(sha) = &c.git_sha {
+                    commit_git_shas.push(sha.clone());
+                }
                 // tree state: deleteall clears; otherwise inherit first parent
                 let mut map: BTreeMap<String, (EntryMode, ObjectId)> = BTreeMap::new();
                 let mut started = false;
@@ -456,6 +591,9 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
             "git fast-export failed ({status}): {err}"
         )));
     }
+    commit_git_shas.sort();
+    commit_git_shas.dedup();
+    rep.signed_commits_stripped = list_signed_commits(git_dir, &commit_git_shas)?;
 
     // ── atomic ref switch (+ HEAD in the same txn) ──
     let mut ops: Vec<TxnOp> = Vec::new();

@@ -208,10 +208,13 @@ actionable error) moves zero refs. Deterministic: the same git repo imported
 into fresh NewGit repos yields identical object ids. Skipped namespaces
 (`refs/remotes/*`, `refs/notes/*`, `refs/replace/*`, `refs/stash`,
 `refs/bisect/*`, `refs/worktree/*`) and stripped annotated/signed tag
-metadata are listed in the report — nothing is lost silently.
+metadata are listed in the report. Commit `gpgsig` headers omitted by
+`fast-export` are detected from source objects and their commit IDs are listed
+as `signed_commits_stripped`; signature bytes are not preserved or verified.
 
 Flags: `--json` (`{ok,data:{commits,blobs,trees,actors,refs_imported,
-refs_skipped,annotated_tags_stripped,head}}`), `--repo/-C`, `--debug`.
+refs_skipped,annotated_tags_stripped,signed_commits_stripped,head}}`),
+`--repo/-C`, `--debug`.
 
 ## export-git <target-dir>
 
