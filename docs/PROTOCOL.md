@@ -52,13 +52,13 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
-**Bounded write policy:** receive-pack accepts branch creates, fast-forward
-updates, or deletions under `refs/heads/*`, plus lightweight tag creates or
+**Bounded write policy:** receive-pack accepts branch creates, fast-forward or
+forced non-fast-forward updates, and deletions under `refs/heads/*`, plus lightweight tag creates or
 deletions under `refs/tags/*`; this includes a first branch push to an empty
 repository. Tags must directly target commit objects. Existing tags cannot be
 retargeted, even with `--force`, because NewGit stores tags only as refs to
-snapshots and Git permits forced tag replacement despite
-`receive.denyNonFastForwards=true`. Annotated tag objects and other ref
+snapshots; this tag policy is enforced separately from branch non-fast-forward
+handling. Annotated tag objects and other ref
 namespaces are refused. Every requested operation must be accepted by Git in
 the disposable projection before canonical refs move; if Git accepts only a
 subset, the adapter returns HTTP 409 and commits none of the NewGit refs. For
@@ -67,14 +67,22 @@ policy validation, and NewGit commits all accepted canonical refs in one
 CAS-guarded journal transaction; if any operation is rejected or any CAS check
 fails, no canonical refs move. The server advertises Git's `atomic` capability
 to match those guarantees. An ordinary non-atomic request that Git accepts only
-in part is instead rejected with HTTP 409. Signed pushes and protocol versions
-other than v0 are refused; forced non-fast-forward branch updates remain
-refused by Git policy in the projection. A branch such as `refs/heads/main` maps
+in part is instead rejected with HTTP 409. The Git receive-pack command carries
+the old and new object IDs but no `--force`/`--force-with-lease` indicator.
+Standard Git clients reject an unforced stale update and a mismatched lease
+locally; a matching lease or `--force` can send the same update command. NewGit
+requires its old object ID to map to the canonical old tip, then rechecks that
+tip with CAS under the transaction lock before promoting objects. A custom
+write-authenticated client can submit the same non-fast-forward wire command
+without a force flag, so explicit force intent cannot be enforced server-side.
+Signed pushes and protocol versions other than v0 are refused. A branch such as `refs/heads/main` maps
 to NewGit's `refs/main`; `refs/tags/v1` maps to NewGit's `refs/tags/v1`. Unmapped
 names must pass NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover
 branch and tag creation/deletion, atomic branch-plus-tag creation, unauthorized
-and invalid-tag rejection without canonical mutation, forced-tag-retarget
-rejection, and post-push clone/fetch; other versions/platforms are not claimed.
+and invalid-tag rejection without canonical mutation, ordinary stale-push and
+mismatched-lease rejection, matching `--force-with-lease` and `--force` success,
+forced atomic-batch rejection without canonical mutation, and post-force
+clone/fetch; other versions/platforms are not claimed.
 
 The adapter materializes the full Git view independently for every discovery
 and POST request. Git's pack negotiation can reduce transferred bytes, but it

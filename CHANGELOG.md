@@ -6,13 +6,16 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ### Added
 - Git smart-HTTP receive-pack advertises Git's `atomic` capability and accepts
-  branch creates, fast-forward updates, and deletions plus lightweight tag
-  creates/deletions. Accepted refs and imported objects are CAS-committed in one
-  NewGit transaction. Real-Git coverage includes an atomic branch-plus-tag push,
-  post-push clone/fetch, tag deletion, and unchanged canonical state after
-  unauthorized, annotated-tag, and forced-retarget rejection. Existing tags
-  cannot be retargeted (even with `--force`); annotated tag objects, signed
-  pushes, and forced non-fast-forward branch updates remain unsupported.
+  branch creates, fast-forward and forced non-fast-forward updates, and deletions
+  plus lightweight tag creates/deletions. Accepted refs and imported objects are
+  CAS-committed in one NewGit transaction. Real-Git CLI coverage includes
+  ordinary stale-push and mismatched-lease rejection, successful matching
+  `--force-with-lease` and `--force` updates, atomic annotated-tag rejection
+  without canonical mutation, and post-force clone/fetch. The receive-pack wire
+  protocol has no force marker: standard Git clients enforce the CLI choice
+  locally, while a custom client with write access can submit a non-fast-forward
+  command directly. Existing tags cannot be retargeted (even with `--force`);
+  annotated tag objects and signed pushes remain unsupported.
 
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and

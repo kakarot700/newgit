@@ -71,7 +71,7 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     (limitation 1), not silently converted.
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
     real Git CLI tests cover write-authenticated branch creates, fast-forward
-    updates, and deletions, plus lightweight tag creates/deletions per request,
+    and forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions per request,
     including an initial branch push to an empty repository. Existing tags cannot
     be retargeted (even with `--force`), and annotated tag objects are refused
     because NewGit stores tags only as refs to commit snapshots. The server
@@ -79,8 +79,14 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     and policy rejection that leave canonical refs and object inventory
     unchanged. All accepted canonical refs share one NewGit journaled transaction;
     an ordinary request that Git accepts only in part fails at the HTTP boundary
-    without committing canonical refs. Signed pushes and forced non-fast-forward
-    branch updates remain refused; non-v0 receive-pack, Git-over-SSH, and
+    without committing canonical refs. Standard Git CLI tests show ordinary
+    stale pushes and mismatched leases are rejected, while matching
+    `--force-with-lease` and `--force` updates succeed. Each update's old Git tip
+    must map to the current canonical tip and is checked again by locked CAS
+    before object promotion. The receive-pack wire command carries no force flag,
+    so a custom write-authenticated client can send the same non-fast-forward
+    command without `--force`; explicit-force intent is not server-verifiable.
+    Signed pushes, non-v0 receive-pack, Git-over-SSH, and
     GitHub/GitLab hosting features are not implemented. Every request rebuilds a temporary
     Git view from NewGit's canonical objects/refs. If a process or storage
     failure interrupts promotion of immutable objects, unreachable objects may

@@ -3,8 +3,8 @@
 //! Git receives and validates the pack in a short-lived isolated projection.
 //! Accepted branch tips and lightweight tags are then imported into a temporary
 //! NewGit repository, reusing exported canonical commit IDs. Branch creates,
-//! fast-forward updates, deletions, and tag creates/deletions are promoted under
-//! one NewGit ref transaction.
+//! fast-forward and forced non-fast-forward updates, deletions, and tag
+//! creates/deletions are promoted under one NewGit ref transaction.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -64,9 +64,11 @@ pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
     Ok(response)
 }
 
-/// Accept branch creates, fast-forward updates, and deletions plus lightweight
-/// tag creates/deletions. Git handles packfile decoding and fsck in the
-/// disposable projection; NewGit's canonical objects and refs change only after
+/// Accept branch creates, fast-forward or forced non-fast-forward updates, and
+/// deletions plus lightweight tag creates/deletions. The Git wire command does
+/// not identify whether a client used `--force`; standard Git clients enforce
+/// that choice locally. Git handles packfile decoding and fsck in the disposable
+/// projection; NewGit's canonical objects and refs change only after
 /// import/validation succeeds and every observed old canonical tip still passes
 /// a CAS check under the lock.
 pub fn receive_pack(
@@ -418,7 +420,7 @@ fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
     command
         .args([
             "-c",
-            "receive.denyNonFastForwards=true",
+            "receive.denyNonFastForwards=false",
             "-c",
             "receive.denyDeletes=false",
             "-c",

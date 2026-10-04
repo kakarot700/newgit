@@ -174,15 +174,21 @@ Use the root URL (`/`); this server instance has no multi-repository or URL
 path routing. The built-in listener is plain HTTP; expose Git clients over
 HTTPS only through a trusted TLS-terminating reverse proxy (see §2.3).
 Git smart HTTP supports upload-pack plus a narrow receive-pack path: one or
-more write-token-authenticated branch creates, fast-forward updates, or deletes
-and lightweight tag creates/deletes per request, committed together in NewGit.
-Existing tag retargeting (including forced updates), annotated tag objects,
-signed pushes, and forced non-fast-forward branch updates are refused; a
-partially accepted ordinary request changes no canonical refs. The server
-advertises Git's `atomic` capability:
-`git push --atomic` is covered by real-Git success and all-ref rejection tests,
-including a rejected deletion paired with a non-fast-forward update. The server
-requires the system `git` executable.
+more write-token-authenticated branch creates, fast-forward or forced
+non-fast-forward updates, or deletes and lightweight tag creates/deletes per
+request, committed together in NewGit. Standard Git CLI tests verify unforced
+stale pushes and mismatched leases reject without mutation, while matching
+`--force-with-lease` and `--force` succeed. Each update's advertised old tip is
+rechecked by canonical CAS under the NewGit transaction lock before object
+promotion. Existing tag retargeting (including forced updates), annotated tag
+objects, and signed pushes remain refused; a partially accepted ordinary
+request changes no canonical refs. The Git receive-pack wire command does not
+encode the force flag, so a custom write-authenticated client can send a
+non-fast-forward update without using the standard Git CLI's explicit flag.
+The server advertises Git's `atomic` capability; `git push --atomic` is covered
+by real-Git success and all-ref rejection tests, including a rejected deletion
+and forced update paired with an unsupported annotated tag. The server requires
+the system `git` executable.
 The existing `--max-body` setting caps both inbound HTTP request bodies and
 buffered Git pack/advertisement responses (default 64 MiB); increase it for
 larger packs. Each Git request has a 120-second processing deadline, but there

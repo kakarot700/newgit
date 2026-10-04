@@ -5,8 +5,9 @@ formats (`git fast-export` / `git fast-import`) for conversion, and through a
 separate smart-HTTP adapter that delegates packet-line and pack behavior to
 the installed `git upload-pack` and `git receive-pack`. NewGit does not
 reimplement Git's pack format. The receive path translates authenticated branch
-creates, fast-forward updates, and deletions into canonical NewGit refs using
-one CAS-guarded transaction per accepted request. If `git` is not on PATH, conversion and the live Git adapter fail with
+creates, fast-forward or explicitly forced non-fast-forward updates, and
+deletions into canonical NewGit refs using one CAS-guarded transaction per
+accepted request. If `git` is not on PATH, conversion and the live Git adapter fail with
 a clear error; NewGit's native operations and JSON remote remain independent
 of Git.
 
@@ -203,15 +204,22 @@ environment and does not claim other Git versions or operating systems.
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
    (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A separately
    tested receive-pack slice accepts write-authenticated branch creates,
-   fast-forward updates, and deletions, plus lightweight tag creates/deletions
+   fast-forward or forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions
    per request, including an initial push to an empty repository. Existing tags
    cannot be retargeted (including with `--force`), and annotated tag objects
    are refused. Accepted canonical refs share one NewGit transaction; a partially
    accepted projection request is rejected without changing canonical refs.
    Git's `atomic` capability is advertised and tested with successful atomic
    branch-plus-tag creation and multi-ref deletion plus policy rejection that
-   leaves canonical refs and objects unchanged. Signed and forced
-   non-fast-forward branch pushes are refused. Both directions rematerialize a complete temporary Git projection
+   leaves canonical refs and objects unchanged. Real Git CLI tests verify that
+   an unforced stale push and a mismatched `--force-with-lease` do not mutate
+   canonical refs or objects, while matching `--force-with-lease` and `--force`
+   updates succeed. Each requested old Git object ID must map to the canonical
+   old tip, which is checked again under the transaction lock before staging
+   objects. Receive-pack does not transmit a force flag, so the server cannot
+   distinguish an explicit CLI force from a custom client's equivalent wire
+   command; explicit-force behavior is a standard-Git-client contract, not a
+   server-verifiable property. Signed pushes remain refused. Both directions rematerialize a complete temporary Git projection
    for every HTTP request; pack negotiation does not avoid the full NewGit-to-Git
    export. Git over SSH remains unsupported. See [protocol
    details](PROTOCOL.md#git-smart-http-compatibility) and the [evidence

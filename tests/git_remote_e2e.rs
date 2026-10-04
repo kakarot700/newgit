@@ -908,9 +908,9 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         .trim()
     );
 
-    // Annotated tag objects and forced non-fast-forward branch updates remain
-    // refused. A branch whose deletion is combined with a failing update must
-    // not be partially deleted.
+    // Annotated tag objects remain refused. Even when a forced branch update
+    // and deletion are accepted in Git's projection, an unsupported annotated
+    // tag rejects the atomic batch before canonical refs or objects move.
     git(&[
         "-C",
         clone_path_str,
@@ -962,51 +962,6 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "-m",
         "divergent commit",
     ]);
-    let non_ff = git_fails(&[
-        "-c",
-        &write_auth_config,
-        "-C",
-        clone_path_str,
-        "push",
-        "--force",
-        "origin",
-        "divergent:main",
-    ]);
-    assert!(!String::from_utf8_lossy(&non_ff.stderr).is_empty());
-    assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
-    assert!(newgit.refs.read_opt("refs/published").unwrap().is_none());
-
-    // Git accepts deletion in its disposable projection but refuses the
-    // forced non-fast-forward update. The adapter rejects the whole request
-    // instead of reporting partial success or deleting the canonical branch.
-    let partial_multi_push = git_fails(&[
-        "-c",
-        &write_auth_config,
-        "-C",
-        clone_path_str,
-        "push",
-        "--force",
-        "origin",
-        "divergent:refs/heads/main",
-        ":refs/heads/delete-rejected",
-    ]);
-    let partial_multi_stderr = String::from_utf8_lossy(&partial_multi_push.stderr);
-    assert!(
-        partial_multi_stderr.contains("409"),
-        "mixed-result multi-ref push should fail at the atomic HTTP boundary: {partial_multi_stderr}"
-    );
-    assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
-    assert!(newgit.refs.read_opt("refs/published").unwrap().is_none());
-    assert_eq!(
-        newgit.refs.read("refs/delete-rejected").unwrap(),
-        multi_ref_tip
-    );
-    assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
-    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
-
-    // With atomic advertised, the same policy failure rejects the entire set
-    // in Git's projection. Neither the branch deletion nor any object is
-    // promoted into canonical NewGit storage.
     let atomic_multi_push = git_fails(&[
         "-c",
         &write_auth_config,
@@ -1018,11 +973,12 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "origin",
         ":refs/heads/delete-rejected",
         "divergent:refs/heads/main",
+        "refs/tags/forbidden-tag",
     ]);
     let atomic_multi_stderr = String::from_utf8_lossy(&atomic_multi_push.stderr);
     assert!(
         !atomic_multi_stderr.is_empty(),
-        "Git should report the rejected atomic multi-ref push"
+        "Git should report the rejected atomic push containing an annotated tag"
     );
     assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
     assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
@@ -1031,6 +987,335 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         multi_ref_tip
     );
 
+    server.shutdown();
+}
+
+#[test]
+fn real_git_force_push_modes_use_old_tip_cas_and_reject_invalid_atomic_batch() {
+    let (_dir, root) = temp("force-push-cas");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+    let initial = commit(
+        &newgit,
+        "refs/main",
+        "initial snapshot",
+        &[(
+            "README.md",
+            b"initial\n",
+            newgit::object::types::EntryMode::File,
+        )],
+        vec![],
+    );
+    let side = commit(
+        &newgit,
+        "refs/side",
+        "side branch",
+        &[(
+            "side.txt",
+            b"side\n",
+            newgit::object::types::EntryMode::File,
+        )],
+        vec![initial],
+    );
+    assert_ne!(side, initial);
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set default branch"),
+        )
+        .unwrap();
+
+    let tokens_path = root.join("tokens.json");
+    let mut tokens = TokenFile::default();
+    tokens.add("git-reader", READ_TOKEN, Role::Read).unwrap();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
+    auth::save(&tokens_path, &tokens).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        token_file: tokens_path,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let local = root.join("client");
+    let local_str = local.to_str().unwrap();
+    let read_auth = format!("http.extraHeader=Authorization: Bearer {READ_TOKEN}");
+    let write_auth = format!("http.extraHeader=Authorization: Bearer {WRITE_TOKEN}");
+    git(&[
+        "-c", &read_auth, "clone", "--quiet", "--branch", "main", &url, local_str,
+    ]);
+    git(&["-C", local_str, "config", "user.name", "Local Git User"]);
+    git(&[
+        "-C",
+        local_str,
+        "config",
+        "user.email",
+        "local@example.test",
+    ]);
+    let initial_git_tip = as_text(&git(&["-C", local_str, "rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+
+    // Advance the canonical server ref independently after the client's clone,
+    // then create a local tip based on the now-stale initial snapshot.
+    let server_tip = commit(
+        &newgit,
+        "refs/main",
+        "independent server advance",
+        &[(
+            "server.txt",
+            b"server advance\n",
+            newgit::object::types::EntryMode::File,
+        )],
+        vec![initial],
+    );
+    let refs_before_rejections = newgit.refs.list(None).unwrap();
+    let objects_before_rejections = newgit.objects.iter().unwrap();
+    git(&[
+        "-C",
+        local_str,
+        "checkout",
+        "-b",
+        "lease-candidate",
+        &initial_git_tip,
+    ]);
+    std::fs::write(local.join("lease.txt"), b"force-with-lease content\n").unwrap();
+    git(&["-C", local_str, "add", "lease.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "divergent lease candidate",
+    ]);
+
+    // Ordinary Git refuses a stale non-fast-forward push; a lease naming the
+    // stale initial tip is also rejected without any canonical mutation.
+    let ordinary = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "lease-candidate:refs/heads/main",
+    ]);
+    assert!(!String::from_utf8_lossy(&ordinary.stderr).is_empty());
+    let stale_lease = format!("--force-with-lease=refs/heads/main:{initial_git_tip}");
+    let lease_mismatch = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        &stale_lease,
+        "origin",
+        "lease-candidate:refs/heads/main",
+    ]);
+    assert!(!String::from_utf8_lossy(&lease_mismatch.stderr).is_empty());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), server_tip);
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
+
+    // A matching lease permits the non-fast-forward update. The wire old OID
+    // maps to the canonical tip, which NewGit rechecks under its txn lock.
+    git(&[
+        "-c", &read_auth, "-C", local_str, "fetch", "--quiet", "origin",
+    ]);
+    let advertised_git_tip = as_text(&git(&[
+        "-C",
+        local_str,
+        "rev-parse",
+        "refs/remotes/origin/main",
+    ]))
+    .trim()
+    .to_string();
+    assert_ne!(advertised_git_tip, initial_git_tip);
+    let matching_lease = format!("--force-with-lease=refs/heads/main:{advertised_git_tip}");
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        &matching_lease,
+        "origin",
+        "lease-candidate:refs/heads/main",
+    ]);
+    let lease_tip = newgit.refs.read("refs/main").unwrap();
+    assert_ne!(lease_tip, server_tip);
+    let lease_snapshot = newgit.objects.get(&lease_tip).unwrap();
+    let lease_snapshot = lease_snapshot.as_snapshot().unwrap();
+    assert_eq!(lease_snapshot.parents, vec![initial]);
+    let lease_tree = newgit.objects.get(&lease_snapshot.root).unwrap();
+    let lease_tree = lease_tree.as_tree().unwrap();
+    let lease_blob = lease_tree.get("lease.txt").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&lease_blob.oid)
+            .unwrap()
+            .as_blob()
+            .unwrap(),
+        b"force-with-lease content\n"
+    );
+
+    // Plain --force also accepts a divergent branch update; its old advertised
+    // tip is still protected by the same canonical ref CAS.
+    git(&[
+        "-C",
+        local_str,
+        "checkout",
+        "--force",
+        "-b",
+        "force-candidate",
+        &initial_git_tip,
+    ]);
+    std::fs::write(local.join("force.txt"), b"explicit force content\n").unwrap();
+    git(&["-C", local_str, "add", "force.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "divergent force candidate",
+    ]);
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "--force",
+        "origin",
+        "force-candidate:refs/heads/main",
+    ]);
+    let force_tip = newgit.refs.read("refs/main").unwrap();
+    let force_snapshot = newgit.objects.get(&force_tip).unwrap();
+    let force_snapshot = force_snapshot.as_snapshot().unwrap();
+    assert_eq!(force_snapshot.parents, vec![initial]);
+    let force_tree = newgit.objects.get(&force_snapshot.root).unwrap();
+    let force_tree = force_tree.as_tree().unwrap();
+    let force_blob = force_tree.get("force.txt").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&force_blob.oid)
+            .unwrap()
+            .as_blob()
+            .unwrap(),
+        b"explicit force content\n"
+    );
+
+    // An invalid annotated tag makes a forced, atomic branch update plus branch
+    // deletion fail as a whole before canonical refs or objects are promoted.
+    git(&[
+        "-C",
+        local_str,
+        "checkout",
+        "--force",
+        "-b",
+        "atomic-candidate",
+        &initial_git_tip,
+    ]);
+    std::fs::write(local.join("atomic.txt"), b"must not publish\n").unwrap();
+    git(&["-C", local_str, "add", "atomic.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "atomic rejected candidate",
+    ]);
+    git(&[
+        "-C",
+        local_str,
+        "tag",
+        "-a",
+        "atomic-rejected",
+        "-m",
+        "annotated tags are unsupported",
+    ]);
+    let refs_before_atomic = newgit.refs.list(None).unwrap();
+    let objects_before_atomic = newgit.objects.iter().unwrap();
+    let atomic_rejected = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "--atomic",
+        "--force",
+        "origin",
+        "atomic-candidate:refs/heads/main",
+        ":refs/heads/side",
+        "refs/tags/atomic-rejected",
+    ]);
+    assert!(!String::from_utf8_lossy(&atomic_rejected.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_atomic);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_atomic);
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), force_tip);
+    assert_eq!(newgit.refs.read("refs/side").unwrap(), side);
+
+    // Fresh Git clone plus fetch sees the accepted forced ref and its content,
+    // not any branch, tag, or object from the rejected atomic batch.
+    let post_force_clone = root.join("post-force-clone");
+    git(&[
+        "-c",
+        &read_auth,
+        "clone",
+        "--quiet",
+        "--branch",
+        "main",
+        &url,
+        post_force_clone.to_str().unwrap(),
+    ]);
+    git(&[
+        "-c",
+        &read_auth,
+        "-C",
+        post_force_clone.to_str().unwrap(),
+        "fetch",
+        "--prune",
+        "--quiet",
+        "origin",
+    ]);
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            post_force_clone.to_str().unwrap(),
+            "show",
+            "refs/remotes/origin/main:force.txt",
+        ])),
+        "explicit force content\n"
+    );
+    git_fails(&[
+        "-C",
+        post_force_clone.to_str().unwrap(),
+        "show",
+        "refs/remotes/origin/main:atomic.txt",
+    ]);
+    git(&[
+        "-C",
+        post_force_clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/remotes/origin/side",
+    ]);
+    git_fails(&[
+        "-C",
+        post_force_clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/tags/atomic-rejected",
+    ]);
     server.shutdown();
 }
 
