@@ -83,6 +83,10 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
   passed [hosted CI run 37205307432](https://github.com/kakarot700/newgit/actions/runs/37205307432)
   and [CodeQL run 37205307501](https://github.com/kakarot700/newgit/actions/runs/37205307501),
   both on that exact SHA.
+- Replace-ref implementation commit `e1fc9e6a08c9314417f0d3324514bc105ad5a920`
+  passed [hosted CI run 37206487975](https://github.com/kakarot700/newgit/actions/runs/37206487975)
+  and [CodeQL run 37206487941](https://github.com/kakarot700/newgit/actions/runs/37206487941),
+  both on that exact SHA.
 - Empty-tree compatibility commit
   `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [hosted CI run
   37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979)
