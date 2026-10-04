@@ -78,6 +78,10 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 - `cargo build --release --locked`: clean
 - `python3 scripts/sbom.py | diff -u SBOM.md -`: clean (no dependency drift)
 - `git diff --check`: clean
+- Symbolic-ref implementation commit `598b6dc1b26f28b92467115a1045c55e97b5471c`
+  passed [hosted CI run 37205307432](https://github.com/kakarot700/newgit/actions/runs/37205307432)
+  and [CodeQL run 37205307501](https://github.com/kakarot700/newgit/actions/runs/37205307501),
+  both on that exact SHA.
 - Empty-tree compatibility commit
   `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [hosted CI run
   37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979)

@@ -12,6 +12,7 @@
 - **Git message compatibility hosted validation:** implementation commit `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2` passed GitHub [CI run 37201393466](https://github.com/kakarot700/newgit/actions/runs/37201393466) and [CodeQL run 37201393416](https://github.com/kakarot700/newgit/actions/runs/37201393416) on `main`.
 - **Empty-tree compatibility hosted validation:** commit `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [CI run 37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979) and [CodeQL run 37203669978](https://github.com/kakarot700/newgit/actions/runs/37203669978), both on that exact SHA.
 - **Documentation-only validation head:** commit `6f66b7cad8e426a1af08324912232e62dd2e988d` passed [CI run 37204021004](https://github.com/kakarot700/newgit/actions/runs/37204021004) and [CodeQL run 37204021011](https://github.com/kakarot700/newgit/actions/runs/37204021011), both on that exact SHA.
+- **Non-`HEAD` symbolic-ref hosted validation:** implementation commit `598b6dc1b26f28b92467115a1045c55e97b5471c` passed [CI run 37205307432](https://github.com/kakarot700/newgit/actions/runs/37205307432) and [CodeQL run 37205307501](https://github.com/kakarot700/newgit/actions/runs/37205307501), both on that exact SHA.
 - **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
 - **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
@@ -143,8 +144,8 @@
   debug and release suites **288 passed each**; `cargo fmt --check`,
   `cargo clippy --all-targets --locked -- -D warnings`,
   `cargo build --release --locked`, SBOM drift check, and `git diff --check`
-  all pass. Hosted CI and CodeQL are checked on the pushed implementation head
-  and final state-record head before completion.
+  all pass. The implementation SHA above passed hosted CI and CodeQL; the
+  final state-record head is checked separately before completion.
 
 ## Local development setup
 
