@@ -1,9 +1,9 @@
 //! Write-side Git smart-HTTP adapter for a deliberately narrow receive-pack slice.
 //!
 //! Git receives and validates the pack in a short-lived isolated projection.
-//! The accepted branch tip is then imported into a temporary NewGit repository,
-//! reusing exported canonical commit IDs. Only a single branch create or
-//! fast-forward update is promoted, under NewGit's ref transaction lock.
+//! Accepted branch tips are then imported into a temporary NewGit repository,
+//! reusing exported canonical commit IDs. All accepted creates and
+//! fast-forward updates are promoted under one NewGit ref transaction.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -73,25 +73,60 @@ pub fn receive_pack(
     max_response_bytes: u64,
     principal: &str,
 ) -> Result<Vec<u8>> {
-    let push = parse_push_command(request)?;
-    let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
-        Error::Invalid(
-            "Git push supports refs/heads/* only; tags and other refs are refused".into(),
-        )
-    })?;
-    if branch_suffix.is_empty() {
-        return Err(Error::Invalid("Git push branch name is empty".into()));
+    let pushes = parse_push_command(request)?;
+    let mut newgit_names = HashSet::new();
+    for push in &pushes {
+        let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
+            Error::Invalid(
+                "Git push supports refs/heads/* only; tags and other refs are refused".into(),
+            )
+        })?;
+        if branch_suffix.is_empty() {
+            return Err(Error::Invalid("Git push branch name is empty".into()));
+        }
+        let newgit_ref = format!("refs/{branch_suffix}");
+        crate::repo::refs::check_ref_name(&newgit_ref)?;
+        newgit_names.insert(newgit_ref);
     }
-    crate::repo::refs::check_ref_name(&format!("refs/{branch_suffix}"))?;
+    ensure_batch_ref_names_do_not_conflict(&newgit_names)?;
 
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let (view, export) = TempGitView::from_newgit_with_export(repo, deadline)?;
-    let initial_git_tip = git_ref_oid(&view, &push.ref_name, deadline)?;
-    let request_old_matches = if push.old_oid == ZERO_SHA1 {
-        initial_git_tip.is_none()
-    } else {
-        initial_git_tip.as_deref() == Some(push.old_oid.as_str())
-    };
+    let git_to_newgit: HashMap<String, ObjectId> = export.git_commit_oids.clone();
+    let mut updates = Vec::with_capacity(pushes.len());
+    for push in pushes {
+        let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
+            Error::Invalid("Git push supports refs/heads/* only; tags are refused".into())
+        })?;
+        let newgit_ref = export
+            .refs_exported
+            .iter()
+            .find(|(_, git_name)| git_name == &push.ref_name)
+            .map(|(newgit_name, _)| newgit_name.clone())
+            .unwrap_or_else(|| format!("refs/{branch_suffix}"));
+        let initial_git_tip = git_ref_oid(&view, &push.ref_name, deadline)?;
+        let request_old_matches = if push.old_oid == ZERO_SHA1 {
+            initial_git_tip.is_none()
+        } else {
+            initial_git_tip.as_deref() == Some(push.old_oid.as_str())
+        };
+        let expected_newgit = if push.old_oid == ZERO_SHA1 {
+            None
+        } else {
+            Some(*git_to_newgit.get(&push.old_oid).ok_or_else(|| {
+                Error::Conflict(format!(
+                    "the advertised Git tip {} has no canonical NewGit mapping",
+                    push.old_oid
+                ))
+            })?)
+        };
+        updates.push(BranchUpdate {
+            push,
+            newgit_ref,
+            request_old_matches,
+            expected_newgit,
+        });
+    }
 
     let mut command = receive_pack_command(&view, false);
     let (status, response) = run_git(
@@ -107,47 +142,46 @@ pub fn receive_pack(
         )));
     }
 
-    // A stale old ID or a policy rejection is already reported by Git in the
-    // valid receive-pack response. Never translate such a request into NewGit.
-    if !request_old_matches {
+    // Git may accept some commands in a non-atomic protocol request while
+    // rejecting others. Never promote such a partial projection: NewGit refs
+    // are committed together below, and HTTP failure avoids reporting a
+    // projected success that was not made canonical.
+    let mut accepted = 0usize;
+    for update in &updates {
+        let final_git_tip = git_ref_oid(&view, &update.push.ref_name, deadline)?;
+        if update.request_old_matches
+            && final_git_tip.as_deref() == Some(update.push.new_oid.as_str())
+        {
+            accepted += 1;
+        }
+    }
+    if accepted != updates.len() {
+        if accepted > 0 {
+            return Err(Error::Conflict(
+                "Git accepted only part of this multi-ref push; no NewGit refs were changed".into(),
+            ));
+        }
         return Ok(response);
     }
-    let final_git_tip = git_ref_oid(&view, &push.ref_name, deadline)?;
-    if final_git_tip.as_deref() != Some(push.new_oid.as_str()) {
-        return Ok(response);
-    }
-    if push.old_oid == push.new_oid {
+
+    let changed: Vec<&BranchUpdate> = updates
+        .iter()
+        .filter(|update| update.push.old_oid != update.push.new_oid)
+        .collect();
+    if changed.is_empty() {
         return Ok(response); // ordinary up-to-date push; no canonical write
     }
-
-    let expected_newgit = if push.old_oid == ZERO_SHA1 {
-        None
-    } else {
-        Some(*export.git_commit_oids.get(&push.old_oid).ok_or_else(|| {
-            Error::Conflict(format!(
-                "the advertised Git tip {} has no canonical NewGit mapping",
-                push.old_oid
-            ))
-        })?)
-    };
-    let git_to_newgit: HashMap<String, ObjectId> = export.git_commit_oids.clone();
-
-    let current_name = export
-        .refs_exported
-        .iter()
-        .find(|(_, git_name)| git_name == &push.ref_name)
-        .map(|(newgit_name, _)| newgit_name.clone());
-    let newgit_ref = current_name.unwrap_or_else(|| format!("refs/{branch_suffix}"));
-    crate::repo::refs::check_ref_name(&newgit_ref)?;
-    let actual_old = repo.refs.read_opt(&newgit_ref)?;
-    if actual_old != expected_newgit {
-        return Err(Error::CasFailed(format!(
-            "Git push for {} was based on a stale NewGit ref",
-            push.ref_name
-        )));
-    }
-    if expected_newgit.is_none() {
-        ensure_no_ref_name_conflict(repo, &newgit_ref)?;
+    for update in &changed {
+        let actual_old = repo.refs.read_opt(&update.newgit_ref)?;
+        if actual_old != update.expected_newgit {
+            return Err(Error::CasFailed(format!(
+                "Git push for {} was based on a stale NewGit ref",
+                update.push.ref_name
+            )));
+        }
+        if update.expected_newgit.is_none() {
+            ensure_no_ref_name_conflict(repo, &update.newgit_ref)?;
+        }
     }
 
     // Re-import into a scratch NewGit repository. Existing projection commits
@@ -156,40 +190,51 @@ pub fn receive_pack(
     let stage_dir = tempfile::tempdir().map_err(Error::from)?;
     let staged = Repo::init_with(stage_dir.path(), repo.config.clone())?;
     crate::gitio::import::import_git_with_base_map(&staged, &view.path, &git_to_newgit, repo)?;
-    let new_tip = staged.refs.read_opt(&push.ref_name)?.ok_or_else(|| {
-        Error::Invalid(format!(
-            "Git receive-pack accepted {} but its imported branch is missing",
-            push.ref_name
-        ))
-    })?;
-    if !matches!(
-        object_from_either_repo(repo, &staged, new_tip)?,
-        crate::object::types::Object::Snapshot(_)
-    ) {
-        return Err(Error::Invalid(
-            "Git branch tip did not import as a NewGit snapshot".into(),
-        ));
-    }
-    if let Some(old_tip) = expected_newgit {
-        // receive.denyNonFastForwards is enforced by Git before it returns an
-        // accepted status. The importer also proved every old projection commit
-        // maps back to the canonical parent ID before producing new snapshots.
-        debug_assert_ne!(old_tip, new_tip);
+    let mut new_tips = Vec::with_capacity(changed.len());
+    let mut ops = Vec::with_capacity(changed.len());
+    let mut created_names = Vec::new();
+    for update in &changed {
+        let new_tip = staged
+            .refs
+            .read_opt(&update.push.ref_name)?
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "Git receive-pack accepted {} but its imported branch is missing",
+                    update.push.ref_name
+                ))
+            })?;
+        if !matches!(
+            object_from_either_repo(repo, &staged, new_tip)?,
+            crate::object::types::Object::Snapshot(_)
+        ) {
+            return Err(Error::Invalid(
+                "Git branch tip did not import as a NewGit snapshot".into(),
+            ));
+        }
+        if let Some(old_tip) = update.expected_newgit {
+            // receive.denyNonFastForwards is enforced by Git before it returns
+            // an accepted status. The importer also proves every old
+            // projection commit maps back to the canonical parent ID.
+            debug_assert_ne!(old_tip, new_tip);
+        } else {
+            created_names.push(update.newgit_ref.clone());
+        }
+        new_tips.push(new_tip);
+        ops.push(TxnOp::Ref {
+            name: update.newgit_ref.clone(),
+            cas: Cas::Exactly(update.expected_newgit),
+            new: Some(new_tip),
+            log: RefLogEntry::system(format!("Git push by {principal}")),
+        });
     }
 
-    let staged_objects = staged_object_closure(repo, &staged, new_tip, max_response_bytes)?;
-    let ops = vec![TxnOp::Ref {
-        name: newgit_ref.clone(),
-        cas: Cas::Exactly(expected_newgit),
-        new: Some(new_tip),
-        log: RefLogEntry::system(format!("Git push by {principal}")),
-    }];
+    let staged_objects = staged_object_closures(repo, &staged, &new_tips, max_response_bytes)?;
     txn::execute_with_precommit(repo.ng(), ops, repo.limits(), || {
         // A competing create may have introduced a file/directory ref-name
-        // collision after the projection was exported. Recheck under the
+        // collision after projection. Recheck every creation under the
         // transaction lock, before any staged object is promoted.
-        if expected_newgit.is_none() {
-            ensure_no_ref_name_conflict(repo, &newgit_ref)?;
+        for name in &created_names {
+            ensure_no_ref_name_conflict(repo, name)?;
         }
         for (oid, canonical) in &staged_objects {
             let stored = repo.objects.put_canonical(canonical)?;
@@ -204,9 +249,37 @@ pub fn receive_pack(
     Ok(response)
 }
 
-fn parse_push_command(request: &[u8]) -> Result<PushCommand> {
+#[derive(Debug)]
+struct BranchUpdate {
+    push: PushCommand,
+    newgit_ref: String,
+    request_old_matches: bool,
+    expected_newgit: Option<ObjectId>,
+}
+
+fn ensure_batch_ref_names_do_not_conflict(names: &HashSet<String>) -> Result<()> {
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    for (index, name) in names.iter().enumerate() {
+        if names.iter().skip(index + 1).any(|other| {
+            other
+                .strip_prefix(name)
+                .is_some_and(|tail| tail.starts_with('/'))
+                || name
+                    .strip_prefix(other)
+                    .is_some_and(|tail| tail.starts_with('/'))
+        }) {
+            return Err(Error::Conflict(
+                "multi-ref push contains conflicting NewGit ref names".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
     let mut offset = 0usize;
     let mut commands = Vec::new();
+    let mut ref_names = HashSet::new();
     let mut first = true;
     loop {
         if request.len().saturating_sub(offset) < 4 {
@@ -257,16 +330,16 @@ fn parse_push_command(request: &[u8]) -> Result<PushCommand> {
                 "Git branch deletion is not supported".into(),
             ));
         }
+        if !ref_names.insert(ref_name.to_string()) {
+            return Err(Error::Invalid(format!(
+                "receive-pack request contains duplicate update for {ref_name}"
+            )));
+        }
         commands.push(PushCommand {
             old_oid: fields[0].to_string(),
             new_oid: fields[1].to_string(),
             ref_name: ref_name.to_string(),
         });
-        if commands.len() > 1 {
-            return Err(Error::Invalid(
-                "one Git branch may be pushed per request; multi-ref pushes are refused".into(),
-            ));
-        }
     }
     if commands.is_empty() {
         return Err(Error::Protocol(
@@ -281,7 +354,7 @@ fn parse_push_command(request: &[u8]) -> Result<PushCommand> {
             "receive-pack update has invalid trailing data (expected a Git packfile)".into(),
         ));
     }
-    Ok(commands.remove(0))
+    Ok(commands)
 }
 
 fn validate_sha1(oid: &str) -> Result<()> {
@@ -464,13 +537,13 @@ fn object_from_either_repo(
     }
 }
 
-fn staged_object_closure(
+fn staged_object_closures(
     canonical: &Repo,
     staged: &Repo,
-    tip: ObjectId,
+    tips: &[ObjectId],
     max_total_bytes: u64,
 ) -> Result<Vec<(ObjectId, Vec<u8>)>> {
-    let mut pending = vec![tip];
+    let mut pending = tips.to_vec();
     let mut visited = HashSet::new();
     let mut objects = Vec::new();
     let mut total = 0u64;
@@ -548,27 +621,40 @@ mod tests {
         let body =
             request(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
         let parsed = parse_push_command(&body).unwrap();
-        assert_eq!(parsed.old_oid, ZERO_SHA1);
-        assert_eq!(parsed.new_oid, new);
-        assert_eq!(parsed.ref_name, "refs/heads/main");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].old_oid, ZERO_SHA1);
+        assert_eq!(parsed[0].new_oid, new);
+        assert_eq!(parsed[0].ref_name, "refs/heads/main");
         assert!(parse_push_command(b"0000").is_err());
     }
 
     #[test]
-    fn refuses_deletions_tags_and_multiple_refs_before_git_unpack() {
+    fn parses_multiple_distinct_branches_and_refuses_duplicate_updates() {
         let new = "1234567890123456789012345678901234567890";
+        let second = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        let mut multi =
+            pkt(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
+        multi.extend_from_slice(&pkt(
+            format!("{ZERO_SHA1} {second} refs/heads/other\n").as_bytes()
+        ));
+        multi.extend_from_slice(b"0000PACK");
+        let parsed = parse_push_command(&multi).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].ref_name, "refs/heads/main");
+        assert_eq!(parsed[1].ref_name, "refs/heads/other");
+
         let deletion =
             request(format!("{new} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes());
         assert!(parse_push_command(&deletion).is_err());
         let tag = request(format!("{ZERO_SHA1} {new} refs/tags/v1\0report-status\n").as_bytes());
         assert!(parse_push_command(&tag).is_err());
-        let mut multi =
+        let mut duplicate =
             pkt(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
-        multi.extend_from_slice(&pkt(
-            format!("{ZERO_SHA1} {new} refs/heads/other\n").as_bytes()
+        duplicate.extend_from_slice(&pkt(
+            format!("{ZERO_SHA1} {second} refs/heads/main\n").as_bytes()
         ));
-        multi.extend_from_slice(b"0000PACK");
-        assert!(parse_push_command(&multi).is_err());
+        duplicate.extend_from_slice(b"0000PACK");
+        assert!(parse_push_command(&duplicate).is_err());
     }
 
     #[test]
@@ -585,7 +671,8 @@ mod tests {
             pkt(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
         body.extend_from_slice(b"0000");
         let parsed = parse_push_command(&body).unwrap();
-        assert_eq!(parsed.new_oid, new);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].new_oid, new);
     }
 
     #[test]

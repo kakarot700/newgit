@@ -230,6 +230,95 @@ fn racing_same_ref_pushes_promote_only_the_cas_winner() {
 }
 
 #[test]
+fn racing_multi_ref_pushes_publish_only_one_complete_ref_set() {
+    let (_d, repo) = temp_repo();
+    let main_old = oid(10);
+    let side_old = oid(11);
+    repo.refs
+        .update(
+            "main",
+            Cas::Any,
+            Some(main_old),
+            RefLogEntry::system("init main"),
+        )
+        .unwrap();
+    repo.refs
+        .update(
+            "side",
+            Cas::Any,
+            Some(side_old),
+            RefLogEntry::system("init side"),
+        )
+        .unwrap();
+    let repo = Arc::new(repo);
+    let barrier = Arc::new(Barrier::new(2));
+    let candidates = [
+        (b"writer one main".to_vec(), b"writer one side".to_vec()),
+        (b"writer two main".to_vec(), b"writer two side".to_vec()),
+    ];
+    let threads: Vec<_> = candidates
+        .into_iter()
+        .map(|(main_bytes, side_bytes)| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let main_object = newgit::object::types::Object::Blob(main_bytes);
+                let side_object = newgit::object::types::Object::Blob(side_bytes);
+                let main_oid = main_object.id();
+                let side_oid = side_object.id();
+                barrier.wait();
+                let result = txn::execute_with_precommit(
+                    repo.ng(),
+                    vec![
+                        newgit::repo::txn::TxnOp::Ref {
+                            name: "main".into(),
+                            cas: Cas::Exactly(Some(main_old)),
+                            new: Some(main_oid),
+                            log: RefLogEntry::system("concurrent multi-ref Git push"),
+                        },
+                        newgit::repo::txn::TxnOp::Ref {
+                            name: "side".into(),
+                            cas: Cas::Exactly(Some(side_old)),
+                            new: Some(side_oid),
+                            log: RefLogEntry::system("concurrent multi-ref Git push"),
+                        },
+                    ],
+                    repo.limits(),
+                    || {
+                        repo.objects.put(&main_object)?;
+                        repo.objects.put(&side_object)?;
+                        Ok(())
+                    },
+                );
+                (main_oid, side_oid, result)
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    let winners: Vec<_> = outcomes
+        .iter()
+        .filter(|(_, _, result)| result.is_ok())
+        .collect();
+    let losers: Vec<_> = outcomes
+        .iter()
+        .filter(|(_, _, result)| matches!(result, Err(newgit::Error::CasFailed(_))))
+        .collect();
+    assert_eq!(winners.len(), 1);
+    assert_eq!(losers.len(), 1);
+    let (main_winner, side_winner, _) = winners[0];
+    let (main_loser, side_loser, _) = losers[0];
+    assert_eq!(repo.refs.read("main").unwrap(), *main_winner);
+    assert_eq!(repo.refs.read("side").unwrap(), *side_winner);
+    assert!(repo.objects.contains(main_winner));
+    assert!(repo.objects.contains(side_winner));
+    assert!(!repo.objects.contains(main_loser));
+    assert!(!repo.objects.contains(side_loser));
+}
+
+#[test]
 fn crash_before_journal_leaves_no_trace() {
     let (d, repo) = temp_repo();
     let root = repo.root().to_path_buf();

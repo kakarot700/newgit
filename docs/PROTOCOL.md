@@ -33,13 +33,13 @@ The installed `git upload-pack` produces read advertisements and pack
 responses. For a push, the installed `git receive-pack` validates the
 stateless request and pack in a disposable projection. A separate staging
 import maps previously exported Git commit IDs back to canonical NewGit
-snapshots, validates the resulting object closure, then checks the target-ref
-compare-and-swap under NewGit's transaction lock before promoting immutable
-objects and committing the ref update. The ref update is journaled and
-all-or-nothing; a process or storage failure during object promotion can leave
-unreferenced immutable objects, but cannot publish a ref to an incomplete
-object graph. Routine auth, packet, policy, and stale-CAS rejection occurs
-before object promotion.
+snapshots, validates the resulting object closure, then checks every changed
+target-ref compare-and-swap under NewGit's transaction lock before promoting
+immutable objects and committing the ref set. All accepted refs are journaled
+in one transaction and move all-or-nothing; a process or storage failure during
+object promotion can leave unreferenced immutable objects, but cannot publish
+refs to an incomplete object graph. Routine auth, packet, policy, partial
+projection-result, and stale-CAS rejection occurs before object promotion.
 
 Git protocol versions 0, 1, and 2 are passed to upload-pack after validating
 the `Git-Protocol` header. HTTP advertisement framing is provided by the
@@ -52,16 +52,19 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
-**Bounded write policy:** receive-pack currently accepts exactly one
-`refs/heads/*` create or update per request, including a first push to an
-empty repository. Existing branch updates must be fast-forwards. The adapter
-refuses deletes, tags and other namespaces, multi-ref requests, signed pushes,
-and protocol versions other than v0; Git enforces non-fast-forward policy in
-the projection. A branch such as `refs/heads/main` maps to NewGit's
-`refs/main`. Unmapped names must pass NewGit's ref-name validation. Actual
-Git 2.43.0/Linux tests cover initial branch creation, fast-forward, new branch,
-subsequent clone, and rejection paths; other versions/platforms are not
-claimed.
+**Bounded write policy:** receive-pack accepts one or more `refs/heads/*`
+creates or updates per request, including a first push to an empty repository.
+Existing branch updates must be fast-forwards. Every requested update must be
+accepted by Git in the disposable projection before any canonical refs move; if
+Git accepts only a subset, the adapter returns HTTP 409 and commits none of the
+NewGit refs. The server does **not** advertise Git's separate `atomic`
+capability, so `git push --atomic` is not supported. Deletes, tags and other
+namespaces, signed pushes, and protocol versions other than v0 are refused;
+Git enforces non-fast-forward policy in the projection. A branch such as
+`refs/heads/main` maps to NewGit's `refs/main`. Unmapped names must pass
+NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover initial
+branch creation, single- and multi-ref fast-forwards/creation, post-push fetch,
+and rejection paths; other versions/platforms are not claimed.
 
 The adapter materializes the full Git view independently for every discovery
 and POST request. Git's pack negotiation can reduce transferred bytes, but it

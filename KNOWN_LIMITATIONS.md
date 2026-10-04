@@ -70,15 +70,19 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     are not separately tested. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
     (limitation 1), not silently converted.
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
-    real Git CLI tests cover one write-authenticated `refs/heads/*` create or
-    fast-forward update per request, including an initial push to an empty
-    repository. Deletes, tags, multi-ref, signed, and forced non-fast-forward
-    pushes are refused; non-v0 receive-pack, Git-over-SSH, and GitHub/GitLab
-    hosting features are not implemented. Every request rebuilds a temporary
-    Git view from NewGit's canonical objects/refs. If a process or storage
-    failure interrupts promotion of immutable objects, unreachable objects
-    may remain, but the transactional ref is not published to an incomplete
-    graph. See `docs/PROTOCOL.md` and `docs/GIT_COMPATIBILITY_MATRIX.md`.
+    real Git CLI tests cover one or more write-authenticated `refs/heads/*`
+    creates or fast-forward updates per request, including an initial push to
+    an empty repository. All accepted canonical refs share one NewGit journaled
+    transaction; if Git accepts only part of a request in the disposable
+    projection, the HTTP request fails and no canonical refs are committed.
+    The server does not advertise Git's separate `--atomic` capability. Deletes,
+    tags, signed pushes, and forced non-fast-forward updates are refused;
+    non-v0 receive-pack, Git-over-SSH, and GitHub/GitLab hosting features are
+    not implemented. Every request rebuilds a temporary Git view from NewGit's
+    canonical objects/refs. If a process or storage failure interrupts promotion
+    of immutable objects, unreachable objects may remain, but the transactional
+    ref set is not published to an incomplete graph. See `docs/PROTOCOL.md` and
+    `docs/GIT_COMPATIBILITY_MATRIX.md`.
 
 ## Remote transports and Git smart HTTP
 12. Transport security relies on a TLS-terminating reverse proxy; the built-in

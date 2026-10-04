@@ -4,6 +4,14 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added
+- Git smart-HTTP receive-pack now accepts ordinary multi-ref branch create and
+  fast-forward requests, staging imported objects and CAS-committing all
+  accepted canonical refs in one NewGit transaction. A request with mixed
+  projection results fails as a whole before canonical object promotion. The
+  server does not advertise Git's separate `--atomic` capability; tags,
+  deletion, and forced non-fast-forward updates remain unsupported.
+
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and
   refuses ordinary refs that target non-commit objects, naming the ref/type and

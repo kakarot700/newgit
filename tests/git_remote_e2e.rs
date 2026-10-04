@@ -646,6 +646,54 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     ]);
     assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
 
+    // One ordinary git push updates an existing branch, advances another
+    // existing branch, and creates a third branch. The server does not
+    // advertise Git's separate `--atomic` capability; canonical NewGit refs
+    // nevertheless share one local journaled transaction after all updates
+    // have passed projection-side Git checks.
+    std::fs::write(clone_path.join("multi-ref.txt"), b"one multi-ref push\n").unwrap();
+    git(&["-C", clone_path_str, "add", "multi-ref.txt"]);
+    git(&[
+        "-C",
+        clone_path_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "multi-ref commit",
+    ]);
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        "main",
+        "main:refs/heads/published",
+        "main:refs/heads/multi-created",
+    ]);
+    let multi_ref_tip = newgit.refs.read("refs/main").unwrap();
+    assert_eq!(newgit.refs.read("refs/published").unwrap(), multi_ref_tip);
+    assert_eq!(
+        newgit.refs.read("refs/multi-created").unwrap(),
+        multi_ref_tip
+    );
+    let multi_ref_snapshot_object = newgit.objects.get(&multi_ref_tip).unwrap();
+    let multi_ref_snapshot = multi_ref_snapshot_object.as_snapshot().unwrap();
+    assert_eq!(multi_ref_snapshot.parents, vec![pushed_tip]);
+    let multi_ref_tree_object = newgit.objects.get(&multi_ref_snapshot.root).unwrap();
+    let multi_ref_tree = multi_ref_tree_object.as_tree().unwrap();
+    let multi_ref_blob = multi_ref_tree.get("multi-ref.txt").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&multi_ref_blob.oid)
+            .unwrap()
+            .as_blob()
+            .unwrap(),
+        b"one multi-ref push\n"
+    );
+
     // A fresh ordinary Git clone independently observes the canonical pushed
     // commit and both refs (not the disposable receive-pack projection).
     let post_push_clone = root.join("post-push-clone");
@@ -690,6 +738,32 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         ]))
         .trim()
     );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            post_push_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/main",
+        ]))
+        .trim(),
+        as_text(&git(&[
+            "-C",
+            post_push_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/multi-created",
+        ]))
+        .trim()
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            post_push_clone.to_str().unwrap(),
+            "cat-file",
+            "-p",
+            "refs/remotes/origin/multi-created:multi-ref.txt",
+        ])),
+        "one multi-ref push\n"
+    );
 
     // Tags, deletions, multiple refs, and forced non-fast-forward updates are
     // refused without adding canonical objects or moving refs.
@@ -716,18 +790,6 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         ":main",
     ]);
     assert!(!String::from_utf8_lossy(&delete_push.stderr).is_empty());
-    let multi_push = git_fails(&[
-        "-c",
-        &write_auth_config,
-        "-C",
-        clone_path_str,
-        "push",
-        "origin",
-        "main:multi-a",
-        "main:multi-b",
-    ]);
-    assert!(!String::from_utf8_lossy(&multi_push.stderr).is_empty());
-
     let base_git_tip = as_text(&git(&["-C", clone_path_str, "rev-parse", "HEAD~1"]))
         .trim()
         .to_string();
@@ -760,8 +822,36 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "divergent:main",
     ]);
     assert!(!String::from_utf8_lossy(&non_ff.stderr).is_empty());
-    assert_eq!(newgit.refs.read("refs/main").unwrap(), pushed_tip);
-    assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
+    assert_eq!(newgit.refs.read("refs/published").unwrap(), multi_ref_tip);
+
+    // Git accepts the new companion branch in its disposable projection but
+    // refuses the forced non-fast-forward update. The adapter rejects the
+    // whole request instead of returning a partial-success report or changing
+    // only the companion ref in canonical NewGit.
+    let partial_multi_push = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--force",
+        "origin",
+        "divergent:refs/heads/main",
+        "main:refs/heads/rejected-companion",
+    ]);
+    let partial_multi_stderr = String::from_utf8_lossy(&partial_multi_push.stderr);
+    assert!(
+        partial_multi_stderr.contains("409"),
+        "mixed-result multi-ref push should fail at the atomic HTTP boundary: {partial_multi_stderr}"
+    );
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
+    assert_eq!(newgit.refs.read("refs/published").unwrap(), multi_ref_tip);
+    assert!(newgit
+        .refs
+        .read_opt("refs/rejected-companion")
+        .unwrap()
+        .is_none());
     assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
     assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
 

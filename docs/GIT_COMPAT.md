@@ -202,12 +202,15 @@ environment and does not claim other Git versions or operating systems.
    conversion remains whole-history. A separate smart-HTTP adapter supports
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
    (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A separately
-   tested receive-pack slice accepts one write-authenticated branch create or
-   fast-forward update per request, including an initial push to an empty
-   repository. Tags, deletion, multi-ref, signed, and non-fast-forward pushes
-   are refused. Both directions rematerialize a complete temporary Git
-   projection for every HTTP request; pack negotiation does not avoid the full
-   NewGit-to-Git export. Git over SSH remains unsupported. See [protocol
+   tested receive-pack slice accepts one or more write-authenticated branch
+   creates or fast-forward updates per request, including an initial push to an
+   empty repository. Accepted canonical refs share one NewGit transaction; a
+   partially accepted projection request is rejected without changing canonical
+   refs. Tags, deletion, signed, and non-fast-forward pushes are refused, and
+   Git's `--atomic` capability is not advertised. Both directions rematerialize
+   a complete temporary Git projection for every HTTP request; pack negotiation
+   does not avoid the full NewGit-to-Git export. Git over SSH remains
+   unsupported. See [protocol
    details](PROTOCOL.md#git-smart-http-compatibility) and the [evidence
    matrix](GIT_COMPATIBILITY_MATRIX.md).
 6. Non-UTF-8 commit messages become lossy-converted and flagged; non-UTF-8 Git
