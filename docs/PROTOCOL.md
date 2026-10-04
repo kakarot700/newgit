@@ -58,8 +58,12 @@ deletions under `refs/tags/*`; this includes a first branch push to an empty
 repository. Tags must directly target commit objects. Existing tags cannot be
 retargeted, even with `--force`, because NewGit stores tags only as refs to
 snapshots; this tag policy is enforced separately from branch non-fast-forward
-handling. Annotated tag objects and other ref
-namespaces are refused. Every requested operation must be accepted by Git in
+handling. Incoming annotated tags resolve to Git `tag` objects and are refused
+before canonical import or object promotion. The concrete diagnostic is
+`annotated Git tag <ref> resolves to a tag object; NewGit has no Git tag-object
+or per-ref metadata representation, so tagger/message/signature data cannot be
+preserved`; accepting one as a lightweight tag would silently flatten that
+metadata. Other ref namespaces are refused. Every requested operation must be accepted by Git in
 the disposable projection before canonical refs move; if Git accepts only a
 subset, the adapter returns HTTP 409 and commits none of the NewGit refs. For
 explicit `git push --atomic`, Git's `receive-pack` projection enforces all-or-none

@@ -920,6 +920,8 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "-m",
         "annotated tags are unsupported",
     ]);
+    let refs_before_annotated_push = newgit.refs.list(None).unwrap();
+    let objects_before_annotated_push = newgit.objects.iter().unwrap();
     let tag_push = git_fails(&[
         "-c",
         &write_auth_config,
@@ -930,6 +932,11 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "refs/tags/forbidden-tag",
     ]);
     assert!(!String::from_utf8_lossy(&tag_push.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_annotated_push);
+    assert_eq!(
+        newgit.objects.iter().unwrap(),
+        objects_before_annotated_push
+    );
     git(&[
         "-c",
         &write_auth_config,

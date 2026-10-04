@@ -180,12 +180,7 @@ pub fn receive_pack(
     for update in &updates {
         if update.push.ref_name.starts_with("refs/tags/") && update.push.new_oid != ZERO_SHA1 {
             let object_type = git_object_type(&view, &update.push.new_oid, deadline)?;
-            if object_type != "commit" {
-                return Err(Error::Invalid(format!(
-                    "Git tag {} targets a {object_type} object; only lightweight tags to commits are supported",
-                    update.push.ref_name
-                )));
-            }
+            validate_lightweight_tag_target(&update.push.ref_name, &object_type)?;
         }
     }
 
@@ -277,6 +272,18 @@ pub fn receive_pack(
         Ok(())
     })?;
     Ok(response)
+}
+
+fn validate_lightweight_tag_target(ref_name: &str, object_type: &str) -> Result<()> {
+    match object_type {
+        "commit" => Ok(()),
+        "tag" => Err(Error::Invalid(format!(
+            "annotated Git tag {ref_name} resolves to a tag object; NewGit has no Git tag-object or per-ref metadata representation, so tagger/message/signature data cannot be preserved"
+        ))),
+        other => Err(Error::Invalid(format!(
+            "Git tag {ref_name} targets a {other} object; only lightweight tags directly targeting commits are supported"
+        ))),
+    }
 }
 
 #[derive(Debug)]
@@ -671,7 +678,10 @@ fn git_deadline_error() -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_no_ref_name_conflict, parse_push_command, validate_sha1, ZERO_SHA1};
+    use super::{
+        ensure_no_ref_name_conflict, parse_push_command, validate_lightweight_tag_target,
+        validate_sha1, ZERO_SHA1,
+    };
     use crate::repo::txn::{self, Cas, RefLogEntry, TxnOp};
     use crate::repo::Repo;
 
@@ -686,6 +696,22 @@ mod tests {
         let mut out = pkt(command);
         out.extend_from_slice(b"0000PACK");
         out
+    }
+
+    #[test]
+    fn annotated_tag_push_refusal_names_the_unrepresentable_metadata() {
+        let error = validate_lightweight_tag_target("refs/tags/v1", "tag").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid value: annotated Git tag refs/tags/v1 resolves to a tag object; NewGit has no Git tag-object or per-ref metadata representation, so tagger/message/signature data cannot be preserved"
+        );
+        assert!(validate_lightweight_tag_target("refs/tags/v1", "commit").is_ok());
+        assert_eq!(
+            validate_lightweight_tag_target("refs/tags/blob", "blob")
+                .unwrap_err()
+                .to_string(),
+            "invalid value: Git tag refs/tags/blob targets a blob object; only lightweight tags directly targeting commits are supported"
+        );
     }
 
     #[test]

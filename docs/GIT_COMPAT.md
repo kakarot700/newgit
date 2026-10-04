@@ -206,8 +206,11 @@ environment and does not claim other Git versions or operating systems.
    tested receive-pack slice accepts write-authenticated branch creates,
    fast-forward or forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions
    per request, including an initial push to an empty repository. Existing tags
-   cannot be retargeted (including with `--force`), and annotated tag objects
-   are refused. Accepted canonical refs share one NewGit transaction; a partially
+   cannot be retargeted (including with `--force`). Annotated tag objects are
+   refused before canonical import/object promotion with a tested diagnostic:
+   NewGit has no Git tag-object or per-ref metadata representation, so tagger,
+   message, and signature data cannot be preserved; real-Git regression checks
+   refs and object inventory remain unchanged. Accepted canonical refs share one NewGit transaction; a partially
    accepted projection request is rejected without changing canonical refs.
    Git's `atomic` capability is advertised and tested with successful atomic
    branch-plus-tag creation and multi-ref deletion plus policy rejection that

@@ -73,8 +73,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     real Git CLI tests cover write-authenticated branch creates, fast-forward
     and forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions per request,
     including an initial branch push to an empty repository. Existing tags cannot
-    be retargeted (even with `--force`), and annotated tag objects are refused
-    because NewGit stores tags only as refs to commit snapshots. The server
+    be retargeted (even with `--force`). Annotated pushes are refused before
+    canonical import or object promotion with the tested diagnostic that NewGit
+    has no Git tag-object or per-ref metadata representation; the test verifies
+    refs and object inventory remain unchanged. Flattening would discard the
+    tagger, message, and any signature. The server
     advertises Git's `atomic` capability: tests verify atomic multi-ref changes
     and policy rejection that leave canonical refs and object inventory
     unchanged. All accepted canonical refs share one NewGit journaled transaction;
