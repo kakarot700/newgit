@@ -69,17 +69,18 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | I31 | Git refs targeting non-commit objects that NewGit cannot export are refused before any refs move rather than silently omitted or imported into an asymmetric state | `non_commit_git_refs_are_refused_atomically` (real lightweight/annotated tags to reachable/orphan blobs and trees, plus a tag-only source; deep verify) ✅ |
 | I32 | Git octopus merges retain every ordered parent and the merge tree through import, export, and reimport | `octopus_merge_preserves_parent_order_and_trees_across_roundtrip` (four-parent real-Git merge, semantic tree comparison, `fsck`, deep NewGit verification) ✅ |
 | I33 | SSH-signed annotated tags are never claimed preserved: import reports tag-metadata loss, export uses a lightweight tag, and the tested target tree remains correct | `ssh_signed_annotated_tag_loss_is_reported_and_exported_as_lightweight` (Git-verified source signature, fast-export observation, Git `fsck`, deep NewGit verification) ✅ |
+| I34 | Git namespace refs are reported and omitted rather than exposed as unrelated ordinary branches | `git_namespace_refs_are_reported_and_not_exported_as_branches` (Git 2.43 namespaced ls-remote sees virtual branch/tag/blob refs; fast-export omits the blob ref; scan reports all three; namespace-only commit objects are still processed; import/export skip and report refs; no flattened branch; Git `fsck`, deep verification) ✅ |
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (SSH-signed annotated-tag compatibility; Git 2.43.0)
-- `cargo test --locked` (debug): **295 passed; 0 failed** (129 lib unit,
+- Date: 2026-10-04 (Git namespace-ref handling; Git 2.43.0)
+- `cargo test --locked` (debug): **296 passed; 0 failed** (129 lib unit,
   6 chaos, 16 cli_e2e, 4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers,
-  25 git_compat, 18 merge_integrate, 13 ops_snapshot, 12 property_core,
+  26 git_compat, 18 merge_integrate, 13 ops_snapshot, 12 property_core,
   16 remote_e2e, 10 txn_recovery, 20 verify_gc, 1 version, 9 workflow)
-- `cargo test --release --locked`: **295 passed; 0 failed** (same suites)
-- Both full runs include **25/25** real-Git interoperability tests, including
-  the Git-verified SSH-signed tag loss/report/export regression.
+- `cargo test --release --locked`: **296 passed; 0 failed** (same suites)
+- Both full runs include **26/26** real-Git interoperability tests, including
+  the namespace-ref non-leakage test and Git-verified SSH-signed tag regression.
 - `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
   `cargo build --release --locked`, SBOM drift, Git prerequisite check, and
   `git diff --check`: clean.

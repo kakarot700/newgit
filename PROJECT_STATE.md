@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: establish real-Git signed annotated-tag loss/report behavior without claiming tag-object compatibility (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: explicitly skip/report Git namespace refs rather than flattening them into unrelated branches (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,18 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — signed annotated tags (2026-10-04)
+## Current Git compatibility milestone — Git namespace refs (2026-10-04)
+
+- **Evidence gap:** Git virtualizes physical refs under `refs/namespaces/<namespace>/...` for namespaced clients. The importer skipped several unsupported ref families but not this one, while export maps generic `refs/X` names to `refs/heads/X`; this could change a namespace ref's meaning.
+- **Observed Git behavior:** on Git 2.43.0/Linux, `GIT_NAMESPACE=tenant git ls-remote` presents physical namespace branch, tag, and blob refs as virtual refs. `git fast-export --all` includes commit-target refs but omits the namespace ref targeting a blob.
+- **Implementation:** import now classifies `refs/namespaces/*` as unsupported and reports them from its existing `for-each-ref` scan, including refs omitted by `fast-export`. Export also skips/reports namespace-shaped NewGit refs before generic name mapping. No namespace virtualization/preservation was added.
+- **Regression:** `tests/git_compat.rs::git_namespace_refs_are_reported_and_not_exported_as_branches` uses real Git commands to check namespaced `ls-remote`, the stream omission, scan-side reporting for all three refs, safe import/export, and absence of flattened ordinary branches. It verifies namespace-only commit history is still processed as unreferenced NewGit objects, checks a native NewGit namespace-shaped ref is reported on export, and runs Git `fsck` plus deep NewGit verification.
+- **Compatibility boundary:** refs are not preserved or verified; reachable objects may still be streamed from skipped refs, so this is not a confidentiality boundary. The pre-scan and stream are separate commands and concurrent source-ref mutation is not synchronized. Evidence is limited to Git 2.43.0/Linux.
+- **Independent review:** no blocking correctness issue. The reviewer confirmed inherited `GIT_NAMESPACE` does not bypass the physical-ref scan/filter and recommended precise virtual-ref and concurrent-mutation caveats, now documented.
+- **Local verification:** the focused regression passed. One full local pass completed: `cargo test --locked` **296/296** (including **26/26** `git_compat` tests), `cargo test --release --locked` **296/296** (same suite counts), `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift, Git >=2.34.0/`ssh-keygen` prerequisites, and `git diff --check` all passed on Git 2.43.0/Linux.
+- **Hosted verification:** after the single combined commit is pushed, exact-SHA CI and CodeQL results will be recorded in task completion. Push-run CI does not execute PR-only or tag-only jobs.
+
+## Previous Git compatibility milestone — signed annotated tags (2026-10-04)
 
 - **Evidence gap:** annotated-tag metadata and signatures were already classified
   as lossy, but the existing real-Git fixture used only an unsigned annotated

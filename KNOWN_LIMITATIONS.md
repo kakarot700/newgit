@@ -35,7 +35,14 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     and reported tag-metadata loss are surfaced by the import report. Symbolic
     refs outside `HEAD` are unsupported by NewGit's direct-ref model; import
     discovers and reports them because `fast-export --all` omits them. Replace
-    refs are skipped and reported; Git commit signature headers are not
+    refs and physical `refs/namespaces/*` refs are skipped and reported on
+    import; export also skips namespace-shaped NewGit refs rather than mapping
+    them to ordinary branches. A real Git 2.43.0/Linux fixture verifies
+    namespaced `ls-remote` visibility and scan-side reporting even for a blob
+    ref that `fast-export` omits. Namespace-only commit history may still be
+    streamed/imported as unreachable objects, so this is not a confidentiality
+    boundary. The namespace pre-scan and `fast-export` are separate commands;
+    concurrent source-ref mutation is not synchronized. Git commit signature headers are not
     preserved because `fast-export` omits them. Import scans original commit
     objects and reports affected source IDs in `signed_commits_stripped`, but
     does not preserve or verify the signature. One Git-verified SSH-signed

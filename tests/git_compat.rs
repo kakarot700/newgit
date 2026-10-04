@@ -1907,6 +1907,122 @@ fn non_head_symbolic_refs_are_reported_and_not_imported() {
     assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
 }
 
+#[test]
+fn git_namespace_refs_are_reported_and_not_exported_as_branches() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "file.txt", b"namespace content\n");
+    commit(&gdir, "namespace base");
+
+    let namespace = "tenant";
+    let source_tree = git_out(&gdir, &["write-tree"]).trim().to_string();
+    let source_oid = git_out(
+        &gdir,
+        &["commit-tree", &source_tree, "-m", "namespace-only commit"],
+    )
+    .trim()
+    .to_string();
+    let namespace_ref = format!("refs/namespaces/{namespace}/refs/heads/hidden");
+    git(&gdir, &["update-ref", &namespace_ref, &source_oid]);
+    let namespace_tag = format!("refs/namespaces/{namespace}/refs/tags/v1");
+    git(&gdir, &["update-ref", &namespace_tag, &source_oid]);
+    write(&gdir, "orphan.txt", b"namespace-only orphan blob\n");
+    let blob_oid = git_out(&gdir, &["hash-object", "-w", "orphan.txt"])
+        .trim()
+        .to_string();
+    let namespace_blob_ref = format!("refs/namespaces/{namespace}/refs/heads/blob");
+    git(&gdir, &["update-ref", &namespace_blob_ref, &blob_oid]);
+
+    // Git's ordinary local transport presents the physical namespace ref as a
+    // virtual branch to a client connecting with GIT_NAMESPACE set.
+    let advertised = Command::new("git")
+        .arg("ls-remote")
+        .arg(&gdir)
+        .env("GIT_NAMESPACE", namespace)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("spawn namespaced git ls-remote");
+    assert!(
+        advertised.status.success(),
+        "namespaced ls-remote failed: {}",
+        String::from_utf8_lossy(&advertised.stderr)
+    );
+    let advertisement = String::from_utf8_lossy(&advertised.stdout);
+    for (oid, virtual_ref) in [
+        (source_oid.as_str(), "refs/heads/hidden"),
+        (source_oid.as_str(), "refs/tags/v1"),
+        (blob_oid.as_str(), "refs/heads/blob"),
+    ] {
+        assert!(
+            advertisement.lines().any(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some(oid) && fields.next() == Some(virtual_ref)
+            }),
+            "Git namespace client should see {virtual_ref}: {advertisement:?}"
+        );
+    }
+
+    // fast-export exposes the physical name. Importing it as a normal ref
+    // would later map it to refs/heads/namespaces/... and change its meaning.
+    let stream = git_out(&gdir, &["fast-export", "--all", "--show-original-ids"]);
+    assert!(stream.contains(&namespace_ref));
+    assert!(stream.contains(&namespace_tag));
+    assert!(
+        !stream.contains(&namespace_blob_ref),
+        "Git fast-export should omit the namespace ref targeting a blob"
+    );
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    for skipped in [&namespace_ref, &namespace_tag, &namespace_blob_ref] {
+        assert!(
+            report.refs_skipped.iter().any(|name| name == skipped),
+            "unsupported namespace ref must be reported: {report:?}"
+        );
+        assert!(repo.refs.read_opt(skipped).unwrap().is_none());
+    }
+    assert_eq!(
+        report.commits, 2,
+        "fast-export still streams namespace-only history"
+    );
+    assert!(repo.refs.read_opt("refs/heads/master").unwrap().is_some());
+
+    // A native NewGit ref with the same namespace-shaped name must also be
+    // skipped by export rather than flattened into an unrelated Git branch.
+    let native_namespace_ref = "refs/namespaces/newgit/refs/heads/native";
+    repo.refs
+        .update(
+            native_namespace_ref,
+            newgit::repo::txn::Cas::Any,
+            Some(repo.refs.read("refs/heads/master").unwrap()),
+            newgit::repo::txn::RefLogEntry::system("namespace export regression"),
+        )
+        .unwrap();
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+
+    let outdir = d.path().join("out");
+    let export = export_git(&repo, &outdir).unwrap();
+    assert!(
+        export
+            .refs_skipped
+            .iter()
+            .any(|name| name == native_namespace_ref),
+        "export must report its omitted namespace-shaped NewGit ref: {export:?}"
+    );
+    assert_eq!(
+        git_out(&outdir, &["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/master\n",
+        "namespace refs must not leak out as ordinary exported branches"
+    );
+    assert_eq!(
+        git(&outdir, &["show", "refs/heads/master:file.txt"]).stdout,
+        b"namespace content\n"
+    );
+    git(&outdir, &["fsck", "--full", "--strict", "--no-reflogs"]);
+}
+
 fn snapshot_req(
     ws: &str,
     msg: &str,

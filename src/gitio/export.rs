@@ -11,8 +11,8 @@
 //!   `git_parents_ordered` extra when present, else sorted order,
 //! * Ref mapping: `refs/heads/*` and `refs/tags/*` pass through; any other
 //!   `refs/X` maps to `refs/heads/X`; bare names map to `refs/heads/<name>`;
-//!   NewGit-internal namespaces (`workspaces/*`, `chains/*`) are NEVER
-//!   exported,
+//!   Git namespace refs (`refs/namespaces/*`) and NewGit-internal namespaces
+//!   (`workspaces/*`, `chains/*`) are skipped and reported,
 //! * Annotated git tags imported earlier become lightweight tags (their
 //!   messages were stripped at import — documented round-trip loss).
 //!
@@ -73,7 +73,10 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     let mut tips: BTreeMap<String, ObjectId> = BTreeMap::new(); // git-name → oid
     let mut git_to_newgit: BTreeMap<String, String> = BTreeMap::new();
     for n in &names {
-        if n.starts_with("workspaces/") || n.starts_with("chains/") {
+        if n.starts_with("refs/namespaces/")
+            || n.starts_with("workspaces/")
+            || n.starts_with("chains/")
+        {
             rep.refs_skipped.push(n.clone());
             continue;
         }
@@ -517,6 +520,8 @@ fn quote_path(p: &str) -> String {
 /// NewGit ref name → git ref name. Branch/tag namespaces pass through;
 /// everything else lands under refs/heads/ (git tooling expects branches
 /// there): `refs/main` → `refs/heads/main`, `main` → `refs/heads/main`.
+/// Namespace-shaped refs are excluded and reported by `export_git` before this
+/// mapping, since flattening them would change their Git meaning.
 pub fn map_ref_name(name: &str) -> String {
     if name.starts_with("refs/heads/") || name.starts_with("refs/tags/") {
         name.to_string()

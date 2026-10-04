@@ -38,6 +38,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | Symbolic `HEAD` | NewGit symbolic HEAD, moved **in the same transaction** as refs | tested for an ordinary branch HEAD |
 | Detached `HEAD` | NewGit direct snapshot HEAD, moved **in the same transaction** as refs | the `fast-export` pseudo-ref `HEAD` is not imported as a named ref; tested for detached-only and detached-ahead-of-branch histories |
 | Non-`HEAD` symbolic refs | not imported; detected with `git for-each-ref` and listed in `refs_skipped` | unsupported: NewGit refs are direct object pointers; a real-Git fixture with two branch aliases confirms Git 2.43.0 `fast-export --all` omits them |
+| Git namespace refs (`refs/namespaces/*`) | no NewGit ref | unsupported; the importer scans and reports these names even when `fast-export` omits them, while export skips and reports namespace-shaped NewGit refs rather than flattening them into branches |
 | Git replace refs | `refs/replace/*` skipped and reported; `fast-export` runs with `GIT_NO_REPLACE_OBJECTS=1` | replacement overlays are unsupported; the test proves ordinary branch history is imported from stored objects rather than silently rewritten through a replacement commit |
 
 **Atomicity.** Objects are written first (content-addressed, idempotent);
@@ -50,10 +51,24 @@ repos yields **identical object ids** for every ref — tested
 (`import_is_deterministic`).
 
 **Skipped namespaces** (reported in `refs_skipped`): `refs/remotes/*`,
-`refs/notes/*`, `refs/replace/*`, `refs/stash`, `refs/bisect/*`,
-`refs/worktree/*`. Non-`HEAD` symbolic refs are separately discovered and
-reported because `fast-export --all` omits them. NewGit-internal namespaces
-(`workspaces/*`, `chains/*`) are never exported.
+`refs/notes/*`, `refs/namespaces/*`, `refs/replace/*`, `refs/stash`,
+`refs/bisect/*`, and `refs/worktree/*`. Non-`HEAD` symbolic refs are separately
+discovered and reported because `fast-export --all` omits them. NewGit-internal
+namespaces (`workspaces/*`, `chains/*`) are never exported.
+
+Git namespace refs under `refs/namespaces/<namespace>/...` are unsupported and
+deliberately skipped. A real Git 2.43.0/Linux fixture confirms that
+`GIT_NAMESPACE=tenant git ls-remote` presents namespace entries as virtual refs,
+while `fast-export --all` emits its physical full name. Since NewGit's generic
+export mapping would turn that physical name into an unrelated ordinary branch,
+the importer reports and omits it rather than silently changing its meaning;
+the test also verifies the regular branch still round-trips and no mapped
+namespace branch leaks into the export. The pre-scan reports a namespace ref to
+a blob even though Git omits that ref from `fast-export`. This skip is not a
+confidentiality boundary: commits reachable only from a namespace ref can still
+be streamed and imported as unreferenced objects before the ref is omitted. The
+pre-scan and `fast-export` are separate commands, so concurrent source-ref
+mutation is not synchronized.
 
 Replace-ref semantics are not imported. Since Git normally applies replacement
 objects transparently during history traversal, the importer sets
@@ -78,7 +93,7 @@ annotated-tag chains and other Git versions/platforms are not separately tested.
 |---|---|---|
 | Snapshot chain | commits via `git fast-import` | parents-before-children topological stream |
 | `refs/heads/*`, `refs/tags/*` | pass through | annotated tags cannot be rebuilt (metadata was stripped at import) → lightweight |
-| `refs/X` (other) | `refs/heads/X` | e.g. `refs/main` → `refs/heads/main` |
+| `refs/X` (other) | `refs/heads/X` | e.g. `refs/main` → `refs/heads/main`; `refs/namespaces/*` is an explicit skip/report exception |
 | bare ref names | `refs/heads/<name>` | |
 | distinct names mapping to one Git ref | refused before target initialization | avoids silently overwriting one exported ref; error names both source refs and the mapped ref |
 | Actor | `author`/`committer` lines | email from `extras.email`, else `exported@newgit.local`; empty display name → `NewGit User` |
@@ -213,6 +228,14 @@ environment and does not claim other Git versions or operating systems.
     represents snapshot histories; its importer does not silently accept a ref
     that fast-export omits or that later cannot be exported. Real-Git tests cover
     blob/tree tag targets and the no-commit tag-only case on Git 2.43.0/Linux.
+14. **Git namespaces are not preserved.** `refs/namespaces/*` are reported and
+    omitted on import, including refs to blobs that `fast-export` skips; export
+    also reports and omits namespace-shaped NewGit refs rather than flattening
+    them into branches. `fast-export` may still stream commits reachable only
+    through those refs, leaving unreferenced objects in NewGit, so this is not a
+    confidentiality boundary. The namespace pre-scan and `fast-export` are
+    separate commands; concurrent source-ref mutation is not synchronized. The
+    regression is limited to Git 2.43.0/Linux.
 
 ## CLI details
 
