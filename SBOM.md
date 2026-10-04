@@ -15,23 +15,24 @@ Cargo.lock (committed; registry checksums).
 | proptest | ^1 | dev (tests only) |
 | serde | ^1 | runtime |
 | serde_json | ^1 | runtime |
-| sha2 | ^0.10 | runtime |
+| sha2 | ^0.11 | runtime |
 | tempfile | ^3 | dev (tests only) |
 | thiserror | ^2 | runtime |
 
-## Runtime closure (21 crates — compiled into / linked by the binary)
+## Runtime closure (22 crates — compiled into / linked by the binary)
 
 | crate | version | license | source |
 |---|---|---|---|
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| block-buffer | 0.10.4 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| block-buffer | 0.12.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| cpufeatures | 0.2.17 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| const-oid | 0.10.2 | Apache-2.0 OR MIT | https://github.com/rust-lang/crates.io-index |
+| cpufeatures | 0.3.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | crc32fast | 1.5.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| crypto-common | 0.1.7 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| digest | 0.10.7 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| crypto-common | 0.2.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| digest | 0.11.3 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| generic-array | 0.14.7 | MIT | https://github.com/rust-lang/crates.io-index |
+| hybrid-array | 0.4.15 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | libc | 0.2.190 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | memchr | 2.8.3 | Unlicense OR MIT | https://github.com/rust-lang/crates.io-index |
@@ -39,13 +40,13 @@ Cargo.lock (committed; registry checksums).
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
-| sha2 | 0.10.9 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| sha2 | 0.11.0 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | simd-adler32 | 0.3.10 | MIT | https://github.com/rust-lang/crates.io-index |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | zmij | 1.0.23 | MIT | https://github.com/rust-lang/crates.io-index |
 
-## Build-time closure (7 crates — proc macros, their deps, and build-script helpers; execute on the build host, NOT linked into the binary)
+## Build-time closure (6 crates — proc macros, their deps, and build-script helpers; execute on the build host, NOT linked into the binary)
 
 | crate | version | license | source |
 |---|---|---|---|
@@ -55,7 +56,6 @@ Cargo.lock (committed; registry checksums).
 | syn | 3.0.6 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | thiserror-impl | 2.0.21 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/rust-lang/crates.io-index |
-| version_check | 0.9.5 | MIT/Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 
 ## Dev-only closure (34 crates — tests/benches; never shipped)
 
