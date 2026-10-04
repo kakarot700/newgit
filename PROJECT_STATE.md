@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: seed skip reports from the ref scan so unsupported refs omitted by `fast-export` are not silently unreported (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: verify and document lossy conversion of Git commit messages containing invalid UTF-8 bytes (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,17 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — reporting unsupported refs omitted by fast-export (2026-10-04)
+## Current Git compatibility milestone — invalid UTF-8 commit-message loss (2026-10-04)
+
+- **Evidence gap:** documentation and importer code already said non-UTF-8 Git commit messages were converted with UTF-8 replacement text and marked by `extras.git_message_lossy=1`, but no real-Git interoperability test established the source bytes, stream behavior, marker, or exported result.
+- **Observed Git behavior:** on Git 2.43.0/Linux, `git commit -F` normalizes invalid UTF-8 input to UTF-8 (with a warning), so the regression uses Git plumbing to create a raw commit object. `git cat-file` and `git fast-export` both preserve the invalid message bytes exactly.
+- **Regression:** `tests/git_compat.rs::non_utf8_git_commit_message_is_lossily_converted_and_flagged` creates a real Git parent commit and a raw child commit with `git hash-object -t commit -w --stdin`, verifies its ref with Git, asserts the stream contains the invalid bytes, imports it, and checks the replacement text and exact loss marker. It confirms the valid ancestor is not marked, exports to Git and checks only the replacement text remains, and deep-verifies NewGit.
+- **Compatibility boundary:** message bytes outside UTF-8 remain **LOSSY**, not preserved. The evidence covers one raw message on Git 2.43.0/Linux; Git versions/platforms and other non-UTF-8 metadata fields are not established. No importer conversion behavior or NewGit message model was changed.
+- **Independent review:** the reviewer found no fixture or conversion blocker; it identified an unsupported full-suite pass claim in `TEST_MATRIX.md` while validation was still pending, which was corrected before starting the full run.
+- **Local verification:** the focused regression passed, followed by one full validation pass on Git 2.43.0/Linux and pinned Rust 1.99.0: `cargo test --locked` **298/298** (including **28/28** Git interoperability tests), `cargo test --release --locked` **298/298**, `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift, Git >=2.34.0/`ssh-keygen` prerequisites, and `git diff --check` all passed.
+- **Hosted verification:** after the single push, run GitHub CI and CodeQL once on the exact commit SHA; deliver both exact-SHA links with the completion message so no state-only follow-up commit is needed.
+
+## Previous Git compatibility milestone — reporting unsupported refs omitted by fast-export (2026-10-04)
 
 - **Evidence gap:** the pre-scan explicitly retained physical namespace refs, but other configured unsupported families depended on `fast-export` events to appear in `refs_skipped`. Git can omit refs in those families when they point to blobs.
 - **Observed Git behavior:** Git 2.43.0/Linux `fast-export --all` warns and omits remote-tracking and notes refs targeting blobs, while `for-each-ref` lists both.

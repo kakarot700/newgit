@@ -124,9 +124,15 @@ raw Git commit-object payload bytes at source and export, plus the imported
 `Snapshot.message`, for leading/trailing blank lines, trailing spaces, CRLF, no
 final LF, and an empty message. The companion
 `git_control_character_commit_message_is_refused_atomically` case proves the
-tested U+0001 message is rejected with no ref updates. These tests do not
-establish lossless handling of non-UTF-8 messages, which are converted lossily
-and flagged. `quoted_utf8_git_paths_roundtrip_without_changing_names` compares
+tested U+0001 message is rejected with no ref updates. The
+`non_utf8_git_commit_message_is_lossily_converted_and_flagged` fixture uses Git
+plumbing to create an invalid-UTF-8 commit message (Git 2.43.0's `git commit`
+porcelain normalizes such input); `cat-file` and `fast-export` retain the raw
+bytes, import converts them with UTF-8 replacement characters and sets
+`extras.git_message_lossy=1`, and export writes only the converted text. This
+proves the tested loss is flagged, not that non-UTF-8 message bytes are
+preserved; other Git versions and platforms are not established.
+`quoted_utf8_git_paths_roundtrip_without_changing_names` compares
 Git tree path names, modes, and blob IDs for each commit across a rename whose
 names contain non-ASCII UTF-8, quotes, and backslashes; the exported worktree
 is clean. Re-importing the

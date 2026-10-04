@@ -9,8 +9,9 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use common::*;
 use newgit::gitio::export::export_git;
@@ -662,6 +663,96 @@ fn commit_message_roundtrip_preserves_exact_utf8_bytes() {
     for (rev, message) in output_revs.iter().zip(&expected) {
         assert_eq!(git_commit_message(&outdir, rev), *message, "exported {rev}");
     }
+}
+
+#[test]
+fn non_utf8_git_commit_message_is_lossily_converted_and_flagged() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "seed.txt", b"seed\n");
+    commit(&gdir, "seed");
+
+    // `git commit` porcelain normalizes invalid UTF-8 from -F on this Git
+    // version, so use Git plumbing to create a valid raw commit object while
+    // still exercising Git's hash-object, ref, cat-file, and fast-export.
+    let tree = git_out(&gdir, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git_out(&gdir, &["rev-parse", "HEAD"]);
+    let message = b"invalid UTF-8: \xf0\x28\x8c\x28 and \xff\n";
+    let mut raw_commit = format!(
+        "tree {}\nparent {}\nauthor Test Author <author@example.com> 1700000000 +0000\ncommitter Test Author <author@example.com> 1700000000 +0000\n\n",
+        tree.trim(),
+        parent.trim()
+    )
+    .into_bytes();
+    raw_commit.extend_from_slice(message);
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(&gdir)
+        .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&raw_commit).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let source_sha = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    git(&gdir, &["update-ref", "refs/heads/master", &source_sha]);
+    assert_eq!(git_commit_message(&gdir, &source_sha), message);
+
+    let stream = git(&gdir, &["fast-export", "--all", "--full-tree"]);
+    assert!(
+        stream
+            .stdout
+            .windows(message.len())
+            .any(|window| window == message),
+        "fast-export did not retain the raw invalid UTF-8 message bytes"
+    );
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert_eq!(report.commits, 2);
+    let by_sha = snapshots_by_git_sha(&repo);
+    let imported_oid = by_sha.get(&source_sha).expect("raw Git commit imported");
+    let imported = match repo.objects.get(imported_oid).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        _ => panic!("imported commit did not map to a snapshot"),
+    };
+    let lossy_message = String::from_utf8_lossy(message).into_owned();
+    assert_eq!(imported.message, lossy_message);
+    assert_eq!(
+        imported.extras.get("git_message_lossy").map(String::as_str),
+        Some("1"),
+        "lossy conversion must be explicitly flagged"
+    );
+    let seed_sha = parent.trim();
+    let seed_oid = by_sha.get(seed_sha).expect("seed commit imported");
+    let seed = match repo.objects.get(seed_oid).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        _ => panic!("seed commit did not map to a snapshot"),
+    };
+    assert!(!seed.extras.contains_key("git_message_lossy"));
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+
+    let outdir = d.path().join("out");
+    let export = export_git(&repo, &outdir).unwrap();
+    assert_eq!(export.commits, 2);
+    let output_tip = git_out(&outdir, &["rev-parse", "refs/heads/master"]);
+    assert_eq!(
+        git_commit_message(&outdir, output_tip.trim()),
+        lossy_message.as_bytes(),
+        "export should contain the documented UTF-8 replacement text, not the source bytes"
+    );
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
 }
 
 #[test]

@@ -136,7 +136,10 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     operations; there is no fetch/pull negotiation against git remotes.
     NewGit-native remotes with negotiation arrive in iteration 9.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
-    (`extras.git_message_lossy`). Valid UTF-8 message payloads are preserved
+    (`extras.git_message_lossy`); a real Git plumbing fixture verifies the raw
+    source bytes, fast-export payload, replacement text, marker, and lossy export
+    (`tests/git_compat.rs::non_utf8_git_commit_message_is_lossily_converted_and_flagged`).
+    Valid UTF-8 message payloads are preserved
     byte-for-byte for the tested cases (including leading/trailing whitespace,
     CRLF, missing final LF, and empty messages; see
     `tests/git_compat.rs::commit_message_roundtrip_preserves_exact_utf8_bytes`).
