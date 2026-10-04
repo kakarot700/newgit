@@ -20,6 +20,8 @@
 
 pub mod audit;
 pub mod auth;
+#[cfg(test)]
+pub(crate) mod bench_timing;
 pub mod client;
 pub mod git_http;
 pub mod git_receive;

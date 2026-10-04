@@ -165,6 +165,8 @@ fn envelope_err(status_hint: u16, category: &str, message: &str) -> Vec<u8> {
 }
 
 fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
+    #[cfg(test)]
+    let connection_started = std::time::Instant::now();
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_nodelay(true);
@@ -180,6 +182,8 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
     let mut w = BufWriter::new(out_stream);
 
     // Repo + tokens are loaded per connection (cheap, always fresh).
+    #[cfg(test)]
+    let repo_open_started = std::time::Instant::now();
     let repo = match Repo::open(&cfg.repo_root) {
         Ok(repo) => repo,
         Err(e) => {
@@ -188,9 +192,13 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
             return;
         }
     };
+    #[cfg(test)]
+    crate::remote::bench_timing::record("server.repo_open", repo_open_started.elapsed());
     let tokens = auth::load(&cfg.token_file).unwrap_or_default();
     let audit = AuditLog::new(repo.ng());
 
+    #[cfg(test)]
+    let request_read_started = std::time::Instant::now();
     let req = match http::read_request(&mut r, cfg.max_body) {
         Ok(req) => req,
         Err((status, msg)) => {
@@ -201,6 +209,8 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
             return;
         }
     };
+    #[cfg(test)]
+    crate::remote::bench_timing::record("server.request_read", request_read_started.elapsed());
     crate::obs::event(
         "remote_request",
         &[
@@ -212,6 +222,8 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
 
     // Static UI first (no auth: the HTML contains zero data; every data
     // endpoint behind it enforces roles with the user's own token).
+    #[cfg(test)]
+    let route_started = std::time::Instant::now();
     let (status, body, ctype, principal_id, category) =
         if cfg.ui && matches!(req.path.as_str(), "/" | "/index.html") && req.method == "GET" {
             (
@@ -230,6 +242,13 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
             let (st, bd, who, cat) = route(&repo, &tokens, cfg, &req);
             (st, bd, "application/json", who, cat)
         };
+    #[cfg(test)]
+    crate::remote::bench_timing::record(
+        format!("server.route {} {}", req.method, req.path),
+        route_started.elapsed(),
+    );
+    #[cfg(test)]
+    let audit_started = std::time::Instant::now();
     audit.append(
         &principal_id,
         &req.method,
@@ -237,11 +256,22 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
         status,
         category.as_deref(),
     );
+    #[cfg(test)]
+    crate::remote::bench_timing::record("server.audit", audit_started.elapsed());
+    #[cfg(test)]
+    let response_write_started = std::time::Instant::now();
     if ctype.starts_with("application/x-git-") {
         let _ = http::write_git_response(&mut w, status, ctype, &body);
     } else {
         let _ = http::write_response(&mut w, status, ctype, &body);
     }
+    #[cfg(test)]
+    crate::remote::bench_timing::record("server.response_write", response_write_started.elapsed());
+    #[cfg(test)]
+    crate::remote::bench_timing::record(
+        format!("server.total {} {}", req.method, req.path),
+        connection_started.elapsed(),
+    );
 }
 
 /// Smart-HTTP compatibility boundary. Read and write services share auth but

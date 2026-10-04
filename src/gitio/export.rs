@@ -125,6 +125,8 @@ fn export_git_impl(
     };
 
     // ── collect refs ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let mut names: Vec<String> = Vec::new();
     crate::ops::verify::collect_ref_files(&repo.ng().join("refs"), "", &mut names);
     check_deadline(deadline)?;
@@ -163,6 +165,8 @@ fn export_git_impl(
         rep.refs_exported.push((n.clone(), g));
     }
     let export_head = repo.read_head()?;
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.refs_head", stage_started.elapsed());
     // Git fast-import needs a ref on which to emit the detached history. Use
     // a temporary ref, then detach HEAD and delete it after import; it must
     // never leak into the exported repository's visible refs.
@@ -196,9 +200,15 @@ fn export_git_impl(
     }
 
     // ── collect commits (topological, parents before children) ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let order = topo_order(repo, &tips, deadline)?;
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.topological_walk", stage_started.elapsed());
 
     // ── blob discovery in deterministic order → marks ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let mut flats: HashMap<ObjectId, Flat> = HashMap::new();
     let mut blob_marks: BTreeMap<ObjectId, u64> = BTreeMap::new();
     for c in &order {
@@ -216,8 +226,12 @@ fn export_git_impl(
         check_deadline(deadline)?;
         commit_marks.insert(*oid, blob_marks.len() as u64 + 1 + i as u64);
     }
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.tree_flatten_blob_marks", stage_started.elapsed());
 
     // ── ref ownership for commit lines (first ref in sorted order owns) ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let mut owner: HashMap<ObjectId, String> = HashMap::new();
     for (gname, tip) in &tips {
         let mut stack = vec![*tip];
@@ -234,7 +248,12 @@ fn export_git_impl(
         }
     }
 
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.ref_owner_walk", stage_started.elapsed());
+
     // ── run git init + fast-import ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let mut init_command = Command::new("git");
     init_command.args(["init", "--quiet"]).stdin(Stdio::null());
     if let Some(template_dir) = isolated_template_dir {
@@ -260,6 +279,8 @@ fn export_git_impl(
             String::from_utf8_lossy(&init.stderr).trim()
         )));
     }
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.git_init", stage_started.elapsed());
     let marks_file = target.join(".git").join("newgit-export-marks");
     let mut import_command = Command::new("git");
     import_command
@@ -289,6 +310,8 @@ fn export_git_impl(
         .ok_or_else(|| Error::Bug("fast-import without stdin".into()))?;
     let mut w = std::io::BufWriter::new(stdin);
 
+    #[cfg(test)]
+    let stage_started = Instant::now();
     writeln!(w, "feature done").map_err(|e| Error::io(target, e))?;
     // blobs
     for (oid, mark) in &blob_marks {
@@ -327,7 +350,11 @@ fn export_git_impl(
     writeln!(w, "done").map_err(|e| Error::io(target, e))?;
     w.flush().map_err(|e| Error::io(target, e))?;
     drop(w); // close stdin → fast-import finishes
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.fast_import_stream_feed", stage_started.elapsed());
 
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let (status, timed_out) = child.wait().map_err(|e| Error::io(target, e))?;
     if timed_out {
         return Err(git_deadline_error("Git fast-import"));
@@ -345,7 +372,12 @@ fn export_git_impl(
         )));
     }
 
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.fast_import_drain_wait", stage_started.elapsed());
+
     // ── preserve HEAD; optionally materialize a user-facing working tree ──
+    #[cfg(test)]
+    let stage_started = Instant::now();
     let marks_by_mark = read_marks_file(&marks_file, deadline)?;
     for (newgit_oid, mark) in &commit_marks {
         if let Some(git_oid) = marks_by_mark.get(mark) {
@@ -419,6 +451,8 @@ fn export_git_impl(
     }
     // map report refs back for clarity
     rep.refs_exported.sort();
+    #[cfg(test)]
+    crate::remote::bench_timing::record("export.post_import_head", stage_started.elapsed());
     Ok(rep)
 }
 

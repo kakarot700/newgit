@@ -13,6 +13,7 @@ use crate::object::ObjectId;
 use crate::remote::server::{self, ServerConfig};
 use crate::repo::txn::{Cas, RefLogEntry};
 use crate::repo::{Head, Repo};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
@@ -572,6 +573,29 @@ fn median_ms(values: &mut [f64]) -> f64 {
     values[values.len() / 2]
 }
 
+fn print_stage_samples(label: &str, samples: Vec<crate::remote::bench_timing::StageSample>) {
+    let mut grouped = BTreeMap::<String, Vec<f64>>::new();
+    for sample in samples {
+        grouped
+            .entry(sample.name)
+            .or_default()
+            .push(sample.elapsed.as_secs_f64() * 1000.0);
+    }
+    println!("stage breakdown {label}:");
+    for (name, values) in grouped {
+        let total: f64 = values.iter().sum();
+        let median = median_ms(&mut values.clone());
+        println!(
+            "  {name}: count={}, raw_ms={:?}, total_ms={total:.2}, median_ms={median:.2}",
+            values.len(),
+            values
+                .iter()
+                .map(|value| format!("{value:.2}"))
+                .collect::<Vec<_>>(),
+        );
+    }
+}
+
 #[test]
 fn upload_pack_projection_preserves_head_and_objects_without_checkout() {
     let root = tempfile::tempdir().unwrap();
@@ -706,7 +730,9 @@ fn live_git_transfer_baseline() {
         let mut projection_git_bytes = 0;
         let mut projection_objects_bytes = 0;
         let mut exported_blobs = 0;
+        let mut projection_stage_samples = Vec::new();
         for sample in 1..=PROJECTION_SAMPLES {
+            crate::remote::bench_timing::clear();
             let cpu_before = process_cpu();
             let start = Instant::now();
             let (view, report) = TempGitView::from_newgit_for_upload_pack_with_export(
@@ -725,9 +751,14 @@ fn live_git_transfer_baseline() {
                 "projection sample {sample}/{PROJECTION_SAMPLES}: wall_ms={wall_ms:.2}, harness_process_cpu_s={}, temp_bytes={projection_temp_bytes}, git_dir_bytes={projection_git_bytes}, object_store_bytes={projection_objects_bytes}, exported_commits={}, exported_unique_blobs={exported_blobs}",
                 optional_seconds(cpu_seconds), report.commits,
             );
+            projection_stage_samples.extend(crate::remote::bench_timing::take());
             projection_samples.push(wall_ms);
             drop(view);
         }
+        print_stage_samples(
+            &format!("{commits}-commit direct projections ({PROJECTION_SAMPLES} samples)"),
+            projection_stage_samples,
+        );
         let projection_median = median_ms(&mut projection_samples.clone());
         println!(
             "projection summary: commits={commits}, raw_wall_ms={:?}, median_wall_ms={projection_median:.2}, last_sample_temp_bytes={projection_temp_bytes}, git_dir_bytes={projection_git_bytes}, object_store_bytes={projection_objects_bytes}, exported_unique_blobs={exported_blobs}",
@@ -780,7 +811,9 @@ fn live_git_transfer_baseline() {
 
         let full = first_clone.expect("at least one clone sample");
         let mut fetch_samples = Vec::with_capacity(3);
+        let mut fetch_stage_samples = Vec::new();
         for sample in 1..=3 {
+            crate::remote::bench_timing::clear();
             fetch_samples.push(measure(
                 &format!("{commits}-commit unchanged fetch {sample}/3"),
                 &proxy,
@@ -792,7 +825,12 @@ fn live_git_transfer_baseline() {
                     "origin".into(),
                 ],
             ));
+            fetch_stage_samples.extend(crate::remote::bench_timing::take());
         }
+        print_stage_samples(
+            &format!("{commits}-commit unchanged fetches (3 samples)"),
+            fetch_stage_samples,
+        );
         let fetch_ms = fetch_samples
             .iter()
             .map(|duration| duration.as_secs_f64() * 1000.0)

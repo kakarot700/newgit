@@ -38,6 +38,8 @@ pub fn advertise(
             max_response_bytes
         )));
     }
+    #[cfg(test)]
+    let command_started = Instant::now();
     let payload = run_upload_pack(
         &view,
         &["--timeout=30", "--http-backend-info-refs"],
@@ -46,6 +48,8 @@ pub fn advertise(
         max_response_bytes - prefix_len as u64,
         deadline,
     )?;
+    #[cfg(test)]
+    crate::remote::bench_timing::record("git_http.advertise_command", command_started.elapsed());
     if v2 {
         Ok(payload)
     } else {
@@ -65,14 +69,19 @@ pub fn upload_pack(
 ) -> Result<Vec<u8>> {
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let view = TempGitView::from_newgit(repo, deadline)?;
-    run_upload_pack(
+    #[cfg(test)]
+    let command_started = Instant::now();
+    let result = run_upload_pack(
         &view,
         &["--timeout=30", "--stateless-rpc"],
         git_protocol,
         Some(request),
         max_response_bytes,
         deadline,
-    )
+    );
+    #[cfg(test)]
+    crate::remote::bench_timing::record("git_http.upload_pack_command", command_started.elapsed());
+    result
 }
 
 /// Restrict protocol negotiation to versions implemented by the installed Git
@@ -120,6 +129,10 @@ impl TempGitView {
         deadline: Instant,
         materialize_worktree: bool,
     ) -> Result<(Self, crate::gitio::export::ExportReport)> {
+        #[cfg(test)]
+        let projection_started = Instant::now();
+        #[cfg(test)]
+        let setup_started = Instant::now();
         let directory = tempfile::Builder::new()
             .prefix("newgit-git-http-")
             .tempdir()
@@ -139,8 +152,12 @@ impl TempGitView {
                 .map_err(|e| Error::io(&view.global_config, e))?;
         }
         std::fs::create_dir(&view.template_dir).map_err(|e| Error::io(&view.template_dir, e))?;
+        #[cfg(test)]
+        crate::remote::bench_timing::record("projection.tempdir_setup", setup_started.elapsed());
         // The existing exporter handles ref mapping, object construction,
         // merges, tree content, and symbolic HEAD.
+        #[cfg(test)]
+        let export_started = Instant::now();
         let export = if materialize_worktree {
             crate::gitio::export::export_git_isolated(
                 repo,
@@ -166,6 +183,10 @@ impl TempGitView {
             }
             Err(error) => return Err(error),
         };
+        #[cfg(test)]
+        crate::remote::bench_timing::record("projection.export_total", export_started.elapsed());
+        #[cfg(test)]
+        crate::remote::bench_timing::record("projection.total", projection_started.elapsed());
         Ok((view, export))
     }
 }

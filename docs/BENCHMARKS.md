@@ -124,13 +124,69 @@ attribution.
 
 No production optimization was retained: an experiment removing clones from
 the request-local flattened-tree map showed no measurable projection improvement
-and was discarded. There is no persistent cache. A concrete next profiling step
-is to time export stages and sample the full child-process tree around object
-walk/flattening, `fast-import`, and upload-pack. Reusing a built view across
+and was discarded. There is no persistent cache. Reusing a built view across
 requests is an attractive latency lever, but should not be shipped until a
 monotonic repository generation can be proven to cover every canonical object,
 ref, and `HEAD` write and readers can obtain a consistent generation under
 concurrent writes; that invalidation and race-safety proof does not exist here.
+
+### Test-only smart-HTTP phase profile (2026-10-05)
+
+The ignored live benchmark now collects test-build-only wall timers for projection
+setup/export, NewGit ref and history walks, tree flattening/blob-mark discovery,
+Git initialization, feeding the `fast-import` stream, waiting for its final
+drain, post-import `HEAD` work, the advertise and stateless upload-pack commands,
+and each server HTTP request (repository open, request read, route, audit, response
+write, and full handler time). It changes no production behavior. Reproduce it
+with the command above; phase measurements add minor test-harness bookkeeping and
+are not assertions or performance guarantees.
+
+One warm-cache run on the same shared Linux/Git 2.43.0 host used above produced
+these medians across three direct projections:
+
+| Direct projection phase (ms) | 80 commits | 800 commits |
+|---|---:|---:|
+| Whole projection | 130.87 | 894.95 |
+| NewGit ref/head collection | 0.08 | 0.09 |
+| NewGit topological history walk | 1.25 | 10.96 |
+| Tree flattening and unique blob-mark discovery | 7.42 | 69.81 |
+| Commit/ref ownership walk | 1.03 | 10.02 |
+| `git init` | 2.89 | 2.74 |
+| Feed export stream to `git fast-import` | 78.17 | 654.39 |
+| `fast-import` final drain/wait after input closes | 32.79 | 140.10 |
+| Post-import marks and `HEAD` setup | 2.15 | 3.04 |
+
+For the 800-commit unchanged fetch, the three client wall samples were 1,967.95,
+1,894.55, and 1,944.18 ms (median **1,944.18 ms**), each returning **219 bytes**.
+The fetch makes two HTTP requests and rebuilds two projections. Across those
+three fetches, the median of the per-fetch sum of projection times was **1,830.84
+ms**; the paired advertise and upload-pack Git commands themselves each took
+about 1.5–1.7 ms. Median summed `fast-import` stream-feed time across the two
+projections was 1,306.28 ms, and its post-input drain/wait was 295.46 ms. The
+server's two complete request handlers together were about 1.8–1.9 s per fetch;
+request parsing, repository open, audit, and response writing were small compared
+with the route work.
+
+**Interpretation and decision:** projection construction is the measured
+bottleneck. Within it, the combined stream-feed/backpressure and final
+`fast-import` wait dominate; tree flattening/mark discovery is roughly 70 ms per
+800-commit projection, not the main 900-ms cost. The feed timer is wall time for
+NewGit export formatting/object reads/writes while the child consumes the pipe;
+it cannot attribute writer CPU separately from child work. `fast-import` wait is
+the remaining child drain/finalization after NewGit closes stdin. The upload-pack
+protocol subprocess is not the source of the 1.95-s delay. No production
+optimization was retained: removing already-tested request-local tree clones did
+not help, and reusing a projection without a proven invalidation boundary risks
+serving stale refs or `HEAD`. The safe next architecture is a versioned immutable
+read projection, keyed to a canonical repository generation that atomically
+covers all object/ref/`HEAD` writes and permits readers to pin one consistent
+generation across the advertisement and fetch. That generation and its
+concurrent-writer semantics must be implemented and proven before caching.
+
+These are one-run measurements on a shared host, not cold-cache or capacity
+results. Timers are wall-clock intervals, not CPU attribution; `fast-import`
+stream feeding overlaps child consumption, and the existing 100-Hz CPU and
+leader-only RSS limitations described above still apply.
 
 ## Environment (as measured)
 
