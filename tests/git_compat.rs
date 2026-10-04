@@ -4,7 +4,7 @@
 //! (first-parent order), tags (annotated + lightweight), binary files,
 //! symlinks, exec bits, unicode paths/messages, empty commits, multiple
 //! authors + timezones, determinism, submodule refusal, empty repos, and
-//! skipped git-internal namespaces.
+//! skipped git-internal namespaces and atomic refusal of non-commit refs.
 
 mod common;
 
@@ -975,6 +975,129 @@ fn submodule_import_is_refused_atomically() {
     assert!(names.is_empty(), "refs must be untouched: {names:?}");
     // repo still healthy (orphan objects are gc fodder, not corruption)
     assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
+
+#[test]
+fn non_commit_git_refs_are_refused_atomically() {
+    let d = tempfile::tempdir().unwrap();
+    for (case, tag_name, target_spec, target_type, annotated, has_commit) in [
+        (
+            "lightweight-reachable-blob",
+            "light-reachable-blob",
+            "HEAD:file.txt",
+            "blob",
+            false,
+            true,
+        ),
+        (
+            "annotated-reachable-blob",
+            "annotated-reachable-blob",
+            "HEAD:file.txt",
+            "blob",
+            true,
+            true,
+        ),
+        (
+            "lightweight-orphan-blob",
+            "light-orphan-blob",
+            "orphan-file",
+            "blob",
+            false,
+            true,
+        ),
+        (
+            "annotated-orphan-blob",
+            "annotated-orphan-blob",
+            "orphan-file",
+            "blob",
+            true,
+            true,
+        ),
+        (
+            "lightweight-tree",
+            "light-tree",
+            "HEAD^{tree}",
+            "tree",
+            false,
+            true,
+        ),
+        (
+            "annotated-tree",
+            "annotated-tree",
+            "HEAD^{tree}",
+            "tree",
+            true,
+            true,
+        ),
+        (
+            "tag-only-lightweight-blob",
+            "tag-only-blob",
+            "orphan-file",
+            "blob",
+            false,
+            false,
+        ),
+    ] {
+        let gdir = d.path().join(case);
+        init_git(&gdir);
+        if has_commit {
+            write(&gdir, "file.txt", b"tag target\n");
+            commit(&gdir, "commit with taggable objects");
+        }
+        let target = match target_spec {
+            "orphan-file" => {
+                write(&gdir, "orphan.txt", b"not reachable from any commit\n");
+                git_out(&gdir, &["hash-object", "-w", "orphan.txt"])
+                    .trim()
+                    .to_string()
+            }
+            spec => git_out(&gdir, &["rev-parse", spec]).trim().to_string(),
+        };
+        let tag_ref = format!("refs/tags/{tag_name}");
+        if annotated {
+            git(
+                &gdir,
+                &[
+                    "tag",
+                    "--annotate",
+                    tag_name,
+                    &target,
+                    "--message",
+                    "non-commit target",
+                ],
+            );
+            assert_eq!(git_out(&gdir, &["cat-file", "-t", &tag_ref]).trim(), "tag");
+        } else {
+            git(&gdir, &["tag", tag_name, &target]);
+        }
+        let peeled_ref = format!("{tag_ref}^{{}}");
+        assert_eq!(
+            git_out(&gdir, &["cat-file", "-t", &peeled_ref]).trim(),
+            target_type,
+            "fixture must contain a real Git tag to a {target_type}"
+        );
+
+        let (_nd, repo) = temp_repo();
+        let err = import_git(&repo, &gdir).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&tag_ref),
+            "error must name {tag_ref}: {message}"
+        );
+        assert!(
+            message.contains(target_type),
+            "error must name target type {target_type}: {message}"
+        );
+        assert!(
+            message.contains("before updating refs"),
+            "error must promise the ref transaction did not run: {message}"
+        );
+
+        let mut names = Vec::new();
+        newgit::ops::verify::collect_ref_files(&repo.ng().join("refs"), "", &mut names);
+        assert!(names.is_empty(), "failed import moved refs: {names:?}");
+        assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+    }
 }
 
 #[test]

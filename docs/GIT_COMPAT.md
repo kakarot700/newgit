@@ -29,11 +29,12 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
 | empty Git tree | empty NewGit `Tree` object | tested for an empty root commit, returning to empty after deleting the only file, and a consecutive empty commit; exact Git tree id survives export in this fixture |
 | Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping; tested with Unicode plus quotes/backslashes and a rename through import/export |
-| `refs/heads/*`, `refs/tags/*` | same ref names | exact |
-| other `refs/*` | same ref names (if the ref grammar accepts them) | exact |
+| `refs/heads/*`, `refs/tags/*` | same ref names when they target commits | exact for tested commit refs; other object targets are refused |
+| other `refs/*` | same ref names (if the ref grammar accepts them) | commit targets only; other object targets are refused |
 | lightweight tag | ref → target snapshot | exact |
 | annotated tag | ref → target snapshot; **tagger + message stripped**, listed in the import report | lossy (documented) |
 | signed tag | signature stripped (`--signed-tags=strip`), then as annotated | lossy (documented) |
+| ref targeting a blob, tree, or other non-commit object | no NewGit ref is written | refused before `fast-export`, because NewGit's Git export path represents snapshot histories |
 | Symbolic `HEAD` | NewGit symbolic HEAD, moved **in the same transaction** as refs | tested for an ordinary branch HEAD |
 | Detached `HEAD` | NewGit direct snapshot HEAD, moved **in the same transaction** as refs | the `fast-export` pseudo-ref `HEAD` is not imported as a named ref; tested for detached-only and detached-ahead-of-branch histories |
 | Non-`HEAD` symbolic refs | not imported; detected with `git for-each-ref` and listed in `refs_skipped` | unsupported: NewGit refs are direct object pointers; a real-Git fixture with two branch aliases confirms Git 2.43.0 `fast-export --all` omits them |
@@ -61,6 +62,15 @@ ordinary branch's stored commit/tree/message when `refs/replace/*` is skipped.
 The regression fixture confirms this policy for one replacement commit on Git
 2.43.0/Linux. Git commands that honor replacement refs can therefore display a
 different effective history than the stored-object history NewGit imports.
+
+Before starting `fast-export`, import inspects ordinary refs' direct or peeled
+Git object types. Refs to objects other than commits are refused with the ref
+name and target type. This prevents an annotated tag-to-blob from importing as
+a NewGit ref that `export-git` cannot export, and prevents silent loss of
+lightweight blob/tree refs that Git 2.43.0 `fast-export --all` omits. Git-internal
+refs already listed as skipped, and non-`HEAD` symbolic refs, keep their existing
+skip/report behavior. Real-Git refusal cases cover Git 2.43.0/Linux; nested
+annotated-tag chains and other Git versions/platforms are not separately tested.
 
 ## Export mapping (NewGit → git)
 
@@ -186,6 +196,11 @@ environment and does not claim other Git versions or operating systems.
     are metadata only and export initializes a fresh repository using Git's
     default object format. The semantic SHA-256 import/export fixture is limited
     to Git 2.43.0/Linux; cross-version and cross-platform behavior is untested.
+13. **Refs to non-commit Git objects are refused before import**, including
+    lightweight or annotated tags to blobs/trees. NewGit's Git export path
+    represents snapshot histories; its importer does not silently accept a ref
+    that fast-export omits or that later cannot be exported. Real-Git tests cover
+    blob/tree tag targets and the no-commit tag-only case on Git 2.43.0/Linux.
 
 ## CLI details
 
@@ -196,4 +211,5 @@ stripped. This signature report identifies the affected commits; it does not
 preserve signature bytes or establish cryptographic validity.
 
 Exit codes: 0 success · 2 usage/invalid source or target (not a git repo,
-occupied target, submodule, non-snapshot ref) · standard codes otherwise.
+occupied target, submodule, non-snapshot ref, non-commit Git ref) · standard
+codes otherwise.

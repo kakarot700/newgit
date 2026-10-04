@@ -5,6 +5,12 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Fixed
+- `import-git` now inspects ref object types before invoking `fast-export` and
+  refuses ordinary refs that target non-commit objects, naming the ref/type and
+  leaving refs untouched. Git 2.43.0 silently omits lightweight blob/tree refs,
+  while an annotated blob tag could previously import into a state that
+  `export-git` rejected. Real-Git regressions cover lightweight/annotated tags
+  to reachable and orphan blobs, tree tags, and a tag-only source.
 - `import-git` now accepts 64-hex original object IDs from real Git SHA-256
   repositories, stores source commit IDs under format-neutral `git_oid` metadata
   (while retaining `git_sha1` for SHA-1 sources), and exports semantic history

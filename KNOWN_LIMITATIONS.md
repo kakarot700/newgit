@@ -52,7 +52,13 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     2.43.0/Linux. Git LFS
     service semantics are not implemented. Symbolic-ref discovery and
     `fast-export` are separate commands, so concurrent source-ref changes are
-    not synchronized. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
+    not synchronized. Before `fast-export`, import refuses ordinary refs
+    targeting non-commit objects, including tags to blobs/trees; Git 2.43.0 can
+    otherwise omit lightweight non-commit refs or import annotated blob tags that
+    the snapshot-only exporter cannot round-trip. Real-Git tests verify atomic
+    refusal for lightweight/annotated blob/tree tags and a tag-only source on
+    Git 2.43.0/Linux; nested annotated-tag chains and other versions/platforms
+    are not separately tested. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
     (limitation 1), not silently converted.
 11. No GitHub/GitLab protocol compatibility (smart HTTP) — NewGit speaks its
     own documented protocol (iteration 9).

@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: accept Git SHA-256 object IDs for semantic import/export without claiming object-ID preservation (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: refuse ordinary Git refs to non-commit objects before import when the snapshot-only export path cannot round-trip them (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -14,12 +14,42 @@
 - **Documentation-only validation head:** commit `6f66b7cad8e426a1af08324912232e62dd2e988d` passed [CI run 37204021004](https://github.com/kakarot700/newgit/actions/runs/37204021004) and [CodeQL run 37204021011](https://github.com/kakarot700/newgit/actions/runs/37204021011), both on that exact SHA.
 - **Non-`HEAD` symbolic-ref hosted validation:** implementation commit `598b6dc1b26f28b92467115a1045c55e97b5471c` passed [CI run 37205307432](https://github.com/kakarot700/newgit/actions/runs/37205307432) and [CodeQL run 37205307501](https://github.com/kakarot700/newgit/actions/runs/37205307501), both on that exact SHA.
 - **Replace-ref hosted validation:** implementation commit `e1fc9e6a08c9314417f0d3324514bc105ad5a920` passed [CI run 37206487975](https://github.com/kakarot700/newgit/actions/runs/37206487975) and [CodeQL run 37206487941](https://github.com/kakarot700/newgit/actions/runs/37206487941), both on that exact SHA.
+- **SHA-256 compatibility hosted validation:** commit `9b0909b733fe769785a01b24c1ea0cac2b8bb7c9` passed [CI run 37209170207](https://github.com/kakarot700/newgit/actions/runs/37209170207) and [CodeQL run 37209170230](https://github.com/kakarot700/newgit/actions/runs/37209170230), both on that exact SHA.
 - **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
 - **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — SHA-256 Git repositories (2026-10-04)
+## Current Git compatibility milestone — non-commit Git refs (2026-10-04)
+
+- **Observed issue:** Git 2.43.0 `fast-export --all` warns and omits lightweight
+  refs to blobs/trees, while an annotated tag to a blob can be imported as a
+  NewGit ref that `export-git` later refuses because it is not a snapshot.
+- **Implementation direction:** because the existing Git export boundary is
+  snapshot-history based, fail early rather than add a partial object-ref
+  protocol. The existing `for-each-ref` pre-scan now collects symbolic-ref,
+  object-type, and peeled-type information, and refuses any ordinary non-skipped
+  ref whose target is not a commit. Error names the ref and target type. This
+  reuses the existing ref-enumeration subprocess; it adds no history walk or
+  per-object scan.
+- **Regression:** `tests/git_compat.rs::non_commit_git_refs_are_refused_atomically`
+  uses real Git to create lightweight and annotated tags to reachable and orphan
+  blobs, tree tags, and a tag-only source. Every case verifies the target type,
+  actionable error, zero moved refs, and deep NewGit integrity. Existing rich
+  fixture still covers lightweight and annotated commit-target tags.
+- **Evidence boundary:** Git 2.43.0/Linux. Nested annotated-tag chains, other
+  non-tag refs targeting non-commits, alternate Git versions, and other
+  platforms are not separately tested. Non-commit refs remain refused, not
+  supported.
+- **Local verification:** the one full validation pass succeeded: 293/293 debug
+  tests and 293/293 release tests passed, including all 23 Git interoperability
+  tests; `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift,
+  and `git diff --check` were clean. The new seven-fixture real-Git refusal test
+  also passed in a focused run before the full suite.
+- **Hosted verification:** the completion report records the exact-SHA GitHub
+  CI and CodeQL run links checked after the single push for this milestone.
+
+## Previous Git compatibility milestone — SHA-256 Git repositories (2026-10-04)
 
 - **Defect and real-Git reproduction:** Git 2.43.0 created a real
   `--object-format=sha256` repository whose `fast-export --show-original-ids`

@@ -17,6 +17,9 @@
 //!   control characters that the NewGit text model cannot represent are
 //!   refused before refs move; refs/remotes/*, refs/stash, refs/notes/*,
 //!   refs/replace/*, and symbolic refs outside HEAD are skipped and listed.
+//! * Ordinary refs targeting non-commit objects are refused before fast-export:
+//!   Git may omit lightweight blob/tree refs, and NewGit export only represents
+//!   snapshot histories.
 //!
 //! Memory: commit tree states are cached per commit mark so incremental
 //! (non-full-tree) streams and parent inheritance work; with the default
@@ -70,14 +73,27 @@ fn skip_ref(name: &str) -> bool {
         || name.starts_with("refs/worktree/")
 }
 
+#[derive(Default)]
+struct GitRefScan {
+    symbolic_refs: HashSet<String>,
+    non_commit_refs: Vec<(String, String)>,
+}
+
 /// `git fast-export --all` omits symbolic refs outside HEAD. Discover them
 /// separately so import reports the loss and never reconstructs one as an
 /// ordinary direct ref if a Git version happens to emit it in the stream.
-fn list_symbolic_refs(git_dir: &Path) -> Result<HashSet<String>> {
+/// Also refuse ordinary refs whose target is not a commit: fast-export omits
+/// lightweight blob/tree refs and cannot be exported from NewGit's
+/// snapshot-only history model. Annotated refs are checked against their
+/// peeled target type.
+fn scan_git_refs(git_dir: &Path) -> Result<GitRefScan> {
     let output = Command::new("git")
         .args(["-C"])
         .arg(git_dir)
-        .args(["for-each-ref", "--format=%(refname)%00%(symref)"])
+        .args([
+            "for-each-ref",
+            "--format=%(refname)%00%(symref)%00%(objecttype)%00%(*objecttype)",
+        ])
         .stdin(Stdio::null())
         .output()
         .map_err(|e| Error::io(git_dir, e))?;
@@ -88,28 +104,43 @@ fn list_symbolic_refs(git_dir: &Path) -> Result<HashSet<String>> {
         )));
     }
 
-    let mut refs = HashSet::new();
+    let mut scan = GitRefScan::default();
     for record in output.stdout.split(|byte| *byte == b'\n') {
         if record.is_empty() {
             continue;
         }
-        let Some(separator) = record.iter().position(|byte| *byte == 0) else {
+        let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
+        if fields.len() != 4 {
             return Err(Error::Invalid(
-                "git for-each-ref returned a malformed ref listing".into(),
+                "git for-each-ref returned a malformed ref/type listing".into(),
             ));
+        }
+        let name = String::from_utf8(fields[0].to_vec()).map_err(|_| {
+            Error::Invalid(
+                "Git ref name is not valid UTF-8; import is refused before refs move".into(),
+            )
+        })?;
+        if !fields[1].is_empty() {
+            scan.symbolic_refs.insert(name);
+            continue;
+        }
+        if skip_ref(&name) {
+            continue;
+        }
+
+        let object_type = String::from_utf8_lossy(fields[2]).into_owned();
+        let peeled_type = String::from_utf8_lossy(fields[3]).into_owned();
+        let target_type = if object_type == "tag" && !peeled_type.is_empty() {
+            peeled_type
+        } else {
+            object_type
         };
-        let (name, target) = record.split_at(separator);
-        if target.len() > 1 {
-            let name = String::from_utf8(name.to_vec()).map_err(|_| {
-                Error::Invalid(
-                    "Git symbolic ref name is not valid UTF-8; import is refused before refs move"
-                        .into(),
-                )
-            })?;
-            refs.insert(name);
+        if target_type != "commit" {
+            scan.non_commit_refs.push((name, target_type));
         }
     }
-    Ok(refs)
+    scan.non_commit_refs.sort();
+    Ok(scan)
 }
 
 /// `git fast-export` omits commit `gpgsig` headers. Inspect the original
@@ -283,7 +314,13 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
     } else {
         None
     };
-    let symbolic_ref_names = list_symbolic_refs(git_dir)?;
+    let ref_scan = scan_git_refs(git_dir)?;
+    if let Some((name, object_type)) = ref_scan.non_commit_refs.first() {
+        return Err(Error::Invalid(format!(
+            "Git ref {name} targets a {object_type} object; NewGit import/export supports refs to commit snapshots only, so import was refused before updating refs"
+        )));
+    }
+    let symbolic_ref_names = ref_scan.symbolic_refs;
 
     // ── stream fast-export ──
     let mut child = Command::new("git")
