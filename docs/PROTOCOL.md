@@ -22,12 +22,24 @@ scripts and tests parse this line.
 This is a **separate transport adapter**, not an extension of the NewGit JSON
 protocol described below. Git clients use the ordinary smart-HTTP discovery
 request `GET /info/refs?service=git-upload-pack` and stateless
-`POST /git-upload-pack` exchanges. The adapter authenticates each request
-using the same `Authorization: Bearer <token>` roles and anonymous-read
-policy as the JSON remote, then exports the current NewGit snapshot refs and
-object history into a private, temporary Git-format projection. The installed
-`git upload-pack` produces the packet-line advertisement and pack response;
-NewGit remains canonical storage and no Git-side ref is written back.
+`POST /git-upload-pack` exchanges for reads. For writes, they use
+`GET /info/refs?service=git-receive-pack` and `POST /git-receive-pack`.
+Each request authenticates with `Authorization: Bearer <token>`; upload-pack
+follows read/anonymous-read policy, while receive-pack requires a write-role
+token on both discovery and POST. Both adapters use a private temporary
+Git-format projection; NewGit remains canonical storage.
+
+The installed `git upload-pack` produces read advertisements and pack
+responses. For a push, the installed `git receive-pack` validates the
+stateless request and pack in a disposable projection. A separate staging
+import maps previously exported Git commit IDs back to canonical NewGit
+snapshots, validates the resulting object closure, then checks the target-ref
+compare-and-swap under NewGit's transaction lock before promoting immutable
+objects and committing the ref update. The ref update is journaled and
+all-or-nothing; a process or storage failure during object promotion can leave
+unreferenced immutable objects, but cannot publish a ref to an incomplete
+object graph. Routine auth, packet, policy, and stale-CAS rejection occurs
+before object promotion.
 
 Git protocol versions 0, 1, and 2 are passed to upload-pack after validating
 the `Git-Protocol` header. HTTP advertisement framing is provided by the
@@ -40,19 +52,26 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
-**Read-only boundary:** `git-receive-pack` discovery and `/git-receive-pack`
-are rejected (403); Git `push` is not supported. An empty/unborn repository
-or a public ref targeting a non-snapshot may fail export, consistent with
-the snapshot-only Git conversion model. The adapter currently materializes
-the full Git view independently for every discovery and POST request. Git's
-pack negotiation can reduce transferred bytes, but it does not avoid that
-full-history export. Both inbound request bodies and outbound buffered
-pack/advertisement responses are capped by `--max-body` (64 MiB by default);
-an oversized response is rejected. A single discovery or upload-pack request
-has a 120-second wall-clock budget across projection generation and Git
-subprocess work; deadline expiry returns HTTP 504 and force-terminates the
-Git process group. Temporary disk usage and peak RAM are not separately
-quota-limited. Use Git bearer auth with an HTTP header
+**Bounded write policy:** receive-pack currently accepts exactly one
+`refs/heads/*` create or update per request, including a first push to an
+empty repository. Existing branch updates must be fast-forwards. The adapter
+refuses deletes, tags and other namespaces, multi-ref requests, signed pushes,
+and protocol versions other than v0; Git enforces non-fast-forward policy in
+the projection. A branch such as `refs/heads/main` maps to NewGit's
+`refs/main`. Unmapped names must pass NewGit's ref-name validation. Actual
+Git 2.43.0/Linux tests cover initial branch creation, fast-forward, new branch,
+subsequent clone, and rejection paths; other versions/platforms are not
+claimed.
+
+The adapter materializes the full Git view independently for every discovery
+and POST request. Git's pack negotiation can reduce transferred bytes, but it
+does not avoid that full-history export. Both inbound request bodies and
+outbound buffered pack/advertisement responses are capped by `--max-body`
+(64 MiB by default); an oversized response is rejected. A single discovery or
+upload-pack or receive-pack request has a 120-second wall-clock budget across
+projection generation and Git subprocess work; deadline expiry returns HTTP
+504 and force-terminates the Git process group. Temporary disk usage and peak
+RAM are not separately quota-limited. Use Git bearer auth with an HTTP header
 (for example, Git's `http.extraHeader`) or explicitly enable anonymous reads.
 The server itself speaks plain HTTP; terminate TLS at a trusted reverse proxy
 for remote networks. See [deployment](DEPLOYMENT.md) and
@@ -61,10 +80,12 @@ for remote networks. See [deployment](DEPLOYMENT.md) and
 Protocol behavior follows Git's specifications for
 [smart HTTP](https://git-scm.com/docs/gitprotocol-http),
 [protocol v2](https://git-scm.com/docs/gitprotocol-v2),
-[pack negotiation](https://git-scm.com/docs/gitprotocol-pack), and the
-[`git upload-pack` command](https://git-scm.com/docs/git-upload-pack). The
-implementation delegates these wire details to the installed Git executable
-rather than maintaining an independent packet-line or pack implementation.
+[pack negotiation](https://git-scm.com/docs/gitprotocol-pack),
+[push pack protocol](https://git-scm.com/docs/pack-protocol), and
+[`git upload-pack`](https://git-scm.com/docs/git-upload-pack) /
+[`git receive-pack`](https://git-scm.com/docs/git-receive-pack) commands.
+The implementation delegates wire and pack details to the installed Git
+executable rather than maintaining an independent pack implementation.
 
 ## Envelope
 

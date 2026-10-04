@@ -173,8 +173,10 @@ unset NEWGIT_TOKEN
 Use the root URL (`/`); this server instance has no multi-repository or URL
 path routing. The built-in listener is plain HTTP; expose Git clients over
 HTTPS only through a trusted TLS-terminating reverse proxy (see §2.3).
-`git push` is intentionally unsupported and refused; this adapter only
-implements upload-pack. The server requires the system `git` executable.
+Git smart HTTP supports upload-pack plus a narrow receive-pack path: one
+write-token-authenticated branch create or fast-forward update per request.
+Tags, deletes, multi-ref and non-fast-forward pushes are refused. The server
+requires the system `git` executable.
 The existing `--max-body` setting caps both inbound HTTP request bodies and
 buffered Git pack/advertisement responses (default 64 MiB); increase it for
 larger packs. Each Git request has a 120-second processing deadline, but there

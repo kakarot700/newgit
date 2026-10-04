@@ -37,9 +37,9 @@ The current implementation includes:
 - Snapshots, workspaces, status/history, tree and line diffs, three-way merges, integration, and rollback.
 - Goals, changes, evidence, evaluations, and proposals with compare-and-swap version chains and documented lifecycle checks.
 - `verify` for structural integrity checks and a deliberately non-destructive `gc`.
-- An optional self-hosted HTTP/1.1 + JSON remote with bearer-token roles, audit records, and negotiated NewGit push/pull; plus a separate read-only Git smart-HTTP upload-pack adapter.
+- An optional self-hosted HTTP/1.1 + JSON remote with bearer-token roles and audit records, plus a separate Git smart-HTTP adapter for clone/fetch/pull/`ls-remote` and a bounded authenticated branch-push slice.
 - A read-only embedded Web UI, JSON CLI/API, and an MCP stdio server.
-- Git repository import/export through the system `git` program's `fast-export`/`fast-import` streams, and ordinary Git clone/fetch/pull/`ls-remote` against a NewGit server over smart HTTP.
+- Git repository import/export through the system `git` program's `fast-export`/`fast-import` streams, and ordinary Git clone/fetch/pull/`ls-remote` plus tested branch pushes against a NewGit server over smart HTTP.
 
 See [architecture](ARCHITECTURE.md), the [CLI reference](docs/CLI.md), [protocol](docs/PROTOCOL.md), and the [agent guide](docs/AGENT_GUIDE.md) for details. Feature claims and their test coverage are mapped in [TEST_MATRIX.md](TEST_MATRIX.md).
 
@@ -113,13 +113,13 @@ Use the IDs returned by the preceding commands in place of the placeholders. `ev
 
 ## Git interoperability
 
-`newgit import-git <git-repo-path>` and `newgit export-git <target-dir>` use the local Git executable and stream formats. In addition, a running NewGit server exposes a separate **read-only** Git smart-HTTP upload-pack view: ordinary Git `clone`, `fetch`, `pull`, and `ls-remote` are covered by a real Git CLI test. See [Git compatibility](docs/GIT_COMPAT.md), the [compatibility matrix](docs/GIT_COMPATIBILITY_MATRIX.md), and [Git smart HTTP protocol details](docs/PROTOCOL.md#git-smart-http-compatibility).
+`newgit import-git <git-repo-path>` and `newgit export-git <target-dir>` use the local Git executable and stream formats. A running NewGit server also exposes Git smart HTTP: ordinary Git `clone`, `fetch`, `pull`, and `ls-remote` work, and a separately tested, authenticated push slice supports a single branch create or fast-forward update. See [Git compatibility](docs/GIT_COMPAT.md), the [compatibility matrix](docs/GIT_COMPATIBILITY_MATRIX.md), and [Git smart HTTP protocol details](docs/PROTOCOL.md#git-smart-http-compatibility).
 
-This is **not full Git compatibility**: `git push`/receive-pack and Git-over-SSH are not implemented. The read adapter builds a temporary Git-format view from NewGit's canonical objects and refs for each HTTP request; Git object IDs therefore belong to that projection, not NewGit's SHA-256 object namespace, and materialization is not incremental. Annotated-tag metadata is not representable, submodules are refused, and several ref/path/message edge cases are lossy or skipped with a report. See [known limitations](KNOWN_LIMITATIONS.md) before relying on interoperability.
+This is **not full Git compatibility**: the tested push slice requires a write-role bearer token, handles one branch ref per request, and refuses tags, deletes, multi-ref updates, and forced non-fast-forward updates; Git-over-SSH is not implemented. Each HTTP request builds a temporary Git-format view from NewGit's canonical objects and refs; Git object IDs therefore belong to that projection, not NewGit's SHA-256 object namespace, and materialization is not incremental. Annotated-tag metadata is not representable, submodules are refused, and several ref/path/message edge cases are lossy or skipped with a report. See [known limitations](KNOWN_LIMITATIONS.md) before relying on interoperability.
 
 ## Remote and agent interfaces
 
-A self-hosted NewGit server can exchange NewGit objects and refs through its JSON protocol and can serve Git clients read-only via Git smart HTTP. The built-in server is plain HTTP; put it behind a TLS-terminating reverse proxy or use a tunnel over untrusted networks. The NewGit CLI remote client currently accepts `http://` URLs only; standard Git clients may use HTTPS through a TLS-terminating proxy. See [deployment](docs/DEPLOYMENT.md) and the [protocol specification](docs/PROTOCOL.md).
+A self-hosted NewGit server can exchange NewGit objects and refs through its JSON protocol and can serve Git clients over smart HTTP, including the bounded authenticated branch-push path. The built-in server is plain HTTP; put it behind a TLS-terminating reverse proxy or use a tunnel over untrusted networks. The NewGit CLI remote client currently accepts `http://` URLs only; standard Git clients may use HTTPS through a TLS-terminating proxy. See [deployment](docs/DEPLOYMENT.md) and the [protocol specification](docs/PROTOCOL.md).
 
 The embedded UI is read-only. MCP uses stdio and inherits the operating-system privileges of the process that starts it. Consult [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md) when choosing a deployment model.
 

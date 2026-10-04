@@ -318,6 +318,22 @@ fn parse_oid_field(s: &str) -> Result<Option<ObjectId>> {
 
 /// Execute ops as one atomic transaction (acquires the global lock).
 pub fn execute(ng: &Path, ops: Vec<TxnOp>, limits: &Limits) -> Result<TxnReport> {
+    execute_with_precommit(ng, ops, limits, || Ok(()))
+}
+
+/// Execute a ref/file transaction, running `before_journal` only after its CAS
+/// checks pass while the global transaction lock is held. This lets callers
+/// stage immutable objects before making their refs reachable without copying
+/// them when a concurrent ref update has already made the operation stale.
+pub fn execute_with_precommit<F>(
+    ng: &Path,
+    ops: Vec<TxnOp>,
+    limits: &Limits,
+    before_journal: F,
+) -> Result<TxnReport>
+where
+    F: FnOnce() -> Result<()>,
+{
     validate_ops(&ops, limits)?;
     fsx::ensure_dir(&txn_dir(ng))?;
     let lock = fsx::FileLock::acquire(
@@ -352,6 +368,7 @@ pub fn execute(ng: &Path, ops: Vec<TxnOp>, limits: &Limits) -> Result<TxnReport>
             files_written.push(rel.clone());
         }
     }
+    before_journal()?;
     fault::fault("txn:before_journal")?;
 
     let journal = Journal::new_running(ops);

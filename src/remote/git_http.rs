@@ -89,15 +89,22 @@ pub fn validate_git_protocol(value: Option<&str>) -> Result<Option<&'static str>
     }
 }
 
-struct TempGitView {
+pub(crate) struct TempGitView {
     _directory: tempfile::TempDir,
-    path: PathBuf,
-    global_config: PathBuf,
-    template_dir: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) global_config: PathBuf,
+    pub(crate) template_dir: PathBuf,
 }
 
 impl TempGitView {
     fn from_newgit(repo: &Repo, deadline: Instant) -> Result<Self> {
+        Self::from_newgit_with_export(repo, deadline).map(|(view, _)| view)
+    }
+
+    pub(crate) fn from_newgit_with_export(
+        repo: &Repo,
+        deadline: Instant,
+    ) -> Result<(Self, crate::gitio::export::ExportReport)> {
         let directory = tempfile::Builder::new()
             .prefix("newgit-git-http-")
             .tempdir()
@@ -119,14 +126,74 @@ impl TempGitView {
         std::fs::create_dir(&view.template_dir).map_err(|e| Error::io(&view.template_dir, e))?;
         // The existing exporter handles ref mapping, object construction,
         // merges, tree content, and symbolic HEAD.
-        crate::gitio::export::export_git_isolated(
+        let export = crate::gitio::export::export_git_isolated(
             repo,
             &view.path,
             &view.global_config,
             &view.template_dir,
             deadline,
-        )?;
-        Ok(view)
+        );
+        let export = match export {
+            Ok(report) => report,
+            Err(Error::Invalid(message)) if message.starts_with("nothing to export:") => {
+                init_empty_view(&view, deadline)?;
+                crate::gitio::export::ExportReport::default()
+            }
+            Err(error) => return Err(error),
+        };
+        Ok((view, export))
+    }
+}
+
+fn init_empty_view(view: &TempGitView, deadline: Instant) -> Result<()> {
+    let mut command = Command::new("git");
+    command
+        .args(["init", "--quiet", "--initial-branch=main", "--template"])
+        .arg(&view.template_dir)
+        .arg(&view.path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", &view.global_config)
+        .env("GIT_CONFIG_COUNT", "0");
+    isolate_git_environment(&mut command);
+    let mut child =
+        crate::util::process::ManagedChild::spawn(&mut command, Some(remaining(deadline)?))
+            .map_err(|e| Error::Invalid(format!("cannot initialize empty Git projection: {e}")))?;
+    let (status, timed_out) = child
+        .wait()
+        .map_err(|e| Error::Invalid(format!("could not wait for Git init: {e}")))?;
+    if timed_out {
+        return Err(git_deadline_error());
+    }
+    if !status.success() {
+        return Err(Error::Protocol(format!(
+            "Git init for empty projection exited with status {status}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn isolate_git_environment(command: &mut Command) {
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_PROTOCOL",
+        "GIT_TEMPLATE_DIR",
+        "GIT_EXEC_PATH",
+        "GIT_TRACE",
+        "GIT_TRACE_PACKET",
+        "GIT_TRACE_SETUP",
+    ] {
+        command.env_remove(key);
     }
 }
 

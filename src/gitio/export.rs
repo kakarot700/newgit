@@ -38,6 +38,10 @@ use crate::util::process::ManagedChild;
 pub struct ExportReport {
     pub commits: usize,
     pub blobs: usize,
+    /// Generated Git commit object ID → canonical NewGit snapshot ID. Kept
+    /// internal to the server adapter and omitted from CLI JSON output.
+    #[serde(skip)]
+    pub(crate) git_commit_oids: HashMap<String, ObjectId>,
     /// (newgit ref name, git ref name)
     pub refs_exported: Vec<(String, String)>,
     pub refs_skipped: Vec<String>,
@@ -320,6 +324,11 @@ fn export_git_impl(
 
     // ── HEAD + working tree materialization ──
     let marks_by_mark = read_marks_file(&marks_file, deadline)?;
+    for (newgit_oid, mark) in &commit_marks {
+        if let Some(git_oid) = marks_by_mark.get(mark) {
+            rep.git_commit_oids.insert(git_oid.clone(), *newgit_oid);
+        }
+    }
     let _ = std::fs::remove_file(&marks_file);
     match export_head {
         crate::repo::Head::Symbolic(name) => {

@@ -277,6 +277,18 @@ fn list_signed_commits(git_dir: &Path, commit_shas: &[String]) -> Result<Vec<Str
 }
 
 pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
+    import_git_with_base_map(repo, git_dir, &HashMap::new(), repo)
+}
+
+/// Import a Git projection while preserving the canonical IDs of commits that
+/// were previously exported from this NewGit repository. The mapping keys are
+/// Git commit IDs and the values are NewGit snapshot IDs.
+pub(crate) fn import_git_with_base_map(
+    repo: &Repo,
+    git_dir: &Path,
+    base_map: &HashMap<String, ObjectId>,
+    base_repo: &Repo,
+) -> Result<ImportReport> {
     // ── validate source ──
     let probe = Command::new("git")
         .args(["-C"])
@@ -366,7 +378,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
         ..Default::default()
     };
     let mut marks: HashMap<u64, ObjectId> = HashMap::new();
-    let mut sha_to_oid: HashMap<String, ObjectId> = HashMap::new();
+    let mut sha_to_oid: HashMap<String, ObjectId> = base_map.clone();
     let mut commit_git_shas = Vec::new();
     let mut tips: BTreeMap<String, ObjectId> = BTreeMap::new();
     let mut trees: HashMap<u64, BTreeMap<String, (EntryMode, ObjectId)>> = HashMap::new();
@@ -485,6 +497,42 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 }
                 parent_oids.sort();
                 parent_oids.dedup();
+
+                // Reuse the original NewGit snapshot for commits present in
+                // the exported projection. Reconstructing those snapshots
+                // from Git would add import-only metadata and split history at
+                // the push boundary. Still rebuild their tree state so child
+                // commits can inherit it from fast-export marks.
+                if let Some((git_sha, base_oid)) = c
+                    .git_sha
+                    .as_ref()
+                    .and_then(|sha| base_map.get(sha).map(|oid| (sha, oid)))
+                {
+                    match base_repo.objects.get(base_oid)? {
+                        Object::Snapshot(existing)
+                            if existing.root == root && existing.parents == parent_oids => {}
+                        Object::Snapshot(_) => {
+                            return Err(Error::Invalid(format!(
+                                "exported Git commit {git_sha} no longer matches its canonical NewGit snapshot"
+                            )))
+                        }
+                        other => {
+                            return Err(Error::Invalid(format!(
+                                "exported Git commit {git_sha} maps to {}, not a NewGit snapshot",
+                                other.type_tag().name()
+                            )))
+                        }
+                    }
+                    if let Some(mark) = c.mark {
+                        marks.insert(mark, *base_oid);
+                        trees.insert(mark, map);
+                    }
+                    sha_to_oid.insert(git_sha.clone(), *base_oid);
+                    if !skip_ref(&c.ref_name) && !symbolic_ref_names.contains(&c.ref_name) {
+                        tips.insert(c.ref_name, *base_oid);
+                    }
+                    continue;
+                }
 
                 // author/committer → actors
                 let fallback = FxPerson {

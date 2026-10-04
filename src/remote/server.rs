@@ -26,6 +26,7 @@ use crate::ops::verify;
 use crate::remote::audit::AuditLog;
 use crate::remote::auth::{self, Principal, Role, TokenFile};
 use crate::remote::git_http;
+use crate::remote::git_receive;
 use crate::remote::http::{self, Request};
 use crate::remote::negotiate;
 use crate::remote::proto::*;
@@ -243,9 +244,9 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
     }
 }
 
-/// Smart-HTTP compatibility boundary. The route exposes upload-pack only;
-/// receive-pack is explicitly disabled until ref updates can be imported into
-/// NewGit with its transactional/CAS semantics.
+/// Smart-HTTP compatibility boundary. Read and write services share auth but
+/// use separate adapters; receive-pack only exposes the narrow transactional
+/// branch-update slice implemented by `git_receive`.
 fn route_git_http(
     repo: &Repo,
     tokens: &TokenFile,
@@ -269,11 +270,31 @@ fn route_git_http(
         .as_ref()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| "anonymous".into());
-    if !cfg.allow_anonymous_read && !auth::authorize(principal.as_ref(), Role::Read) {
+    let receive_pack = req.path == "/git-receive-pack"
+        || (req.path == "/info/refs"
+            && req.query.len() == 1
+            && req.query[0].0 == "service"
+            && req.query[0].1 == "git-receive-pack");
+    let required_role = if receive_pack {
+        Role::Write
+    } else {
+        Role::Read
+    };
+    if (receive_pack || !cfg.allow_anonymous_read)
+        && !auth::authorize(principal.as_ref(), required_role)
+    {
         let status = if principal.is_none() { 401 } else { 403 };
         return (
             status,
-            envelope_err(status, "auth", "Git upload-pack requires read access"),
+            envelope_err(
+                status,
+                "auth",
+                if receive_pack {
+                    "Git receive-pack requires write access"
+                } else {
+                    "Git upload-pack requires read access"
+                },
+            ),
             "application/json",
             who,
             Some("auth".into()),
@@ -289,11 +310,10 @@ fn route_git_http(
                     "expected exactly one service query parameter".to_string(),
                 ))
             } else if req.query[0].1 == "git-receive-pack" {
-                Err((
-                    403,
-                    "protocol",
-                    "Git receive-pack/push is not supported".to_string(),
-                ))
+                git_receive::validate_git_protocol(req.header("git-protocol"))
+                    .and_then(|_| git_receive::advertise(repo, cfg.max_body))
+                    .map(|body| ("application/x-git-receive-pack-advertisement", body))
+                    .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string()))
             } else if req.query[0].1 != "git-upload-pack" {
                 Err((
                     403,
@@ -331,11 +351,29 @@ fn route_git_http(
                 }
             }
         }
-        (_, "/git-receive-pack") => Err((
-            403,
-            "protocol",
-            "Git receive-pack/push is not supported".to_string(),
-        )),
+        ("POST", "/git-receive-pack") => {
+            let content_type = req
+                .header("content-type")
+                .and_then(|v| v.split(';').next())
+                .map(str::trim);
+            if !content_type
+                .is_some_and(|v| v.eq_ignore_ascii_case("application/x-git-receive-pack-request"))
+            {
+                Err((
+                    400,
+                    "protocol",
+                    "expected application/x-git-receive-pack-request".to_string(),
+                ))
+            } else {
+                match git_receive::validate_git_protocol(req.header("git-protocol")) {
+                    Ok(()) => git_receive::receive_pack(repo, &req.body, cfg.max_body, &who)
+                        .map(|body| ("application/x-git-receive-pack-result", body))
+                        .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string())),
+                    Err(e) => Err((http::status_for_error(&e), e.category(), e.to_string())),
+                }
+            }
+        }
+        (_, "/git-receive-pack") => Err((405, "protocol", "method not allowed".to_string())),
         ("GET", "/git-upload-pack") | ("POST", "/info/refs") => Err((
             405,
             "protocol",

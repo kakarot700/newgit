@@ -1,6 +1,6 @@
 //! Black-box smart-HTTP interoperability with the installed Git client.
 //!
-//! The HTTP peer is the real NewGit server. Git clone/fetch/pull/ls-remote
+//! The HTTP peer is the real NewGit server. Git clone/fetch/pull/push/ls-remote
 //! run as child processes over loopback TCP; assertions inspect actual Git
 //! refs, commits, trees, and blob bytes rather than canned protocol replies.
 
@@ -18,6 +18,7 @@ use newgit::repo::{Head, Repo};
 use tempfile::TempDir;
 
 const READ_TOKEN: &str = "git-http-read-test-token";
+const WRITE_TOKEN: &str = "git-http-write-test-token";
 
 fn temp(tag: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
@@ -130,6 +131,51 @@ fn raw_git_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
     stream.read_to_end(&mut response).unwrap();
     let headers = String::from_utf8_lossy(&response);
     headers
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn raw_git_receive_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    let auth = authorization
+        .map(|value| format!("Authorization: {value}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\n{auth}Connection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    String::from_utf8_lossy(&response)
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8]) -> u16 {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    write!(
+        stream,
+        "POST /git-receive-pack HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {authorization}\r\nContent-Type: application/x-git-receive-pack-request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    String::from_utf8_lossy(&response)
         .lines()
         .next()
         .unwrap()
@@ -255,7 +301,7 @@ fn ambient_git_environment_cannot_redirect_or_run_template_hooks() {
 }
 
 #[test]
-fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
+fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     let (_dir, root) = temp("roundtrip");
     let remote_path = root.join("newgit");
     std::fs::create_dir(&remote_path).unwrap();
@@ -305,6 +351,7 @@ fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
     let token_file = tokens_dir.join("tokens.json");
     let mut tokens = TokenFile::default();
     tokens.add("git-reader", READ_TOKEN, Role::Read).unwrap();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
     auth::save(&token_file, &tokens).unwrap();
     let server = server::spawn(ServerConfig {
         bind: "127.0.0.1:0".into(),
@@ -319,6 +366,16 @@ fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
     assert_eq!(
         raw_git_get_status(server.addr(), Some("Bearer not-the-token")),
         401
+    );
+    let write_auth = format!("Bearer {WRITE_TOKEN}");
+    assert_eq!(raw_git_receive_get_status(server.addr(), None), 401);
+    assert_eq!(
+        raw_git_receive_get_status(server.addr(), Some(&format!("Bearer {READ_TOKEN}"))),
+        403
+    );
+    assert_eq!(
+        raw_git_receive_get_status(server.addr(), Some(&write_auth)),
+        200
     );
     let clone_path = root.join("clone");
     let clone_path_str = clone_path.to_str().unwrap();
@@ -492,8 +549,19 @@ fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
         "Git should report the denied remote access"
     );
 
-    // The adapter does not pretend to implement receive-pack/push. It rejects
-    // service discovery before any NewGit refs or objects can be mutated.
+    // Malformed receive-pack packets fail before any canonical NewGit mutation.
+    let clean_objects = newgit.objects.iter().unwrap();
+    let clean_refs = newgit.refs.list(None).unwrap();
+    assert_eq!(
+        raw_git_receive_post_status(server.addr(), &write_auth, b"000x"),
+        400
+    );
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), s2);
+    assert_eq!(newgit.objects.iter().unwrap(), clean_objects);
+    assert_eq!(newgit.refs.list(None).unwrap(), clean_refs);
+
+    // A read token cannot push. A write token can push one real fast-forward
+    // commit through the ordinary Git smart-HTTP receive-pack exchange.
     git(&[
         "-C",
         clone_path_str,
@@ -518,7 +586,9 @@ fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
         "-m",
         "local commit",
     ]);
-    let push = git_fails(&[
+    let objects_before_denied_push = newgit.objects.iter().unwrap();
+    let refs_before_denied_push = newgit.refs.list(None).unwrap();
+    let push_denied = git_fails(&[
         "-c",
         &auth_config,
         "-C",
@@ -528,12 +598,269 @@ fn real_git_clone_fetch_pull_and_ls_remote_over_smart_http() {
         "main",
     ]);
     assert_eq!(newgit.refs.read("refs/main").unwrap(), s2);
-    assert_eq!(newgit.refs.read("refs/feature").unwrap(), s1);
-    assert_eq!(newgit.refs.read("refs/tags/v1.0").unwrap(), s1);
     assert!(
-        !String::from_utf8_lossy(&push.stderr).is_empty(),
-        "push refusal should be reported by Git"
+        !String::from_utf8_lossy(&push_denied.stderr).is_empty(),
+        "read-role push denial should be reported by Git"
+    );
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_denied_push);
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_denied_push);
+
+    let write_auth_config = format!("http.extraHeader=Authorization: {write_auth}");
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--porcelain",
+        "origin",
+        "main",
+    ]);
+    let pushed_tip = newgit.refs.read("refs/main").unwrap();
+    assert_ne!(pushed_tip, s2);
+    let pushed_snapshot = newgit.objects.get(&pushed_tip).unwrap();
+    let pushed_snapshot = pushed_snapshot.as_snapshot().unwrap();
+    assert_eq!(pushed_snapshot.parents, vec![s2]);
+    let pushed_tree = newgit.objects.get(&pushed_snapshot.root).unwrap();
+    let pushed_tree = pushed_tree.as_tree().unwrap();
+    let local_blob = pushed_tree.get("local-only.txt").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&local_blob.oid)
+            .unwrap()
+            .as_blob()
+            .unwrap(),
+        b"not on server\n"
     );
 
+    // New Git branch names map to canonical NewGit refs/<name> refs.
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        "main:refs/heads/published",
+    ]);
+    assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
+
+    // A fresh ordinary Git clone independently observes the canonical pushed
+    // commit and both refs (not the disposable receive-pack projection).
+    let post_push_clone = root.join("post-push-clone");
+    git(&[
+        "-c",
+        "protocol.version=2",
+        "-c",
+        &auth_config,
+        "clone",
+        "--quiet",
+        &url,
+        post_push_clone.to_str().unwrap(),
+    ]);
+    git(&[
+        "-c",
+        "protocol.version=2",
+        "-c",
+        &auth_config,
+        "-C",
+        post_push_clone.to_str().unwrap(),
+        "fetch",
+        "--quiet",
+        "origin",
+    ]);
+    assert_eq!(
+        std::fs::read(post_push_clone.join("local-only.txt")).unwrap(),
+        b"not on server\n"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            post_push_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/main",
+        ]))
+        .trim(),
+        as_text(&git(&[
+            "-C",
+            post_push_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/published",
+        ]))
+        .trim()
+    );
+
+    // Tags, deletions, multiple refs, and forced non-fast-forward updates are
+    // refused without adding canonical objects or moving refs.
+    let objects_before_rejections = newgit.objects.iter().unwrap();
+    let refs_before_rejections = newgit.refs.list(None).unwrap();
+    git(&["-C", clone_path_str, "tag", "forbidden-tag"]);
+    let tag_push = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        "refs/tags/forbidden-tag",
+    ]);
+    assert!(!String::from_utf8_lossy(&tag_push.stderr).is_empty());
+    let delete_push = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        ":main",
+    ]);
+    assert!(!String::from_utf8_lossy(&delete_push.stderr).is_empty());
+    let multi_push = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        "main:multi-a",
+        "main:multi-b",
+    ]);
+    assert!(!String::from_utf8_lossy(&multi_push.stderr).is_empty());
+
+    let base_git_tip = as_text(&git(&["-C", clone_path_str, "rev-parse", "HEAD~1"]))
+        .trim()
+        .to_string();
+    git(&[
+        "-C",
+        clone_path_str,
+        "checkout",
+        "-b",
+        "divergent",
+        &base_git_tip,
+    ]);
+    std::fs::write(clone_path.join("divergent.txt"), b"divergent\n").unwrap();
+    git(&["-C", clone_path_str, "add", "divergent.txt"]);
+    git(&[
+        "-C",
+        clone_path_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "divergent commit",
+    ]);
+    let non_ff = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--force",
+        "origin",
+        "divergent:main",
+    ]);
+    assert!(!String::from_utf8_lossy(&non_ff.stderr).is_empty());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), pushed_tip);
+    assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
+
+    server.shutdown();
+}
+
+#[test]
+fn real_git_initial_push_to_empty_newgit_repo_creates_main() {
+    let (_dir, root) = temp("empty-first-push");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+
+    let tokens_path = root.join("tokens.json");
+    let mut tokens = TokenFile::default();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
+    auth::save(&tokens_path, &tokens).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        token_file: tokens_path,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let local = root.join("local");
+    git(&[
+        "init",
+        "--quiet",
+        "--initial-branch=main",
+        local.to_str().unwrap(),
+    ]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "config",
+        "user.name",
+        "Initial User",
+    ]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "config",
+        "user.email",
+        "initial@example.test",
+    ]);
+    std::fs::write(local.join("first.txt"), b"first pushed snapshot\n").unwrap();
+    git(&["-C", local.to_str().unwrap(), "add", "first.txt"]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "commit",
+        "--quiet",
+        "-m",
+        "initial push",
+    ]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "remote",
+        "add",
+        "origin",
+        &url,
+    ]);
+    let auth_config = format!("http.extraHeader=Authorization: Bearer {WRITE_TOKEN}");
+    git(&[
+        "-c",
+        &auth_config,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "origin",
+        "HEAD:refs/heads/main",
+    ]);
+
+    let canonical_tip = newgit.refs.read("refs/main").unwrap();
+    let snapshot = newgit.objects.get(&canonical_tip).unwrap();
+    let snapshot = snapshot.as_snapshot().unwrap();
+    assert!(snapshot.parents.is_empty());
+    let tree = newgit.objects.get(&snapshot.root).unwrap();
+    let tree = tree.as_tree().unwrap();
+    let entry = tree.get("first.txt").unwrap();
+    assert_eq!(
+        newgit.objects.get(&entry.oid).unwrap().as_blob().unwrap(),
+        b"first pushed snapshot\n"
+    );
+
+    let clone = root.join("clone");
+    git(&[
+        "-c",
+        &auth_config,
+        "clone",
+        "--quiet",
+        &url,
+        clone.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        std::fs::read(clone.join("first.txt")).unwrap(),
+        b"first pushed snapshot\n"
+    );
     server.shutdown();
 }

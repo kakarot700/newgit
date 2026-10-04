@@ -1,4 +1,4 @@
-//! NewGit JSON remote protocol plus a separate, read-only Git smart-HTTP adapter.
+//! NewGit JSON remote protocol plus a separate Git smart-HTTP adapter.
 //!
 //! * [`proto`] — wire types + protocol constants (docs/PROTOCOL.md).
 //! * [`http`] — total request parser / response writer (fuzzed).
@@ -7,8 +7,9 @@
 //! * [`negotiate`] — closure + dependency-first post-order with excludes.
 //! * [`server`] — `newgit serve` (thread-per-connection, bounded).
 //! * [`client`] — `newgit remote/push/pull`.
-//! * [`git_http`] — ordinary Git upload-pack over smart HTTP; Git's installed
-//!   `upload-pack` handles wire framing while NewGit remains canonical storage.
+//! * [`git_http`] — ordinary Git upload-pack over smart HTTP.
+//! * [`git_receive`] — narrow receive-pack branch updates; Git handles the
+//!   pack while accepted NewGit ref moves use the canonical transaction engine.
 //!
 //! Security posture (THREAT_MODEL §E): every parser total and capped, auth
 //! failures never downgrade to anonymous, objects are self-verifying
@@ -20,6 +21,7 @@ pub mod audit;
 pub mod auth;
 pub mod client;
 pub mod git_http;
+pub mod git_receive;
 pub mod http;
 pub mod negotiate;
 pub mod proto;

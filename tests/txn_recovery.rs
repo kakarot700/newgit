@@ -13,6 +13,7 @@ mod common;
 
 use common::*;
 use newgit::repo::txn::{self, Cas, RefLogEntry};
+use std::sync::{Arc, Barrier};
 
 #[test]
 fn ref_crud_cas_and_reflog() {
@@ -142,6 +143,90 @@ fn cas_precondition_failure_writes_nothing() {
     // CAS txn never wrote one — the txn dir must be empty.
     let states = journal_states(&repo);
     assert!(states.is_empty(), "unexpected journals: {states:?}");
+}
+
+#[test]
+fn precommit_object_staging_is_skipped_on_cas_failure() {
+    let (_d, repo) = temp_repo();
+    repo.refs
+        .update("main", Cas::Any, Some(oid(1)), RefLogEntry::system("init"))
+        .unwrap();
+    let object = newgit::object::types::Object::Blob(b"staged only after CAS".to_vec());
+    let object_id = object.id();
+    let result = txn::execute_with_precommit(
+        repo.ng(),
+        vec![newgit::repo::txn::TxnOp::Ref {
+            name: "main".into(),
+            cas: Cas::Exactly(Some(oid(99))),
+            new: Some(oid(2)),
+            log: RefLogEntry::system("stale writer"),
+        }],
+        repo.limits(),
+        || {
+            repo.objects.put(&object)?;
+            Ok(())
+        },
+    );
+    assert!(matches!(result, Err(newgit::Error::CasFailed(_))));
+    assert_eq!(repo.refs.read("main").unwrap(), oid(1));
+    assert!(!repo.objects.contains(&object_id));
+    assert!(journal_states(&repo).is_empty());
+}
+
+#[test]
+fn racing_same_ref_pushes_promote_only_the_cas_winner() {
+    let (_d, repo) = temp_repo();
+    let repo = Arc::new(repo);
+    let barrier = Arc::new(Barrier::new(2));
+    let candidates = [
+        newgit::object::types::Object::Blob(b"first writer".to_vec()),
+        newgit::object::types::Object::Blob(b"second writer".to_vec()),
+    ];
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .map(|object| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let object_id = object.id();
+                barrier.wait();
+                let result = txn::execute_with_precommit(
+                    repo.ng(),
+                    vec![newgit::repo::txn::TxnOp::Ref {
+                        name: "main".into(),
+                        cas: Cas::Exactly(None),
+                        new: Some(object_id),
+                        log: RefLogEntry::system("concurrent Git push"),
+                    }],
+                    repo.limits(),
+                    || {
+                        repo.objects.put(&object)?;
+                        Ok(())
+                    },
+                );
+                (object_id, result)
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = candidates
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    let winners: Vec<_> = outcomes
+        .iter()
+        .filter(|(_, result)| result.is_ok())
+        .collect();
+    let losers: Vec<_> = outcomes
+        .iter()
+        .filter(|(_, result)| matches!(result, Err(newgit::Error::CasFailed(_))))
+        .collect();
+    assert_eq!(winners.len(), 1);
+    assert_eq!(losers.len(), 1);
+    let winner = winners[0].0;
+    let loser = losers[0].0;
+    assert_eq!(repo.refs.read("main").unwrap(), winner);
+    assert!(repo.objects.contains(&winner));
+    assert!(!repo.objects.contains(&loser));
 }
 
 #[test]
