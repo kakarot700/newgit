@@ -70,16 +70,18 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     are not separately tested. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
     (limitation 1), not silently converted.
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
-    real Git CLI tests cover one or more write-authenticated `refs/heads/*`
-    creates, fast-forward updates, or deletions per request, including an initial
-    push to an empty repository. The server advertises Git's `atomic` capability:
-    real-Git tests verify atomic multi-ref update/deletion and policy rejection
-    that leaves canonical refs and object inventory unchanged. All accepted
-    canonical refs share one NewGit journaled transaction; an ordinary request
-    that Git accepts only in part fails at the HTTP boundary without committing
-    canonical refs. Tags, signed pushes, and forced non-fast-forward updates
-    remain refused; non-v0 receive-pack, Git-over-SSH, and GitHub/GitLab
-    hosting features are not implemented. Every request rebuilds a temporary
+    real Git CLI tests cover write-authenticated branch creates, fast-forward
+    updates, and deletions, plus lightweight tag creates/deletions per request,
+    including an initial branch push to an empty repository. Existing tags cannot
+    be retargeted (even with `--force`), and annotated tag objects are refused
+    because NewGit stores tags only as refs to commit snapshots. The server
+    advertises Git's `atomic` capability: tests verify atomic multi-ref changes
+    and policy rejection that leave canonical refs and object inventory
+    unchanged. All accepted canonical refs share one NewGit journaled transaction;
+    an ordinary request that Git accepts only in part fails at the HTTP boundary
+    without committing canonical refs. Signed pushes and forced non-fast-forward
+    branch updates remain refused; non-v0 receive-pack, Git-over-SSH, and
+    GitHub/GitLab hosting features are not implemented. Every request rebuilds a temporary
     Git view from NewGit's canonical objects/refs. If a process or storage
     failure interrupts promotion of immutable objects, unreachable objects may
     remain, but the transactional ref set is not published to an incomplete
@@ -185,7 +187,7 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 29. One server process serves ONE repository (the one it was started in);
     no multi-repo routing or URL-path routing. Git smart HTTP is exposed at
     the server root for upload-pack and the documented bounded receive-pack
-    branch-write slice; other push policies remain refused.
+    branch/lightweight-tag create-delete slice; other push policies remain refused.
 30. `push` non-fast-forward checking and negotiation walk object closures
     client-side (RAM/CPU proportional to reachable history, like verify/gc);
     every connection reopens the repo (recovery scan). Acceptable at v1

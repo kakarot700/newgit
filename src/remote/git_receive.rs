@@ -1,9 +1,10 @@
 //! Write-side Git smart-HTTP adapter for a deliberately narrow receive-pack slice.
 //!
 //! Git receives and validates the pack in a short-lived isolated projection.
-//! Accepted branch tips are then imported into a temporary NewGit repository,
-//! reusing exported canonical commit IDs. Creates, fast-forward updates, and
-//! deletions are promoted under one NewGit ref transaction.
+//! Accepted branch tips and lightweight tags are then imported into a temporary
+//! NewGit repository, reusing exported canonical commit IDs. Branch creates,
+//! fast-forward updates, deletions, and tag creates/deletions are promoted under
+//! one NewGit ref transaction.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -63,10 +64,11 @@ pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
     Ok(response)
 }
 
-/// Accept one or more branch creates, fast-forward updates, or deletions. Git
-/// handles packfile decoding and fsck in the disposable projection; NewGit's
-/// canonical objects and refs change only after import/validation succeeds and
-/// every observed old canonical tip still passes a CAS check under the lock.
+/// Accept branch creates, fast-forward updates, and deletions plus lightweight
+/// tag creates/deletions. Git handles packfile decoding and fsck in the
+/// disposable projection; NewGit's canonical objects and refs change only after
+/// import/validation succeeds and every observed old canonical tip still passes
+/// a CAS check under the lock.
 pub fn receive_pack(
     repo: &Repo,
     request: &[u8],
@@ -74,34 +76,39 @@ pub fn receive_pack(
     principal: &str,
 ) -> Result<Vec<u8>> {
     let pushes = parse_push_command(request)?;
-    let mut newgit_names = HashSet::new();
     for push in &pushes {
-        let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
-            Error::Invalid("Git push supports refs/heads/* only; other refs are refused".into())
-        })?;
-        if branch_suffix.is_empty() {
-            return Err(Error::Invalid("Git push branch name is empty".into()));
-        }
-        let newgit_ref = format!("refs/{branch_suffix}");
+        let newgit_ref = git_ref_fallback_newgit_name(&push.ref_name)?;
         crate::repo::refs::check_ref_name(&newgit_ref)?;
-        newgit_names.insert(newgit_ref);
+        if push.ref_name.starts_with("refs/tags/")
+            && push.old_oid != ZERO_SHA1
+            && push.new_oid != ZERO_SHA1
+            && push.old_oid != push.new_oid
+        {
+            return Err(Error::Conflict(
+                "updating an existing Git tag is refused; delete it and create a new tag instead"
+                    .into(),
+            ));
+        }
     }
-    ensure_batch_ref_names_do_not_conflict(&newgit_names)?;
 
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let (view, export) = TempGitView::from_newgit_with_export(repo, deadline)?;
     let git_to_newgit: HashMap<String, ObjectId> = export.git_commit_oids.clone();
     let mut updates = Vec::with_capacity(pushes.len());
+    let mut newgit_names = HashSet::new();
     for push in pushes {
-        let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
-            Error::Invalid("Git push supports refs/heads/* only; tags are refused".into())
-        })?;
         let newgit_ref = export
             .refs_exported
             .iter()
             .find(|(_, git_name)| git_name == &push.ref_name)
             .map(|(newgit_name, _)| newgit_name.clone())
-            .unwrap_or_else(|| format!("refs/{branch_suffix}"));
+            .unwrap_or(git_ref_fallback_newgit_name(&push.ref_name)?);
+        crate::repo::refs::check_ref_name(&newgit_ref)?;
+        if !newgit_names.insert(newgit_ref.clone()) {
+            return Err(Error::Conflict(format!(
+                "multiple Git refs map to the same NewGit ref {newgit_ref:?}"
+            )));
+        }
         let initial_git_tip = git_ref_oid(&view, &push.ref_name, deadline)?;
         let request_old_matches = if push.old_oid == ZERO_SHA1 {
             initial_git_tip.is_none()
@@ -118,7 +125,7 @@ pub fn receive_pack(
                 ))
             })?)
         };
-        updates.push(BranchUpdate {
+        updates.push(PushUpdate {
             push,
             newgit_ref,
             request_old_matches,
@@ -126,6 +133,7 @@ pub fn receive_pack(
         });
     }
 
+    ensure_batch_ref_names_do_not_conflict(&newgit_names)?;
     let mut command = receive_pack_command(&view, false);
     let (status, response) = run_git(
         &view,
@@ -165,7 +173,21 @@ pub fn receive_pack(
         return Ok(response);
     }
 
-    let changed: Vec<&BranchUpdate> = updates
+    // NewGit represents lightweight tags as refs to snapshots, not Git tag
+    // objects. Check the target type before import or canonical object staging.
+    for update in &updates {
+        if update.push.ref_name.starts_with("refs/tags/") && update.push.new_oid != ZERO_SHA1 {
+            let object_type = git_object_type(&view, &update.push.new_oid, deadline)?;
+            if object_type != "commit" {
+                return Err(Error::Invalid(format!(
+                    "Git tag {} targets a {object_type} object; only lightweight tags to commits are supported",
+                    update.push.ref_name
+                )));
+            }
+        }
+    }
+
+    let changed: Vec<&PushUpdate> = updates
         .iter()
         .filter(|update| update.push.old_oid != update.push.new_oid)
         .collect();
@@ -203,7 +225,7 @@ pub fn receive_pack(
                 .read_opt(&update.push.ref_name)?
                 .ok_or_else(|| {
                     Error::Invalid(format!(
-                        "Git receive-pack accepted {} but its imported branch is missing",
+                        "Git receive-pack accepted {} but its imported ref is missing",
                         update.push.ref_name
                     ))
                 })?;
@@ -212,7 +234,7 @@ pub fn receive_pack(
                 crate::object::types::Object::Snapshot(_)
             ) {
                 return Err(Error::Invalid(
-                    "Git branch tip did not import as a NewGit snapshot".into(),
+                    "Git ref tip did not import as a NewGit snapshot".into(),
                 ));
             }
             if let Some(old_tip) = update.expected_newgit {
@@ -256,7 +278,7 @@ pub fn receive_pack(
 }
 
 #[derive(Debug)]
-struct BranchUpdate {
+struct PushUpdate {
     push: PushCommand,
     newgit_ref: String,
     request_old_matches: bool,
@@ -326,9 +348,9 @@ fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
         validate_sha1(fields[0])?;
         validate_sha1(fields[1])?;
         let ref_name = fields[2];
-        if !ref_name.starts_with("refs/heads/") {
+        if !ref_name.starts_with("refs/heads/") && !ref_name.starts_with("refs/tags/") {
             return Err(Error::Invalid(
-                "Git push supports refs/heads/* only; tags and other refs are refused".into(),
+                "Git push supports refs/heads/* and lightweight refs/tags/* only; other refs are refused".into(),
             ));
         }
         if fields[0] == ZERO_SHA1 && fields[1] == ZERO_SHA1 {
@@ -370,6 +392,25 @@ fn validate_sha1(oid: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn git_ref_fallback_newgit_name(ref_name: &str) -> Result<String> {
+    if let Some(suffix) = ref_name.strip_prefix("refs/heads/") {
+        if suffix.is_empty() {
+            return Err(Error::Invalid("Git push branch name is empty".into()));
+        }
+        Ok(format!("refs/{suffix}"))
+    } else if let Some(suffix) = ref_name.strip_prefix("refs/tags/") {
+        if suffix.is_empty() {
+            return Err(Error::Invalid("Git push tag name is empty".into()));
+        }
+        Ok(format!("refs/tags/{suffix}"))
+    } else {
+        Err(Error::Invalid(
+            "Git push supports refs/heads/* and lightweight refs/tags/* only; other refs are refused"
+                .into(),
+        ))
+    }
 }
 
 fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
@@ -500,7 +541,7 @@ fn git_ref_oid(view: &TempGitView, ref_name: &str, deadline: Instant) -> Result<
             return Ok(None);
         }
         return Err(Error::Protocol(format!(
-            "could not inspect Git branch {ref_name}: {status}"
+            "could not inspect Git ref {ref_name}: {status}"
         )));
     }
     let oid = String::from_utf8(output)
@@ -509,6 +550,30 @@ fn git_ref_oid(view: &TempGitView, ref_name: &str, deadline: Instant) -> Result<
         .to_ascii_lowercase();
     validate_sha1(&oid)?;
     Ok(Some(oid))
+}
+
+fn git_object_type(view: &TempGitView, oid: &str, deadline: Instant) -> Result<String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(&view.path)
+        .args(["cat-file", "-t", oid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", &view.global_config)
+        .env("GIT_CONFIG_COUNT", "0");
+    git_http::isolate_git_environment(&mut command);
+    let (status, output) = run_git(view, &mut command, None, 128, deadline)?;
+    if !status.success() {
+        return Err(Error::Protocol(format!(
+            "could not inspect Git object {oid}: {status}"
+        )));
+    }
+    String::from_utf8(output)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| Error::Protocol("Git returned a non-UTF-8 object type".into()))
 }
 
 fn ensure_no_ref_name_conflict(repo: &Repo, wanted: &str) -> Result<()> {
@@ -659,7 +724,12 @@ mod tests {
             request(format!("{ZERO_SHA1} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes());
         assert!(parse_push_command(&zero_to_zero).is_err());
         let tag = request(format!("{ZERO_SHA1} {new} refs/tags/v1\0report-status\n").as_bytes());
-        assert!(parse_push_command(&tag).is_err());
+        assert_eq!(
+            parse_push_command(&tag).unwrap()[0].ref_name,
+            "refs/tags/v1"
+        );
+        let notes = request(format!("{ZERO_SHA1} {new} refs/notes/n1\0report-status\n").as_bytes());
+        assert!(parse_push_command(&notes).is_err());
         let mut duplicate =
             pkt(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
         duplicate.extend_from_slice(&pkt(

@@ -5,13 +5,14 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Added
-- Git smart-HTTP receive-pack now advertises Git's `atomic` capability and
-  accepts ordinary or atomic multi-ref branch creates, fast-forward updates,
-  and deletions, staging imported objects and CAS-committing accepted canonical
-  refs in one NewGit transaction. Real-Git tests cover single and atomic
-  multi-branch deletion, post-delete clone/fetch behavior, and atomic or ordinary
-  mixed-request rejection without canonical ref/object changes. Tags, signed
-  pushes, and forced non-fast-forward updates remain unsupported.
+- Git smart-HTTP receive-pack advertises Git's `atomic` capability and accepts
+  branch creates, fast-forward updates, and deletions plus lightweight tag
+  creates/deletions. Accepted refs and imported objects are CAS-committed in one
+  NewGit transaction. Real-Git coverage includes an atomic branch-plus-tag push,
+  post-push clone/fetch, tag deletion, and unchanged canonical state after
+  unauthorized, annotated-tag, and forced-retarget rejection. Existing tags
+  cannot be retargeted (even with `--force`); annotated tag objects, signed
+  pushes, and forced non-fast-forward branch updates remain unsupported.
 
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and

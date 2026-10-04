@@ -908,9 +908,18 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         .trim()
     );
 
-    // Tags and forced non-fast-forward updates remain refused. A branch whose
-    // deletion is combined with a failing update must not be partially deleted.
-    git(&["-C", clone_path_str, "tag", "forbidden-tag"]);
+    // Annotated tag objects and forced non-fast-forward branch updates remain
+    // refused. A branch whose deletion is combined with a failing update must
+    // not be partially deleted.
+    git(&[
+        "-C",
+        clone_path_str,
+        "tag",
+        "-a",
+        "forbidden-tag",
+        "-m",
+        "annotated tags are unsupported",
+    ]);
     let tag_push = git_fails(&[
         "-c",
         &write_auth_config,
@@ -1022,6 +1031,315 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         multi_ref_tip
     );
 
+    server.shutdown();
+}
+
+#[test]
+fn real_git_lightweight_tag_pushes_are_transactional_and_bounded() {
+    let (_dir, root) = temp("lightweight-tag-push");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+    let initial = commit(
+        &newgit,
+        "refs/main",
+        "initial snapshot",
+        &[(
+            "README.md",
+            b"before tag push\n",
+            newgit::object::types::EntryMode::File,
+        )],
+        vec![],
+    );
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set default branch"),
+        )
+        .unwrap();
+
+    let tokens_path = root.join("tokens.json");
+    let mut tokens = TokenFile::default();
+    tokens.add("git-reader", READ_TOKEN, Role::Read).unwrap();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
+    auth::save(&tokens_path, &tokens).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        token_file: tokens_path,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let local = root.join("local");
+    let read_auth = format!("http.extraHeader=Authorization: Bearer {READ_TOKEN}");
+    let write_auth = format!("http.extraHeader=Authorization: Bearer {WRITE_TOKEN}");
+    git(&[
+        "-c",
+        &read_auth,
+        "clone",
+        "--quiet",
+        &url,
+        local.to_str().unwrap(),
+    ]);
+    let initial_git_tip = as_text(&git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "rev-parse",
+        "refs/remotes/origin/main",
+    ]))
+    .trim()
+    .to_string();
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "config",
+        "user.name",
+        "Tag Test",
+    ]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "config",
+        "user.email",
+        "tag-test@example.test",
+    ]);
+
+    // A read-role token cannot create tags or change canonical refs/objects.
+    git(&["-C", local.to_str().unwrap(), "tag", "unauthorized-tag"]);
+    let refs_before_denied = newgit.refs.list(None).unwrap();
+    let objects_before_denied = newgit.objects.iter().unwrap();
+    let denied = git_fails(&[
+        "-c",
+        &read_auth,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "origin",
+        "refs/tags/unauthorized-tag",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_denied);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_denied);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "tag",
+        "-d",
+        "unauthorized-tag",
+    ]);
+
+    // A branch fast-forward and new lightweight tag share one atomic push and
+    // map back to the canonical NewGit snapshot ID.
+    std::fs::write(local.join("tagged.txt"), b"lightweight tag content\n").unwrap();
+    git(&["-C", local.to_str().unwrap(), "add", "tagged.txt"]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "commit",
+        "--quiet",
+        "-m",
+        "release snapshot",
+    ]);
+    git(&["-C", local.to_str().unwrap(), "tag", "v2.0"]);
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "--atomic",
+        "origin",
+        "main",
+        "refs/tags/v2.0",
+    ]);
+    let pushed_tip = newgit.refs.read("refs/main").unwrap();
+    assert_eq!(newgit.refs.read("refs/tags/v2.0").unwrap(), pushed_tip);
+    assert_eq!(
+        newgit
+            .objects
+            .get(&pushed_tip)
+            .unwrap()
+            .as_snapshot()
+            .unwrap()
+            .parents,
+        vec![initial]
+    );
+    let pushed_snapshot = newgit.objects.get(&pushed_tip).unwrap();
+    let pushed_tree = newgit
+        .objects
+        .get(&pushed_snapshot.as_snapshot().unwrap().root)
+        .unwrap();
+    let tagged_blob = pushed_tree.as_tree().unwrap().get("tagged.txt").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&tagged_blob.oid)
+            .unwrap()
+            .as_blob()
+            .unwrap(),
+        b"lightweight tag content\n"
+    );
+
+    // An ordinary Git clone/fetch sees the committed tag and its actual tree.
+    let clone = root.join("post-tag-push-clone");
+    git(&[
+        "-c",
+        &read_auth,
+        "clone",
+        "--quiet",
+        &url,
+        clone.to_str().unwrap(),
+    ]);
+    git(&[
+        "-c",
+        &read_auth,
+        "-C",
+        clone.to_str().unwrap(),
+        "fetch",
+        "--quiet",
+        "origin",
+    ]);
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/tags/v2.0",
+        ]))
+        .trim(),
+        as_text(&git(&[
+            "-C",
+            clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/main",
+        ]))
+        .trim()
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone.to_str().unwrap(),
+            "cat-file",
+            "-t",
+            "refs/tags/v2.0",
+        ]))
+        .trim(),
+        "commit"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone.to_str().unwrap(),
+            "show",
+            "refs/tags/v2.0:tagged.txt",
+        ])),
+        "lightweight tag content\n"
+    );
+
+    // An annotated tag points at a Git tag object, which NewGit cannot
+    // represent. Even paired with a valid branch advance, it promotes neither
+    // the branch nor the pack's new objects.
+    std::fs::write(local.join("unpublished.txt"), b"must stay local\n").unwrap();
+    git(&["-C", local.to_str().unwrap(), "add", "unpublished.txt"]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "commit",
+        "--quiet",
+        "-m",
+        "unpublished branch advance",
+    ]);
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "tag",
+        "-a",
+        "annotated-denied",
+        "-m",
+        "annotated tags are unsupported",
+    ]);
+    let refs_before_annotated = newgit.refs.list(None).unwrap();
+    let objects_before_annotated = newgit.objects.iter().unwrap();
+    let annotated = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "--atomic",
+        "origin",
+        "main",
+        "refs/tags/annotated-denied",
+    ]);
+    assert!(!String::from_utf8_lossy(&annotated.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_annotated);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_annotated);
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), pushed_tip);
+
+    // Git's receive.denyNonFastForwards setting does not protect forced tag
+    // retargets. NewGit refuses all retargeting before projection import.
+    git(&[
+        "-C",
+        local.to_str().unwrap(),
+        "tag",
+        "--force",
+        "v2.0",
+        &initial_git_tip,
+    ]);
+    let refs_before_retarget = newgit.refs.list(None).unwrap();
+    let objects_before_retarget = newgit.objects.iter().unwrap();
+    let retarget = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "--force",
+        "origin",
+        "refs/tags/v2.0",
+    ]);
+    assert!(!String::from_utf8_lossy(&retarget.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_retarget);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_retarget);
+    assert_eq!(newgit.refs.read("refs/tags/v2.0").unwrap(), pushed_tip);
+
+    // Tag deletion is transactional too; clones observe it after pruning.
+    let objects_before_delete = newgit.objects.iter().unwrap();
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local.to_str().unwrap(),
+        "push",
+        "--delete",
+        "origin",
+        "v2.0",
+    ]);
+    assert!(newgit.refs.read_opt("refs/tags/v2.0").unwrap().is_none());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), pushed_tip);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_delete);
+    git(&[
+        "-c",
+        &read_auth,
+        "-C",
+        clone.to_str().unwrap(),
+        "fetch",
+        "--prune",
+        "--prune-tags",
+        "--quiet",
+        "origin",
+    ]);
+    git_fails(&[
+        "-C",
+        clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/tags/v2.0",
+    ]);
+    let remote_tags = git(&["-c", &read_auth, "ls-remote", "--tags", &url]);
+    assert!(!as_text(&remote_tags).contains("refs/tags/v2.0"));
     server.shutdown();
 }
 

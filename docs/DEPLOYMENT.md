@@ -175,9 +175,11 @@ path routing. The built-in listener is plain HTTP; expose Git clients over
 HTTPS only through a trusted TLS-terminating reverse proxy (see §2.3).
 Git smart HTTP supports upload-pack plus a narrow receive-pack path: one or
 more write-token-authenticated branch creates, fast-forward updates, or deletes
-per request, committed together in NewGit. Tags, signed pushes, and
-non-fast-forward updates are refused; a partially accepted ordinary request
-changes no canonical refs. The server advertises Git's `atomic` capability:
+and lightweight tag creates/deletes per request, committed together in NewGit.
+Existing tag retargeting (including forced updates), annotated tag objects,
+signed pushes, and forced non-fast-forward branch updates are refused; a
+partially accepted ordinary request changes no canonical refs. The server
+advertises Git's `atomic` capability:
 `git push --atomic` is covered by real-Git success and all-ref rejection tests,
 including a rejected deletion paired with a non-fast-forward update. The server
 requires the system `git` executable.

@@ -202,14 +202,16 @@ environment and does not claim other Git versions or operating systems.
    conversion remains whole-history. A separate smart-HTTP adapter supports
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
    (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A separately
-   tested receive-pack slice accepts one or more write-authenticated branch
-   creates, fast-forward updates, or deletions per request, including an initial
-   push to an empty repository. Accepted canonical refs share one NewGit
-   transaction; a partially accepted projection request is rejected without
-   changing canonical refs. Git's `atomic` capability is advertised and tested
-   with successful atomic multi-ref update and deletion plus policy rejection
-   that leaves canonical refs and objects unchanged. Tags, signed, and
-   non-fast-forward pushes are refused. Both directions rematerialize a complete temporary Git projection
+   tested receive-pack slice accepts write-authenticated branch creates,
+   fast-forward updates, and deletions, plus lightweight tag creates/deletions
+   per request, including an initial push to an empty repository. Existing tags
+   cannot be retargeted (including with `--force`), and annotated tag objects
+   are refused. Accepted canonical refs share one NewGit transaction; a partially
+   accepted projection request is rejected without changing canonical refs.
+   Git's `atomic` capability is advertised and tested with successful atomic
+   branch-plus-tag creation and multi-ref deletion plus policy rejection that
+   leaves canonical refs and objects unchanged. Signed and forced
+   non-fast-forward branch pushes are refused. Both directions rematerialize a complete temporary Git projection
    for every HTTP request; pack negotiation does not avoid the full NewGit-to-Git
    export. Git over SSH remains unsupported. See [protocol
    details](PROTOCOL.md#git-smart-http-compatibility) and the [evidence

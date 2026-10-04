@@ -52,9 +52,14 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
-**Bounded write policy:** receive-pack accepts one or more `refs/heads/*`
-creates, fast-forward updates, or deletions per request, including a first push
-to an empty repository. Every requested operation must be accepted by Git in
+**Bounded write policy:** receive-pack accepts branch creates, fast-forward
+updates, or deletions under `refs/heads/*`, plus lightweight tag creates or
+deletions under `refs/tags/*`; this includes a first branch push to an empty
+repository. Tags must directly target commit objects. Existing tags cannot be
+retargeted, even with `--force`, because NewGit stores tags only as refs to
+snapshots and Git permits forced tag replacement despite
+`receive.denyNonFastForwards=true`. Annotated tag objects and other ref
+namespaces are refused. Every requested operation must be accepted by Git in
 the disposable projection before canonical refs move; if Git accepts only a
 subset, the adapter returns HTTP 409 and commits none of the NewGit refs. For
 explicit `git push --atomic`, Git's `receive-pack` projection enforces all-or-none
@@ -62,14 +67,14 @@ policy validation, and NewGit commits all accepted canonical refs in one
 CAS-guarded journal transaction; if any operation is rejected or any CAS check
 fails, no canonical refs move. The server advertises Git's `atomic` capability
 to match those guarantees. An ordinary non-atomic request that Git accepts only
-in part is instead rejected with HTTP 409. Tags, other namespaces, signed pushes,
-and protocol versions other than v0 are refused; non-fast-forward updates remain
+in part is instead rejected with HTTP 409. Signed pushes and protocol versions
+other than v0 are refused; forced non-fast-forward branch updates remain
 refused by Git policy in the projection. A branch such as `refs/heads/main` maps
-to NewGit's `refs/main`. Unmapped names must pass NewGit's ref-name validation.
-Actual Git 2.43.0/Linux tests cover branch deletion, atomic multi-ref deletion,
-all-ref rejection of a delete paired with a forced non-fast-forward update,
-initial branch creation, ordinary multi-ref pushes, and subsequent clone/fetch;
-other versions/platforms are not claimed.
+to NewGit's `refs/main`; `refs/tags/v1` maps to NewGit's `refs/tags/v1`. Unmapped
+names must pass NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover
+branch and tag creation/deletion, atomic branch-plus-tag creation, unauthorized
+and invalid-tag rejection without canonical mutation, forced-tag-retarget
+rejection, and post-push clone/fetch; other versions/platforms are not claimed.
 
 The adapter materializes the full Git view independently for every discovery
 and POST request. Git's pack negotiation can reduce transferred bytes, but it
