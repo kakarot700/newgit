@@ -30,6 +30,13 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   every commit; it caught the previous `é` → `Ã©` pathname corruption.
 
 ### Added
+- A real Git SSH-signed annotated-tag regression verifies the source signature,
+  checks the stripped-tag report and target tree, and confirms export produces
+  a lightweight tag. On Git 2.43.0/Linux, `fast-export --signed-tags=strip`
+  retains the SSH signature payload in tag data; NewGit discards the tag
+  metadata and does not claim to preserve or verify the signature. CI now
+  requires Git >=2.34 and `ssh-keygen` before the test suite, preventing a
+  green hosted run that skipped this fixture for missing prerequisites.
 - A real-Git four-parent octopus merge now has an end-to-end semantic
   interoperability regression: ordered parents and merge-tree paths, modes,
   and blob IDs are checked through Git → NewGit → Git → NewGit, with Git `fsck`

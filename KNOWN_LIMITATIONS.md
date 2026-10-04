@@ -112,9 +112,12 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     Very large monorepo histories can be memory-hungry; a streaming
     `--full-tree`-only mode could trade CPU for RAM later.
 21. Git **annotated/signed tags** import as plain refs: tagger, tag message,
-    and signature are stripped (`--signed-tags=strip`) and listed in the
-    import report. NewGit has no tag object type; export rebuilds
-    lightweight tags only.
+    and signature are not preserved; the tag ref is listed in the import
+    report. NewGit has no tag object type; export rebuilds lightweight tags
+    only. A Git-verified SSH-signed tag fixture shows that Git 2.43.0/Linux
+    retains SSH signature bytes in `fast-export --signed-tags=strip` tag data;
+    NewGit discards them when flattening the tag. NewGit does not verify tag
+    signatures. OpenPGP/X.509 and other Git versions/platforms are untested.
 22. Git **submodules (gitlinks, mode 160000) are refused**: the whole import
     aborts atomically with an actionable error (zero refs move). No partial
     or faked submodule support.

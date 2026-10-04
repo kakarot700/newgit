@@ -2011,6 +2011,159 @@ fn replace_refs_do_not_rewrite_imported_branch_history() {
 }
 
 #[test]
+fn ssh_signed_annotated_tag_loss_is_reported_and_exported_as_lightweight() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    let version = git_out(&gdir, &["--version"]);
+    let mut parts = version
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .split('.')
+        .take(3)
+        .map(|part| part.parse::<u32>().unwrap_or(0));
+    let git_version = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
+    if git_version < (2, 34, 0) {
+        eprintln!("skipping SSH-signed tag fixture: Git 2.34 or newer is required");
+        return;
+    }
+
+    write(&gdir, "tagged.txt", b"signed tag target\n");
+    commit(&gdir, "tag target");
+    let signing_key = d.path().join("signing_key");
+    let keygen = match Command::new("ssh-keygen")
+        .args([
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "tagger@example.test",
+            "-f",
+        ])
+        .arg(&signing_key)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping SSH-signed tag fixture: ssh-keygen is unavailable");
+            return;
+        }
+        Err(error) => panic!("failed to start ssh-keygen: {error}"),
+    };
+    assert!(
+        keygen.status.success(),
+        "ssh-keygen failed: {}",
+        String::from_utf8_lossy(&keygen.stderr)
+    );
+    let public_key = std::fs::read_to_string(signing_key.with_extension("pub")).unwrap();
+    let mut public_fields = public_key.split_whitespace();
+    let key_type = public_fields.next().unwrap();
+    let key_data = public_fields.next().unwrap();
+    let allowed_signers = d.path().join("allowed_signers");
+    std::fs::write(
+        &allowed_signers,
+        format!("tagger@example.test namespaces=\"git\" {key_type} {key_data}\n"),
+    )
+    .unwrap();
+    git(&gdir, &["config", "gpg.format", "ssh"]);
+    git(
+        &gdir,
+        &["config", "user.signingkey", signing_key.to_str().unwrap()],
+    );
+    git(
+        &gdir,
+        &[
+            "config",
+            "gpg.ssh.allowedSignersFile",
+            allowed_signers.to_str().unwrap(),
+        ],
+    );
+    git(
+        &gdir,
+        &[
+            "tag",
+            "--sign",
+            "--message",
+            "signed tag payload",
+            "signed-v1",
+        ],
+    );
+
+    let tag_ref = "refs/tags/signed-v1";
+    let source_tag_oid = git_out(&gdir, &["rev-parse", tag_ref]).trim().to_string();
+    git(&gdir, &["verify-tag", tag_ref]);
+    let raw_tag = git(&gdir, &["cat-file", "tag", &source_tag_oid]).stdout;
+    let signature_marker = b"-----BEGIN SSH SIGNATURE-----";
+    assert!(
+        raw_tag
+            .windows(signature_marker.len())
+            .any(|window| window == signature_marker),
+        "the verified source tag object must contain its SSH signature"
+    );
+    let stream = git(
+        &gdir,
+        &[
+            "fast-export",
+            "--all",
+            "--full-tree",
+            "--show-original-ids",
+            "--signed-tags=strip",
+        ],
+    );
+    if git_version == (2, 43, 0) {
+        assert!(
+            stream
+                .stdout
+                .windows(signature_marker.len())
+                .any(|window| window == signature_marker),
+            "Git 2.43.0 fast-export retains the SSH signature bytes in tag data despite --signed-tags=strip"
+        );
+    }
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert_eq!(report.annotated_tags_stripped, vec![tag_ref]);
+    let imported_tag_target = repo.refs.read(tag_ref).unwrap();
+    let source_tree_oid = git_out(&gdir, &["rev-parse", "refs/tags/signed-v1^{tree}"])
+        .trim()
+        .to_string();
+    let source_tree = git_tree(&gdir, &source_tree_oid);
+    assert_eq!(
+        ng_tree(&repo, imported_tag_target),
+        source_tree
+            .iter()
+            .map(|(path, (mode, blob_oid))| {
+                (path.clone(), (mode.clone(), git_blob(&gdir, blob_oid)))
+            })
+            .collect::<BTreeMap<_, _>>(),
+        "the annotated tag ref must still point to the correct imported snapshot"
+    );
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+    git(&gdir, &["fsck", "--full", "--strict", "--no-reflogs"]);
+
+    let outdir = d.path().join("exported");
+    export_git(&repo, &outdir).unwrap();
+    assert_eq!(
+        git_out(&outdir, &["cat-file", "-t", tag_ref]).trim(),
+        "commit",
+        "NewGit has no tag-object representation; export must make the loss explicit as a lightweight tag"
+    );
+    assert_eq!(
+        git_out(&outdir, &["rev-parse", "refs/tags/signed-v1^{tree}"]).trim(),
+        source_tree_oid,
+        "the lightweight exported tag must preserve its target tree"
+    );
+    git(&outdir, &["fsck", "--full", "--strict", "--no-reflogs"]);
+}
+
+#[test]
 fn signed_git_commit_signature_loss_is_reported() {
     let d = tempfile::tempdir().unwrap();
     let gdir = d.path().join("g");

@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: establish real-Git octopus-merge round-trip behavior and ordered-parent preservation (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: establish real-Git signed annotated-tag loss/report behavior without claiming tag-object compatibility (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,31 +21,44 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — octopus merges (2026-10-04)
+## Current Git compatibility milestone — signed annotated tags (2026-10-04)
 
-- **Evidence gap:** the importer records the `from` parent followed by each
-  `merge` parent, and the exporter emits the stored order, but existing
-  real-Git regressions had only established two-parent merges. The mission
-  explicitly calls for octopus-merge fixtures.
-- **Regression added:** `tests/git_compat.rs::octopus_merge_preserves_parent_order_and_trees_across_roundtrip`
-  creates a four-parent merge with the Git CLI and checks its ordered parents
-  through Git → NewGit → Git → NewGit, compares merge-tree paths/modes/blob IDs,
-  checks both mapped NewGit parent sets, runs Git `fsck`, and deep-verifies both
-  NewGit repositories. The final reimported NewGit tree is compared against the
-  source Git tree's paths, modes, and blob bytes.
-- **Independent review:** a reviewer caught that the initial version checked
-  only exported-Git tree fidelity and parent counts. Those assertions were
-  strengthened to compare exact mapped parent sets and the final reimported
-  tree. The reviewer's targeted test run passed before this assertion-only
-  strengthening; the final code passed the full validation below.
-- **Evidence boundary:** semantic conversion evidence is limited to this
-  four-parent fixture on Git 2.43.0/Linux; commit-object identity and broad
-  platform/version coverage are not claimed.
-- **Local verification:** the one full validation pass succeeded: debug and
-  release suites each passed 294/294 tests, including 24/24 Git interoperability
-  tests; `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift,
-  and `git diff --check` passed. Hosted CI and CodeQL will be checked once on
-  this combined pushed SHA; exact run links are included in the task report.
+- **Evidence gap:** annotated-tag metadata and signatures were already classified
+  as lossy, but the existing real-Git fixture used only an unsigned annotated
+  tag. Mission requirement 20 calls for explicit signed-tag preservation or an
+  honest compatibility boundary.
+- **Observed behavior:** Git 2.43.0/Linux created an SSH-signed annotated tag
+  accepted by `git verify-tag`. Its `fast-export --signed-tags=strip` stream
+  still contained the SSH signature payload. NewGit's existing import behavior
+  discards tagger/message/signature metadata while retaining the ref to the target
+  snapshot; `annotated_tags_stripped` reports the tag. Export creates a
+  lightweight tag because NewGit has no tag-object representation.
+- **Regression added:**
+  `tests/git_compat.rs::ssh_signed_annotated_tag_loss_is_reported_and_exported_as_lightweight`
+  uses real Git plus a temporary OpenSSH key and allowed-signers file. Git
+  verifies the source tag; the test checks the raw signature marker and the
+  Git-2.43 stream observation, exact import-loss report, imported target tree,
+  deep NewGit integrity, Git `fsck` on source and export, lightweight exported
+  ref type, and unchanged target-tree ID.
+- **Architecture and fidelity boundary:** no NewGit object-model behavior
+  changed. Signed annotated tags remain **LOSSY**: signatures are neither
+  preserved nor verified, and the exported ref is lightweight. OpenPGP/X.509,
+  other Git versions/platforms, and general signed-tag equivalence are not
+  established. No open GitHub issues were present when checked.
+- **Independent review:** no blocker or correctness issue. The reviewer noted
+  that local prerequisite skips could allow hosted CI to pass without exercising
+  this fixture. `.github/workflows/ci.yml` now explicitly requires Git >=2.34.0
+  and `ssh-keygen` before tests; the fixture remains allowed to skip on local
+  systems that lack those prerequisites.
+- **Local verification:** the focused signed-tag test passed once before the
+  single full validation pass. `cargo test --locked` and
+  `cargo test --release --locked` each passed **295/295** tests, including
+  **25/25** Git interoperability tests; `cargo fmt --check`, warnings-denied
+  Clippy, release build, SBOM drift, Git/ssh-keygen prerequisite check, and
+  `git diff --check` passed. `actionlint` was unavailable in the active
+  environment, so workflow validation is left to hosted GitHub Actions. Rust
+  1.99.0 and Git 2.43.0 were used. Exact-SHA CI/CodeQL results will be reported
+  after the single commit/push; no extra milestone commit is planned.
 
 ## Previous Git compatibility milestone — non-commit Git refs (2026-10-04)
 

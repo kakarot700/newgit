@@ -23,6 +23,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned Rust toolchain
         run: rustup show
+      - name: Check Git interoperability prerequisites
+        run: |
+          command -v git
+          command -v ssh-keygen
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          text = subprocess.check_output(["git", "--version"], text=True)
+          match = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+          if match is None:
+              raise SystemExit(f"could not parse installed Git version: {text.strip()}")
+          version = tuple(map(int, match.groups()))
+          print(f"Git {'.'.join(map(str, version))}; SSH tag fixture requires Git >= 2.34.0")
+          if version < (2, 34, 0):
+              sys.exit("Git >= 2.34.0 is required for the SSH-signed interoperability fixtures")
+          PY
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

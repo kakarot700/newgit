@@ -32,8 +32,8 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | `refs/heads/*`, `refs/tags/*` | same ref names when they target commits | exact for tested commit refs; other object targets are refused |
 | other `refs/*` | same ref names (if the ref grammar accepts them) | commit targets only; other object targets are refused |
 | lightweight tag | ref → target snapshot | exact |
-| annotated tag | ref → target snapshot; **tagger + message stripped**, listed in the import report | lossy (documented) |
-| signed tag | signature stripped (`--signed-tags=strip`), then as annotated | lossy (documented) |
+| annotated tag | ref → target snapshot; **tagger + message, including any signature block, are stripped** and the tag ref is listed in `annotated_tags_stripped` | lossy (documented; Git-verified SSH-signed tag regression) |
+| signed tag | NewGit does not preserve or verify tag signatures; export can only make a lightweight tag | lossy; Git 2.43.0/Linux `fast-export --signed-tags=strip` retains the tested SSH signature bytes in tag data, which NewGit drops with the rest of the tag metadata; other signature formats/versions/platforms are untested |
 | ref targeting a blob, tree, or other non-commit object | no NewGit ref is written | refused before `fast-export`, because NewGit's Git export path represents snapshot histories |
 | Symbolic `HEAD` | NewGit symbolic HEAD, moved **in the same transaction** as refs | tested for an ordinary branch HEAD |
 | Detached `HEAD` | NewGit direct snapshot HEAD, moved **in the same transaction** as refs | the `fast-export` pseudo-ref `HEAD` is not imported as a named ref; tested for detached-only and detached-ahead-of-branch histories |
@@ -158,8 +158,13 @@ environment and does not claim other Git versions or operating systems.
 1. **Submodules (gitlinks, mode 160000) abort the import** with an actionable
    error; zero refs move (tested). NewGit has no gitlink concept.
 2. **Annotated/signed tag metadata** (tagger, message, signature) is not
-   representable — NewGit has no tag object type. Refs survive; metadata is
-   listed in the report.
+   representable — NewGit has no tag object type. Refs survive; metadata loss
+   is listed in the report. A real SSH-signed tag is verified by Git before
+   import; Git 2.43.0/Linux retains its SSH signature payload in the
+   `--signed-tags=strip` fast-export stream, but NewGit discards it when it
+   flattens the annotated tag. Export produces a lightweight tag. NewGit does
+   not verify the tag signature; other signature formats, Git versions, and
+   platforms are not established by this test.
 3. **Timestamps**: git stores whole seconds — NewGit milliseconds lose
    sub-second precision on export (import is exact; git has no sub-second).
 4. **Memory**: import caches per-commit tree states (for incremental streams
