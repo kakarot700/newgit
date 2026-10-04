@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: preserve valid UTF-8 Git pathnames when export must C-quote quotes or backslashes (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: prove empty-tree Git histories survive semantic import/export/reimport (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -49,7 +49,7 @@
   both passed on implementation SHA `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2`
   (runs are linked in Current status above).
 
-## Current Git compatibility milestone — C-quoted UTF-8 pathnames (2026-10-04)
+## Previous Git compatibility milestone — C-quoted UTF-8 pathnames (2026-10-04)
 
 - **Defect and reproduction:** a real Git 2.43.0 repository with a filename
   containing both non-ASCII UTF-8 and Git-quoted punctuation imported correctly,
@@ -79,6 +79,33 @@
   and CodeQL [run 37202630998](https://github.com/kakarot700/newgit/actions/runs/37202630998)
   both completed successfully on implementation SHA
   `b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`.
+
+## Current Git compatibility milestone — empty Git trees (2026-10-04)
+
+- **Evidence gap:** the matrix distinguished an empty Git repository (no
+  commits) from a commit whose tree is empty, but the latter was marked NOT
+  TESTED. A real Git 2.43.0 probe showed the existing stream conversion can
+  preserve a canonical empty root tree; the bounded work here establishes the
+  repeatable regression contract rather than changing the core architecture.
+- **Regression:** `tests/git_compat.rs::empty_git_trees_roundtrip_across_root_and_followup_commits`
+  uses Git CLI commits for an empty root, a populated tree, deletion of its
+  only file back to empty, and a consecutive empty commit. It compares source
+  and exported Git tree IDs, source-parent to exported-parent mapping, NewGit
+  root-tree entries, and every path/mode/blob through both conversion legs.
+  It also runs `git fsck --full` and deep NewGit verification after import and
+  reimport.
+- **Independent attack:** review caught that the first test version compared
+  only parent counts and checked only empty/non-empty status on final reimport.
+  Both assertions were strengthened: mapped parent identities must match, and
+  the complete reimported path/mode/blob set is compared with Git.
+- **Boundary:** empty-tree handling is now SUPPORTED only for this tested
+  semantic round-trip on Git 2.43.0/Linux. This does not claim general Git
+  object-hash or cross-platform compatibility.
+- **Local verification:** `cargo fmt --check`, `cargo clippy --all-targets
+  --locked -- -D warnings`, full debug and release suites (**287 passed each**),
+  `cargo build --release --locked`, SBOM drift check, and `git diff --check` all
+  pass. `tests/git_compat.rs` has **18 passing tests**. Hosted CI/CodeQL results
+  are pending for the pushed milestone head.
 
 ## Local development setup
 

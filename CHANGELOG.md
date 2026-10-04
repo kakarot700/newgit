@@ -27,6 +27,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   commit-specific error naming the code point and explaining that refs have
   not been updated. A real Git commit containing U+0001 verifies the refusal is
   atomic and the NewGit repository remains verifiable.
+- A real-Git round-trip now covers empty-tree history: an empty root commit, a
+  populated commit, deletion back to the canonical empty tree, and a consecutive
+  empty commit. Regression assertions compare exported tree IDs and mapped
+  parents, then verify every path, mode, and blob after reimport.
 
 ## [0.1.0] - 2026-10-04
 

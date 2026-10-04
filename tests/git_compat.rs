@@ -989,6 +989,222 @@ fn empty_git_repo_imports_cleanly() {
 }
 
 #[test]
+fn empty_git_trees_roundtrip_across_root_and_followup_commits() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    git(
+        &gdir,
+        &["commit", "--quiet", "--allow-empty", "-m", "empty root"],
+    );
+    let empty_tree = git_out(&gdir, &["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_string();
+    assert!(git_out(&gdir, &["ls-tree", "-r", "-z", "HEAD"]).is_empty());
+
+    write(&gdir, "tracked.txt", b"present between empty trees\n");
+    commit(&gdir, "populate tree");
+    git(&gdir, &["rm", "--quiet", "tracked.txt"]);
+    commit(&gdir, "return to empty tree");
+    git(
+        &gdir,
+        &[
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "empty follow-up",
+        ],
+    );
+
+    let source_commits: Vec<String> =
+        git_out(&gdir, &["rev-list", "--reverse", "refs/heads/master"])
+            .lines()
+            .map(str::to_owned)
+            .collect();
+    assert_eq!(source_commits.len(), 4);
+    let source_tree_oids: Vec<String> = source_commits
+        .iter()
+        .map(|commit| {
+            git_out(&gdir, &["rev-parse", &format!("{commit}^{{tree}}")])
+                .trim()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        source_tree_oids[0], empty_tree,
+        "root commit should have the canonical empty tree"
+    );
+    assert_ne!(
+        source_tree_oids[1], empty_tree,
+        "the second commit should populate the tree"
+    );
+    assert_eq!(
+        source_tree_oids[2], empty_tree,
+        "deleting the only file should restore the empty tree"
+    );
+    assert_eq!(
+        source_tree_oids[3], empty_tree,
+        "an empty follow-up commit keeps the empty tree"
+    );
+
+    let (_nd, repo) = temp_repo();
+    let imported = import_git(&repo, &gdir).unwrap();
+    assert_eq!(imported.commits, source_commits.len());
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+    let by_git_sha = snapshots_by_git_sha(&repo);
+    for (index, source_commit) in source_commits.iter().enumerate() {
+        let snapshot_oid = by_git_sha
+            .get(source_commit)
+            .unwrap_or_else(|| panic!("source commit {source_commit} was not imported"));
+        let snapshot = match repo.objects.get(snapshot_oid).unwrap() {
+            Object::Snapshot(snapshot) => snapshot,
+            _ => panic!("imported commit did not map to a snapshot"),
+        };
+        let imported_tree = ng_tree(&repo, *snapshot_oid);
+        let source_tree = git_tree(&gdir, source_commit);
+        assert_eq!(
+            imported_tree.len(),
+            source_tree.len(),
+            "tree entry count at commit {index}"
+        );
+        if source_tree_oids[index] == empty_tree {
+            assert!(
+                source_tree.is_empty(),
+                "source commit {index} should have no entries"
+            );
+            assert!(
+                imported_tree.is_empty(),
+                "imported commit {index} should have no entries"
+            );
+            let root = match repo.objects.get(&snapshot.root).unwrap() {
+                Object::Tree(tree) => tree,
+                _ => panic!("snapshot root is not a tree"),
+            };
+            assert!(
+                root.entries.is_empty(),
+                "imported root tree at commit {index} is not empty"
+            );
+        }
+        for (path, (mode, blob_sha)) in source_tree {
+            let (imported_mode, bytes) = imported_tree
+                .get(&path)
+                .unwrap_or_else(|| panic!("imported path {path:?} missing at commit {index}"));
+            assert_eq!(
+                imported_mode, &mode,
+                "mode changed for {path:?} at commit {index}"
+            );
+            assert_eq!(
+                bytes,
+                &git_blob(&gdir, &blob_sha),
+                "blob changed for {path:?} at commit {index}"
+            );
+        }
+    }
+
+    let outdir = d.path().join("out");
+    let exported = export_git(&repo, &outdir).unwrap();
+    assert_eq!(exported.commits, source_commits.len());
+    let exported_commits: Vec<String> =
+        git_out(&outdir, &["rev-list", "--reverse", "refs/heads/master"])
+            .lines()
+            .map(str::to_owned)
+            .collect();
+    assert_eq!(exported_commits.len(), source_commits.len());
+    let source_to_exported: BTreeMap<&str, &str> = source_commits
+        .iter()
+        .zip(&exported_commits)
+        .map(|(source, exported)| (source.as_str(), exported.as_str()))
+        .collect();
+    for (index, (source_commit, exported_commit)) in
+        source_commits.iter().zip(&exported_commits).enumerate()
+    {
+        let source_tree = git_out(&gdir, &["rev-parse", &format!("{source_commit}^{{tree}}")])
+            .trim()
+            .to_string();
+        let exported_tree = git_out(
+            &outdir,
+            &["rev-parse", &format!("{exported_commit}^{{tree}}")],
+        )
+        .trim()
+        .to_string();
+        assert_eq!(
+            exported_tree, source_tree,
+            "Git tree object changed at commit {index}"
+        );
+        let source_parents = git_out(&gdir, &["rev-list", "--parents", "-n", "1", source_commit]);
+        let source_parent_ids: Vec<&str> = source_parents.split_whitespace().skip(1).collect();
+        let expected_exported_parents: Vec<&str> = source_parent_ids
+            .iter()
+            .map(|parent| {
+                source_to_exported
+                    .get(parent)
+                    .copied()
+                    .unwrap_or_else(|| panic!("source parent {parent} has no exported counterpart"))
+            })
+            .collect();
+        let exported_parents = git_out(
+            &outdir,
+            &["rev-list", "--parents", "-n", "1", exported_commit],
+        );
+        let actual_exported_parents: Vec<&str> =
+            exported_parents.split_whitespace().skip(1).collect();
+        assert_eq!(
+            actual_exported_parents, expected_exported_parents,
+            "parent mapping changed at commit {index}"
+        );
+    }
+    assert_eq!(
+        git_out(
+            &outdir,
+            &["rev-parse", &format!("{}^{{tree}}", exported_commits[0])]
+        )
+        .trim(),
+        empty_tree
+    );
+    assert!(git_out(&outdir, &["ls-tree", "-r", "-z", &exported_commits[0]]).is_empty());
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+    git(&outdir, &["fsck", "--full"]);
+
+    let (_nd2, reimported_repo) = temp_repo();
+    let reimported = import_git(&reimported_repo, &outdir).unwrap();
+    assert_eq!(reimported.commits, source_commits.len());
+    assert!(verify(&reimported_repo, &VerifyOpts { deep: true }).ok());
+    let reimported_by_sha = snapshots_by_git_sha(&reimported_repo);
+    for (index, exported_commit) in exported_commits.iter().enumerate() {
+        let snapshot_oid = reimported_by_sha
+            .get(exported_commit)
+            .unwrap_or_else(|| panic!("exported commit {exported_commit} was not reimported"));
+        let tree = ng_tree(&reimported_repo, *snapshot_oid);
+        let exported_tree = git_tree(&outdir, exported_commit);
+        assert_eq!(
+            tree.len(),
+            exported_tree.len(),
+            "tree entry count changed at commit {index} after reimport"
+        );
+        for (path, (mode, blob_sha)) in exported_tree {
+            let (reimported_mode, bytes) = tree
+                .get(&path)
+                .unwrap_or_else(|| panic!("reimported path {path:?} missing at commit {index}"));
+            assert_eq!(
+                reimported_mode, &mode,
+                "mode changed for {path:?} after reimport"
+            );
+            assert_eq!(
+                bytes,
+                &git_blob(&outdir, &blob_sha),
+                "blob changed for {path:?} after reimport"
+            );
+        }
+        assert_eq!(
+            tree.is_empty(),
+            source_tree_oids[index] == empty_tree,
+            "empty-tree state changed at commit {index} after reimport"
+        );
+    }
+}
+
+#[test]
 fn import_into_used_repo_moves_refs_atomically() {
     let d = tempfile::tempdir().unwrap();
     let gdir = d.path().join("g");

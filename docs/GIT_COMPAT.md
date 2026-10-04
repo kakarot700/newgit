@@ -25,6 +25,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | original commit sha | `extras.git_sha1` (via `--show-original-ids`) | exact |
 | first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact (restored on export) |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
+| empty Git tree | empty NewGit `Tree` object | tested for an empty root commit, returning to empty after deleting the only file, and a consecutive empty commit; exact Git tree id survives export in this fixture |
 | Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping; tested with Unicode plus quotes/backslashes and a rename through import/export |
 | `refs/heads/*`, `refs/tags/*` | same ref names | exact |
 | other `refs/*` | same ref names (if the ref grammar accepts them) | exact |
@@ -105,6 +106,15 @@ between `main` and `refs/main`, validates the mapped destination with Git's
 `check-ref-format`, and verifies rejection before partial output. A separate
 real-Git round-trip fixture checks ordered parents for a valid merge whose second
 parent is already an ancestor of its first.
+
+`empty_git_trees_roundtrip_across_root_and_followup_commits` constructs its
+history with the Git CLI. It compares each source and exported tree object id,
+checks source-parent to exported-parent mapping, verifies empty root trees in
+NewGit, and checks every path, mode, and blob through a second NewGit import.
+The fixture covers an empty root, one populated commit, deletion back to an
+empty tree, and an empty follow-up commit; it also runs Git `fsck` and NewGit
+deep verification. This evidence is limited to the exercised Git 2.43.0 Linux
+environment and does not claim other Git versions or operating systems.
 
 ## Hard limitations (loud, never silent)
 
