@@ -75,5 +75,6 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 - `cargo build --release --locked`: clean
 - `python3 scripts/sbom.py | diff -u SBOM.md -`: clean (no dependency drift)
 - `git diff --check`: clean
-- Hosted CI and CodeQL are run after push; record their exact commit/run links in
-  `PROJECT_STATE.md` when results are available.
+- Hosted checks passed on implementation SHA
+  `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2`: [CI run 37201393466](https://github.com/kakarot700/newgit/actions/runs/37201393466),
+  [CodeQL run 37201393416](https://github.com/kakarot700/newgit/actions/runs/37201393416).
