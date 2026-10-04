@@ -4,6 +4,39 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Changed / Fixed (iteration 12 — final audit, 2026-10-04)
+- **Audit finding FIXED (security)**: `POST /v1/diff` accepted specs that
+  resolved internal namespaces (`workspaces/*`, `chains/*`) and the local
+  `ws:<name>` shorthand through `diff::resolve_tree` — a read-role (or
+  anonymous-read) client could probe workspace names/positions, violating
+  the it9 "internal namespaces never cross the wire" invariant. New
+  `check_wire_spec` guard refuses them with 400 `invalid`; regression tests
+  added inside `internal_namespaces_never_cross_the_wire` (8 probe calls
+  across both diff sides; honest ref+oid specs verified still working).
+- **Audit finding FIXED (DoS)**: `/v1/goals|changes|proposals` responses
+  were unbounded — large repos could produce arbitrarily large listings.
+  Now capped at `limits.max_batch_objects` with an additive `truncated`
+  flag on `ListData` (protocol doc updated).
+- **Audit finding FIXED (robustness)**: MCP `build_argv` placed bare
+  positional values (oids, specs, titles, ids) where a dash-leading value
+  could be reinterpreted as a CLI flag. All positionals now travel after a
+  `--` separator (flag values were already safe); dash-value cases added to
+  the argv mapping test; live MCP smoke proves `-dashy title` works.
+- README quickstart transcript executed VERBATIM against the built binary
+  end-to-end (goal → workspace → snapshot --goal → change → evidence record
+  → tested honesty gate → proposal → approve → atomic integrate → achieved
+  → `verify` 0 errors → `history --goal`). UI hash-route inputs traced
+  (tampered `?ref=` inert; goal-filter oids hex-gated server-side).
+- Final gate re-runs on final code: 278/278 debug + 278/278 release,
+  fmt/clippy clean, SBOM drift clean, cargo-audit 0 findings, cargo-deny
+  all-ok, dual-target rebuild bit-identical (sha256 `30714184…`), dist
+  tarball `bbafe611…` 28/28 checksums OK.
+- **Readiness decision: PRODUCTION-CANDIDATE** — all gates pass with
+  evidence except "CI green on hosted runner" (unsatisfiable from this
+  sandbox; every underlying check run locally) and same-host-only
+  reproducibility scope (KL #37). docs/COMPLETION_REPORT.md is the final
+  deliverable report.
+
 ### Added (iteration 11 — 2026-10-04)
 - **Release engineering**: `scripts/dist.sh` (dist dir + tarball +
   SHA256SUMS over every packaged file; verified with `sha256sum -c`),

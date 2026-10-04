@@ -128,6 +128,7 @@ All commands support `--json` for agents and scripts; exit codes are stable
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | symptom → diagnosis → fix |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | the change contract + code map |
 | [SBOM.md](SBOM.md) | generated bill of materials (runtime/build/dev closures) |
+| [docs/COMPLETION_REPORT.md](docs/COMPLETION_REPORT.md) | final build-loop report: inventories, audits, benchmarks, readiness decision |
 
 ## Building
 

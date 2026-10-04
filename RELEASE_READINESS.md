@@ -1,6 +1,21 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 11 of 12 complete — everything through release engineering has landed; what remains is iteration 12's final forensic audit and the readiness decision itself. Current blockers are listed per-gate below — most notably CI has never executed on a hosted runner from this environment.)
+**Current classification: PRODUCTION-CANDIDATE** (iteration 12 of 12 complete — 2026-10-04)
+
+**Decision (evidence-based, per the gate rule "PRODUCTION READY only when
+ALL gates pass"):** every gate in this file passes with recorded evidence
+EXCEPT one: *"CI green on hosted runner"* — unsatisfiable from this
+environment (no GitHub remote exists; the workflow is defined and every
+check it runs has been executed locally: fmt, clippy -D warnings, 278/278
+tests in debug AND release, cargo-audit 0 findings, cargo-deny all-ok,
+SBOM drift clean, dual-target bit-identical rebuild, dist + 28/28
+checksums). A second honest qualifier: build reproducibility is proven
+same-host only (KL #37). The final forensic audit (it12) found 3 real
+issues in the newest code — all 3 were FIXED with regression tests before
+this decision (TEST_MATRIX "Final audit" row). To convert CANDIDATE →
+READY: push to any GitHub repo, watch the CI workflow pass once, and
+re-run `scripts/dist.sh` on the runner artifacts. Everything else is
+done, tested, and documented.
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -13,7 +28,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] core repository operations (init/open/discover/refs/txn/HEAD/actors) — iteration 2 ✅ (74 tests)
 - [x] snapshots / status / history / workspaces — iteration 3 ✅ (13 ops + 7 e2e suites)
 - [x] diff engine (line + tree, renames, binary, mode, unified + JSON) — iteration 4 ✅ (8 suites + property reconstruct)
-- [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
+- [x] object model + store + corruption detection — iteration 1 ✅ (37 tests) COMPLETED by it7 verify layer: `verify --deep` re-encodes every object + walks every link (20 verify_gc suites), corruption/truncation/misfiling/bomb detection tested, decoders fuzzed (150k inputs, never panic), chaos suites deep-verify after every step — no partial remains
 - [x] changes / goals / evidence / evaluations / proposals — iteration 6 ✅ (9 workflow suites + two-agent e2e)
 - [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
 - [x] verification (fsck) — iteration 7 ✅ (`newgit verify [--deep]`, 20 verify_gc suites + chaos per-step)

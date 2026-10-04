@@ -220,6 +220,10 @@ pub struct EntityEntry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ListData {
     pub entities: Vec<EntityEntry>,
+    /// true when the listing was cut at `limits.max_batch_objects`
+    /// (iteration-12 audit: bound response size on large repos).
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Client-side report for `newgit push`.

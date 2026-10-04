@@ -378,7 +378,14 @@ fn arr(args: &Value, key: &str) -> Vec<String> {
 }
 
 fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
+    // Layout rule (iteration-12 audit hardening): every BARE POSITIONAL
+    // value (oid, spec, title, id, name) travels after a `--` separator, so
+    // a value that happens to start with `-` can never be reinterpreted as
+    // a flag by the CLI parser. Flag VALUES (--base x, -m x) are consumed
+    // positionally by Args and are safe as-is. Action words stay directly
+    // after the command family (family dispatch reads the raw token stream).
     let mut v: Vec<String> = vec![name.trim_start_matches("newgit_").to_string()];
+    let mut pos: Vec<String> = Vec::new(); // appended after "--" at the end
     match name {
         "newgit_status" => {
             if let Some(w) = s(args, "workspace") {
@@ -394,16 +401,16 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
             }
         }
         "newgit_cat" => {
-            v.push(need(args, "oid")?);
+            pos.push(need(args, "oid")?);
             if b(args, "raw") {
                 v.push("--raw".into());
             }
         }
         "newgit_diff" => {
             if let Some(a) = s(args, "a") {
-                v.push(a);
+                pos.push(a);
                 if let Some(bb) = s(args, "b") {
-                    v.push(bb);
+                    pos.push(bb);
                 }
             } else if s(args, "b").is_some() {
                 return Err(Error::Invalid("`b` requires `a`".into()));
@@ -430,7 +437,7 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
             }
         }
         "newgit_integrate" => {
-            v.push(need(args, "spec")?);
+            pos.push(need(args, "spec")?);
             if let Some(w) = s(args, "workspace") {
                 v.extend(["-w".into(), w]);
             }
@@ -449,29 +456,33 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                 "newgit_workspace" => match action.as_str() {
                     "list" => {}
                     "create" => {
-                        v.push(need(args, "name")?);
                         if let Some(base) = s(args, "base") {
                             v.extend(["--base".into(), base]);
                         }
+                        pos.push(need(args, "name")?);
                     }
-                    "show" | "discard" => {
-                        v.push(need(args, "name")?);
-                        if action == "discard" && b(args, "force") {
+                    "show" => pos.push(need(args, "name")?),
+                    "discard" => {
+                        if b(args, "force") {
                             v.push("--force".into());
                         }
+                        pos.push(need(args, "name")?);
                     }
                     other => return Err(bad_action(name, other)),
                 },
                 "newgit_goal" => match action.as_str() {
                     "list" => {}
                     "create" => {
-                        v.push(need(args, "title")?);
                         if let Some(d) = s(args, "description") {
                             v.extend(["--description".into(), d]);
                         }
+                        pos.push(need(args, "title")?);
                     }
-                    "show" => v.push(need(args, "id")?),
-                    "set-status" => v.extend([need(args, "id")?, need(args, "status")?]),
+                    "show" => pos.push(need(args, "id")?),
+                    "set-status" => {
+                        pos.push(need(args, "id")?);
+                        pos.push(need(args, "status")?);
+                    }
                     other => return Err(bad_action(name, other)),
                 },
                 "newgit_change" => match action.as_str() {
@@ -481,7 +492,6 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                         }
                     }
                     "create" => {
-                        v.push(need(args, "title")?);
                         v.extend(["--base".into(), need(args, "base")?]);
                         v.extend(["--result".into(), need(args, "result")?]);
                         if let Some(g) = s(args, "goal") {
@@ -490,10 +500,17 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                         if let Some(d) = s(args, "description") {
                             v.extend(["--description".into(), d]);
                         }
+                        pos.push(need(args, "title")?);
                     }
-                    "show" => v.push(need(args, "id")?),
-                    "set-status" => v.extend([need(args, "id")?, need(args, "status")?]),
-                    "attach-evidence" => v.extend([need(args, "id")?, need(args, "evidence_oid")?]),
+                    "show" => pos.push(need(args, "id")?),
+                    "set-status" => {
+                        pos.push(need(args, "id")?);
+                        pos.push(need(args, "status")?);
+                    }
+                    "attach-evidence" => {
+                        pos.push(need(args, "id")?);
+                        pos.push(need(args, "evidence_oid")?);
+                    }
                     other => return Err(bad_action(name, other)),
                 },
                 "newgit_evidence" => match action.as_str() {
@@ -513,7 +530,7 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                             v.extend(["--metric".into(), m]);
                         }
                     }
-                    "show" => v.push(need(args, "oid")?),
+                    "show" => pos.push(need(args, "oid")?),
                     "record" => {
                         if let Some(k) = s(args, "kind") {
                             v.extend(["--kind".into(), k]);
@@ -530,8 +547,10 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                                 "evidence record requires a non-empty `command` argv".into(),
                             ));
                         }
+                        // the recorded command IS the positional tail
                         v.push("--".into());
                         v.extend(cmd);
+                        return Ok(v);
                     }
                     other => return Err(bad_action(name, other)),
                 },
@@ -546,14 +565,13 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                             v.extend(["--dimension".into(), d]);
                         }
                     }
-                    "from-evidence" => v.push(need(args, "change_id")?),
-                    "show" => v.push(need(args, "oid")?),
+                    "from-evidence" => pos.push(need(args, "change_id")?),
+                    "show" => pos.push(need(args, "oid")?),
                     other => return Err(bad_action(name, other)),
                 },
                 "newgit_proposal" => match action.as_str() {
                     "list" => {}
                     "create" => {
-                        v.push(need(args, "title")?);
                         v.extend(["--change".into(), need(args, "change")?]);
                         if let Some(r) = s(args, "rationale") {
                             v.extend(["--rationale".into(), r]);
@@ -569,13 +587,14 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                         if !dep.is_empty() {
                             v.extend(["--depends".into(), dep.join(",")]);
                         }
+                        pos.push(need(args, "title")?);
                     }
-                    "show" | "approve" | "reject" | "close" => v.push(need(args, "id")?),
+                    "show" | "approve" | "reject" | "close" => pos.push(need(args, "id")?),
                     "integrate" => {
-                        v.push(need(args, "id")?);
                         if let Some(w) = s(args, "workspace") {
                             v.extend(["-w".into(), w]);
                         }
+                        pos.push(need(args, "id")?);
                     }
                     other => return Err(bad_action(name, other)),
                 },
@@ -587,6 +606,10 @@ fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
                 "unknown tool {other:?}; call tools/list for the catalog"
             )))
         }
+    }
+    if !pos.is_empty() {
+        v.push("--".into());
+        v.extend(pos);
     }
     Ok(v)
 }
@@ -687,7 +710,7 @@ mod tests {
     #[test]
     fn argv_building_matches_cli_syntax() {
         let cases: Vec<(Value, Vec<&str>)> = vec![
-            (json!({"oid":"ab"}), vec!["cat", "ab"]),
+            (json!({"oid":"ab"}), vec!["cat", "--", "ab"]),
             (
                 json!({"message":"m","workspace":"w1"}),
                 vec!["snapshot", "-m", "m", "-w", "w1"],
@@ -698,12 +721,12 @@ mod tests {
             ),
             (
                 json!({"a":"x","b":"y","no_renames":true}),
-                vec!["diff", "x", "y", "--no-renames"],
+                vec!["diff", "--no-renames", "--", "x", "y"],
             ),
             (
                 json!({"action":"create","title":"t","base":"b","result":"r","goal":"g"}),
                 vec![
-                    "change", "create", "t", "--base", "b", "--result", "r", "--goal", "g",
+                    "change", "create", "--base", "b", "--result", "r", "--goal", "g", "--", "t",
                 ],
             ),
             (
@@ -719,22 +742,26 @@ mod tests {
                 ],
             ),
             (
-                json!({"action":"create","title":"p","change":"c1","evidence":["e1","e2"],"depends":["d1"]}),
+                json!({
+                    "action":"create","title":"p","change":"c1",
+                    "evidence":["e1","e2"],"depends":["d1"]
+                }),
                 vec![
                     "proposal",
                     "create",
-                    "p",
                     "--change",
                     "c1",
                     "--evidence",
                     "e1,e2",
                     "--depends",
                     "d1",
+                    "--",
+                    "p",
                 ],
             ),
             (
                 json!({"action":"integrate","id":"p1","workspace":"w"}),
-                vec!["proposal", "integrate", "p1", "-w", "w"],
+                vec!["proposal", "integrate", "-w", "w", "--", "p1"],
             ),
             (
                 json!({"action":"create","target":"t","verdict":"pass","ai":true}),
@@ -748,6 +775,19 @@ mod tests {
                     "--ai",
                 ],
             ),
+            // audit hardening: a positional value that looks like a flag is
+            // inert because it travels after `--`
+            (json!({"oid":"--raw"}), vec!["cat", "--", "--raw"]),
+            (
+                json!({"action":"create","title":"--force","base":"b","result":"r"}),
+                vec![
+                    "change", "create", "--base", "b", "--result", "r", "--", "--force",
+                ],
+            ),
+            (
+                json!({"spec":"--no-renames"}),
+                vec!["integrate", "--", "--no-renames"],
+            ),
         ];
         for (i, (args, want)) in cases.into_iter().enumerate() {
             let names = [
@@ -760,6 +800,9 @@ mod tests {
                 "newgit_proposal",
                 "newgit_proposal",
                 "newgit_evaluation",
+                "newgit_cat",
+                "newgit_change",
+                "newgit_integrate",
             ];
             let got = build_argv(names[i], &args).unwrap();
             assert_eq!(

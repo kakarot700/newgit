@@ -163,8 +163,11 @@ so agents and the embedded UI never need to guess oid→shape mapping:
 
 #### `POST /v1/diff` `{a,b,content?,context?,no_renames?}` → `{a_root,b_root,diff,unified}`
 
-- `a`/`b` accept any spec `diff::resolve_tree` accepts: ref name, oid,
-  `ws:<name>`. Unknown ⇒ 404.
+- `a`/`b` accept a (user-namespace) ref name or an oid/hex-prefix. The
+  local-only shorthands are REFUSED with 400 (`invalid`): `ws:<name>` and
+  internal namespaces (`workspaces/*`, `chains/*`) never cross the wire —
+  the diff endpoint must not become a probe channel for them (same
+  invariant as `/v1/refs` and `refs/update`). Unknown ⇒ 404.
 - `diff` = the full `TreeDiff` JSON (identical to `newgit diff --json`:
   files[] with kind/path/old_path/modes/oids/binary/similarity + rename
   detection unless `no_renames`).
@@ -175,10 +178,12 @@ so agents and the embedded UI never need to guess oid→shape mapping:
 
 #### `GET /v1/goals` · `GET /v1/changes[?goal=<hex>]` · `GET /v1/proposals`
 
-→ `{entities:[{oid,data}],count}` — `data` is the wrapped object in
+→ `{entities:[{oid,data}],truncated}` — `data` is the wrapped object in
 `{"type","data"}` form. `changes?goal=` filters server-side (invalid hex ⇒
 400; matching-nothing ⇒ empty list, NOT 404). Same enumeration as
-`goal list`/`change list --goal`/`proposal list`.
+`goal list`/`change list --goal`/`proposal list`. Listings are capped at
+`limits.max_batch_objects` entities; when cut, `truncated:true` (clients
+narrow with `?goal=` or paginate locally by oid).
 
 ### Static UI route (iteration 10)
 

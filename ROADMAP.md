@@ -137,6 +137,16 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - DONE: docs set complete — DEPLOYMENT.md (systemd/nginx/caddy/tunnel), TESTING.md,
   TROUBLESHOOTING.md, CONTRIBUTING.md; README index updated.
 
-## Iteration 12 — Final forensic audit + readiness gate  [ ]
-- Hostile review passes 2–8 per subsystem; security regression tests for all findings.
-- Fill RELEASE_READINESS.md gates with evidence; classify honestly.
+## Iteration 12 — Final forensic audit + readiness gate  [x] ✅ 2026-10-04
+- DONE: hostile review of the newest seams (remote it10 endpoints, UI routes/hash params, MCP
+  argv, audit/listing bounds) + README quickstart run VERBATIM end-to-end against the real
+  binary. 3 findings → 3 fixes → 3 regression tests (TEST_MATRIX "Final audit (it12)" row):
+  diff internal-spec probe (check_wire_spec), unbounded listings (cap + truncated flag),
+  MCP flag-shaped positionals (`--` separator). Nothing unfixed, nothing undocumented.
+- DONE: all gates re-run on FINAL code: fmt ✓, clippy -D warnings ✓, 278/278 debug ✓,
+  278/278 release ✓ (chaos/fault/fuzz included), SBOM drift ✓, cargo-audit ✓ 0 findings,
+  cargo-deny ✓ all-ok, dual-target rebuild bit-identical (sha256 30714184…), dist 28/28 ✓.
+- DONE: RELEASE_READINESS.md filled gate-by-gate; evidence-based classification:
+  **PRODUCTION-CANDIDATE** — every gate passes locally EXCEPT "CI green on hosted runner",
+  which is unsatisfiable from this sandbox (no GitHub remote); all its underlying checks have
+  been executed here. Full report: docs/COMPLETION_REPORT.md.

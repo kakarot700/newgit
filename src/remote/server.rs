@@ -232,6 +232,21 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
     let _ = http::write_response(&mut w, status, ctype, &body);
 }
 
+/// Wire-spec guard (iteration 12 audit): diff specs may be ref names or
+/// oids, but the internal namespaces (`workspaces/*`, `chains/*`) and the
+/// local-only `ws:<name>` shorthand NEVER cross the wire — same invariant
+/// as /v1/refs listings and refs/update (THREAT_MODEL §E). Without this,
+/// a read-role (or anonymous-read) client could probe workspace names and
+/// positions through /v1/diff.
+fn check_wire_spec(spec: &str) -> Result<()> {
+    if spec.starts_with("ws:") || crate::remote::proto::is_internal_ref(spec) {
+        return Err(Error::Invalid(format!(
+            "spec {spec:?}: internal namespaces and the ws: shorthand are local-only (not exposed remotely)"
+        )));
+    }
+    Ok(())
+}
+
 /// Route one request. Returns (status, body, principal-id, error-category).
 fn route(
     repo: &Repo,
@@ -588,6 +603,8 @@ fn dispatch(
         }
         ("POST", "/v1/diff") => {
             let r: DiffReq = body_json(req)?;
+            check_wire_spec(&r.a)?;
+            check_wire_spec(&r.b)?;
             let mut opts = crate::diff::DiffOpts::default();
             if r.no_renames {
                 opts.detect_renames = false;
@@ -649,8 +666,16 @@ fn dispatch(
                     data: v,
                 });
             }
-            Ok(serde_json::to_value(ListData { entities })
-                .map_err(|e| Error::Bug(e.to_string()))?)
+            // bound the response (iteration-12 audit): cap at the batch limit
+            let truncated = entities.len() > limits.max_batch_objects;
+            if truncated {
+                entities.truncate(limits.max_batch_objects);
+            }
+            Ok(serde_json::to_value(ListData {
+                entities,
+                truncated,
+            })
+            .map_err(|e| Error::Bug(e.to_string()))?)
         }
         ("GET", "/v1/audit") => {
             let limit: usize = req

@@ -720,6 +720,40 @@ fn internal_namespaces_never_cross_the_wire() {
         "{:?}",
         refs.refs
     );
+
+    // iteration-12 audit regression: /v1/diff specs must not become a probe
+    // channel for internal namespaces (the diff endpoint resolves ref names)
+    let main_oid = srv_repo.refs.read("refs/main").unwrap().to_hex();
+    for spec in [
+        "workspaces/local-only",
+        "chains/goal/probe",
+        "ws:local-only",
+        "ws:main",
+    ] {
+        for side in ["a", "b"] {
+            let mut body = serde_json::Map::new();
+            body.insert("a".into(), json!(main_oid));
+            body.insert("b".into(), json!(main_oid));
+            body.insert(side.into(), json!(spec));
+            let e = writer
+                .call("POST", "/v1/diff", Some(&serde_json::Value::Object(body)))
+                .expect_err(&format!("diff spec {spec:?} must be refused"));
+            assert!(
+                matches!(e, Error::Invalid(_) | Error::Protocol(_)),
+                "spec {spec:?}: {e:?}"
+            );
+        }
+    }
+    // ...while honest specs still work (ref name + oid)
+    let ok_diff = writer
+        .call(
+            "POST",
+            "/v1/diff",
+            Some(&json!({"a": "refs/main", "b": main_oid})),
+        )
+        .unwrap();
+    let dd: DiffData = serde_json::from_value(ok_diff).unwrap();
+    assert_eq!(dd.a_root, dd.b_root, "same commit ⇒ empty diff");
     srv.handle.shutdown();
 }
 
@@ -1335,6 +1369,7 @@ fn object_diff_and_workflow_endpoints() {
     let v = rc.call("GET", "/v1/goals", None).unwrap();
     let l: ListData = serde_json::from_value(v).unwrap();
     assert_eq!(l.entities.len(), 1);
+    assert!(!l.truncated, "small listing must not report truncation");
     assert_eq!(l.entities[0].data["data"]["title"], "Ship the UI");
     let v = rc
         .call("GET", &format!("/v1/changes?goal={goal_id}"), None)
