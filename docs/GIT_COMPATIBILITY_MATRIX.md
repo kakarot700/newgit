@@ -1,0 +1,51 @@
+# Git compatibility matrix
+
+**Scope:** this matrix describes NewGit's one-shot `import-git` / `export-git` conversion through the installed Git program's `fast-export` / `fast-import` streams. It does **not** describe Git smart HTTP/SSH remotes or imply that an ordinary Git client can fetch from or push to a NewGit server. The implementation and tests were reviewed at repository commit `d84ec6c1bbd7e82aa4df8d58b65ffa84eef7d0cd` (`main`); this document records existing evidence and adds no compatibility tests.
+
+## Status meanings
+
+- **SUPPORTED** — the specific behavior stated in the row has a passing automated test using real Git input/output. This is a bounded test claim, not a claim of complete Git compatibility.
+- **PARTIAL** — tests cover a stated subset, while an important portion of the feature is known to be absent, lossy, or unverified.
+- **LOSSY** — conversion is known to discard or change part of the Git representation.
+- **UNSUPPORTED** — there is no conversion support for the feature; relevant refs/data may be omitted and reported.
+- **REFUSED** — the importer rejects the input with an error rather than importing a misleading representation.
+- **NOT TESTED** — no automated Git interoperability test establishes behavior for this feature. Code paths or prose documentation alone are not treated as proof of support.
+
+## Feature matrix
+
+| Git feature | Status | Evidence and boundary |
+|---|---|---|
+| Blobs | **SUPPORTED** | Real-Git tests compare imported blob bytes against `git cat-file`; export round-trip also compares Git blob object IDs for the tested fixture. This does not make NewGit's internal object ID a Git blob ID. `tests/git_compat.rs::import_matches_git_content_exactly` (lines 229–369) and `::export_roundtrip_matches_git` (386–499). |
+| Trees | **SUPPORTED** | The tested histories preserve per-commit paths, file modes, and file bytes through import/export. Tests compare the resulting trees by entries and blob IDs, not by asserting every Git tree object ID. Same tests as above. |
+| Commits | **SUPPORTED** (semantic) | The fixture checks imported commit count, messages, author metadata, timestamps/time zones, parent counts, and merge-parent order; export checks commit count, author/committer metadata, messages, and first-parent history. Commit-object hash identity is **not** asserted. `tests/git_compat.rs::import_matches_git_content_exactly` (229–369), `::export_roundtrip_matches_git` (386–499). |
+| Lightweight tags | **SUPPORTED** | A real lightweight tag is imported as a ref and survives export with the referenced tree. The rich fixture creates `light-tag`; import checks the ref and the round-trip checks its tree. `tests/git_compat.rs` (138–139, 229–269, 386–425). |
+| Annotated tags | **LOSSY** | The tag ref is kept but its tagger/message metadata is stripped; export can only recreate a lightweight tag. The import test checks the stripped-tag report and ref survival. `src/gitio/import.rs` (338–352), `docs/GIT_COMPAT.md` (30–32, 54, 80–84), `tests/git_compat.rs` (138–139, 229–269, 397–412). |
+| Tag objects | **LOSSY** | NewGit has no Git tag-object representation: an annotated tag becomes a ref to its target snapshot, not a preserved tag object. The annotated-tag fixture verifies that the importer reports stripping; it does not assert byte-for-byte tag-object preservation. Same references as the annotated-tags row. |
+| Signed tag objects/signatures | **LOSSY** | The import command explicitly requests `--signed-tags=strip`; the documented result is that tag signatures are discarded. The fixture creates an unsigned annotated tag, so signature-byte behavior has no signed-tag regression test. `src/gitio/import.rs` (111–122), `KNOWN_LIMITATIONS.md` (84–87), `DECISIONS.md` (277–303). |
+| Signed commits | **NOT TESTED** | No signed-commit fixture or signature-preservation/verification test was found. Do not rely on import/export to preserve or validate commit signatures. `tests/git_compat.rs` has no signed-commit case; NewGit's stated lack of object signing is in `KNOWN_LIMITATIONS.md` (13–14). |
+| Symbolic refs | **PARTIAL** | The tested symbolic `HEAD` pointing at `refs/heads/master` is mapped on import and restored on export. Detached `HEAD` and arbitrary non-`HEAD` symbolic refs are not covered by the Git interoperability tests. `tests/git_compat.rs` (269–273, 488–491); implementation `src/gitio/import.rs` (81–109, 406–429) and `src/gitio/export.rs` (222–249). |
+| Git reflogs | **UNSUPPORTED** | Git reflog entries are not part of the import/export mapping; NewGit's own transactional reflog is a separate internal facility and is not evidence that Git reflogs round-trip. The Git interoperability suite has no reflog-transfer test. See the stream-only import/export paths in `src/gitio/import.rs` (111–140, 391–429) and `src/gitio/export.rs` (70–103, 142–204); contrast NewGit's local reflog API in `src/repo/refs.rs` (167–169). |
+| Git notes | **UNSUPPORTED** | `refs/notes/*` are intentionally skipped and reported. The real-Git fixture creates a note and asserts both the skip report and absence of the notes ref in NewGit. `src/gitio/import.rs` (55–63); `tests/git_compat.rs` (149, 229–263); `docs/GIT_COMPAT.md` (44–47). |
+| Replace refs | **UNSUPPORTED** | `refs/replace/*` are explicitly excluded by the importer, but no dedicated replace-ref fixture/test was found; this is an inspected implementation limitation, not a regression-tested contract. `src/gitio/import.rs` (55–63); `docs/GIT_COMPAT.md` (44–47). |
+| Git namespaces | **NOT TESTED** | No `git --namespace` or `refs/namespaces/*` interoperability fixture/test was found. Generic ref mapping does not establish Git namespace semantics. |
+| Gitlinks | **REFUSED** | A mode `160000` gitlink aborts import with an actionable error. The real submodule test verifies the error, zero refs moved, and repository integrity. `src/gitio/import.rs` (206–215, 462–483); `tests/git_compat.rs::submodule_import_is_refused_atomically` (550–585). |
+| Submodules | **REFUSED** | Submodules are not represented as nested repositories; import fails atomically rather than fabricating support. Same passing refusal test as the gitlinks row. `docs/GIT_COMPAT.md` (78–84). |
+| Unusual path encodings | **PARTIAL** | A UTF-8 Unicode filename is exercised through import/export. Non-UTF-8 Git paths are explicitly rejected; other unusual byte sequences and the full range of quoted/control-character path cases are not established by the fixture. `tests/git_compat.rs` (76–81, 279–304, 386–425); `src/gitio/import.rs` (178–183, 229–233); `KNOWN_LIMITATIONS.md` (5–8). |
+| Unusual commit messages | **PARTIAL** | A UTF-8 Unicode, multiline message is tested. Non-UTF-8 messages are converted lossily and flagged in snapshot extras; the fixture does not exercise invalid UTF-8 or assert exact trailing-newline bytes (its comparisons trim line endings). `tests/git_compat.rs` (90–92, 305–312, 458–473); `src/gitio/import.rs` (299–304); `KNOWN_LIMITATIONS.md` (96–98). |
+| Binary files | **SUPPORTED** | A blob containing NUL and high-bit bytes is created with real Git and compared byte-for-byte after import/export. `tests/git_compat.rs` (70–72, 279–304, 412–424). |
+| Symlinks | **SUPPORTED** | A real symlink is imported as mode `120000`; its target bytes are compared, and export is checked for a materialized symlink. `tests/git_compat.rs` (81–82, 279–304, 492–499). |
+| Executable modes | **SUPPORTED** | The fixture sets an executable bit with Git, compares mode `100755` on import/export, and checks the resulting tree. `tests/git_compat.rs` (71–74, 172–179, 279–304, 412–424). |
+| Empty trees | **NOT TESTED** | No real Git commit whose tree is empty is constructed. `empty_git_repo_imports_cleanly` tests a repository with no commits, and the “empty commit” fixture has an existing tree; neither proves empty-tree interoperability. `tests/git_compat.rs` (114–117, 587–597). |
+| Empty commits | **SUPPORTED** | The real-Git fixture creates an `--allow-empty` commit; import/export assertions preserve the commit count and history. `tests/git_compat.rs` (114–117, 229–369, 386–404). |
+
+## Exact Git objects versus semantic repository compatibility
+
+These are different guarantees. **Exact Git object compatibility** means that the relevant serialized Git object bytes—and therefore its Git object ID under the repository's object hash format—are preserved. **Semantic repository compatibility** means that the converted repository retains the tested content and behavior, such as file bytes, modes, refs, commit metadata, and ancestry, even if its internal representation or object IDs differ.
+
+NewGit computes internal object IDs as SHA-256 over its own canonical object encoding (`src/object/id.rs` lines 1–35; `docs/STORAGE_FORMAT.md` §1). Git import stores original Git commit SHA-1 values as metadata where available, but NewGit snapshot IDs are not Git commit IDs. The existing tests establish exact Git blob IDs for the tested export round-trip; they establish semantic commit/tree/history equivalence for the tested fixture, **not** general Git commit/tree ID equality. Annotated tag objects, signatures, reflogs, and omitted refs are outside that round-trip guarantee.
+
+## Test and CI evidence
+
+The existing interoperability tests use the installed `git` executable to generate repositories and inspect results. On this checkout, `git --version` reported **2.43.0** and `cargo test --locked --test git_compat` passed **9 tests, 0 failures**. The suite is included in the CI workflow's debug and release `cargo test` steps (`.github/workflows/ci.yml` lines 36–45); that workflow uses Ubuntu 24.04 and does not define a separate Git-version or operating-system compatibility matrix. The current evidence therefore establishes the tested conversion cases on the exercised Linux/Git environment, not broad platform coverage.
+
+The existing test inventory is summarized in `TEST_MATRIX.md` (lines 30, 54–57, 64–73), and the conversion mapping and known limitations are documented in `docs/GIT_COMPAT.md` and `KNOWN_LIMITATIONS.md`. Neither document should be read as extending the automated evidence listed above.
