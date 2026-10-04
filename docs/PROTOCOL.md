@@ -57,14 +57,18 @@ creates or updates per request, including a first push to an empty repository.
 Existing branch updates must be fast-forwards. Every requested update must be
 accepted by Git in the disposable projection before any canonical refs move; if
 Git accepts only a subset, the adapter returns HTTP 409 and commits none of the
-NewGit refs. The server does **not** advertise Git's separate `atomic`
-capability, so `git push --atomic` is not supported. Deletes, tags and other
-namespaces, signed pushes, and protocol versions other than v0 are refused;
-Git enforces non-fast-forward policy in the projection. A branch such as
-`refs/heads/main` maps to NewGit's `refs/main`. Unmapped names must pass
-NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover initial
-branch creation, single- and multi-ref fast-forwards/creation, post-push fetch,
-and rejection paths; other versions/platforms are not claimed.
+NewGit refs. For explicit `git push --atomic`, Git's `receive-pack` projection
+enforces all-or-none policy validation, and NewGit commits all accepted canonical
+refs in one CAS-guarded journal transaction; if any requested update is rejected
+or any CAS check fails, no canonical refs move. The server advertises Git's
+`atomic` capability to match those guarantees. An ordinary non-atomic request
+that Git accepts only in part is instead rejected with HTTP 409. Deletes, tags
+and other namespaces, signed pushes, and protocol versions other than v0 are
+refused; Git enforces non-fast-forward policy in the projection. A branch such
+as `refs/heads/main` maps to NewGit's `refs/main`. Unmapped names must pass
+NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover atomic success
+and all-ref rejection, initial branch creation, ordinary multi-ref pushes,
+post-push fetch, and rejection paths; other versions/platforms are not claimed.
 
 The adapter materializes the full Git view independently for every discovery
 and POST request. Git's pack negotiation can reduce transferred bytes, but it

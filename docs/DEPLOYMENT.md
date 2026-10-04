@@ -176,9 +176,10 @@ HTTPS only through a trusted TLS-terminating reverse proxy (see §2.3).
 Git smart HTTP supports upload-pack plus a narrow receive-pack path: one or
 more write-token-authenticated branch creates or fast-forward updates per
 request, committed together in NewGit. Tags, deletes, and non-fast-forward
-pushes are refused; a partially accepted request changes no canonical refs.
-Git's separate `--atomic` push capability is not advertised or supported. The
-server requires the system `git` executable.
+pushes are refused; a partially accepted ordinary request changes no canonical
+refs. The server advertises Git's `atomic` capability: `git push --atomic` is
+covered by a real-Git success test and an all-ref rejection test. The server
+requires the system `git` executable.
 The existing `--max-body` setting caps both inbound HTTP request bodies and
 buffered Git pack/advertisement responses (default 64 MiB); increase it for
 larger packs. Each Git request has a 120-second processing deadline, but there

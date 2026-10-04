@@ -72,17 +72,18 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
     real Git CLI tests cover one or more write-authenticated `refs/heads/*`
     creates or fast-forward updates per request, including an initial push to
-    an empty repository. All accepted canonical refs share one NewGit journaled
-    transaction; if Git accepts only part of a request in the disposable
-    projection, the HTTP request fails and no canonical refs are committed.
-    The server does not advertise Git's separate `--atomic` capability. Deletes,
-    tags, signed pushes, and forced non-fast-forward updates are refused;
-    non-v0 receive-pack, Git-over-SSH, and GitHub/GitLab hosting features are
-    not implemented. Every request rebuilds a temporary Git view from NewGit's
-    canonical objects/refs. If a process or storage failure interrupts promotion
-    of immutable objects, unreachable objects may remain, but the transactional
-    ref set is not published to an incomplete graph. See `docs/PROTOCOL.md` and
-    `docs/GIT_COMPATIBILITY_MATRIX.md`.
+    an empty repository. The server advertises Git's `atomic` capability: a
+    real-Git test verifies an atomic multi-ref success and a policy rejection
+    that leaves canonical refs and object inventory unchanged. All accepted
+    canonical refs share one NewGit journaled transaction; an ordinary request
+    that Git accepts only in part fails at the HTTP boundary without committing
+    canonical refs. Deletes, tags, signed pushes, and forced non-fast-forward
+    updates are refused; non-v0 receive-pack, Git-over-SSH, and GitHub/GitLab
+    hosting features are not implemented. Every request rebuilds a temporary
+    Git view from NewGit's canonical objects/refs. If a process or storage
+    failure interrupts promotion of immutable objects, unreachable objects may
+    remain, but the transactional ref set is not published to an incomplete
+    graph. See `docs/PROTOCOL.md` and `docs/GIT_COMPATIBILITY_MATRIX.md`.
 
 ## Remote transports and Git smart HTTP
 12. Transport security relies on a TLS-terminating reverse proxy; the built-in

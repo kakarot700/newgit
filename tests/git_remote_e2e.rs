@@ -164,6 +164,23 @@ fn raw_git_receive_get_status(addr: SocketAddr, authorization: Option<&str>) -> 
         .unwrap()
 }
 
+fn raw_git_receive_advertisement(addr: SocketAddr, authorization: &str) -> Vec<u8> {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    write!(
+        stream,
+        "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {authorization}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let headers_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    assert!(response[..headers_end].starts_with(b"HTTP/1.1 200"));
+    response[headers_end + 4..].to_vec()
+}
+
 fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8]) -> u16 {
     let mut stream = TcpStream::connect(addr).unwrap();
     write!(
@@ -376,6 +393,12 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     assert_eq!(
         raw_git_receive_get_status(server.addr(), Some(&write_auth)),
         200
+    );
+    let receive_advertisement = raw_git_receive_advertisement(server.addr(), &write_auth);
+    assert!(
+        String::from_utf8_lossy(&receive_advertisement).contains(" atomic "),
+        "receive-pack must advertise the atomic capability: {:?}",
+        String::from_utf8_lossy(&receive_advertisement)
     );
     let clone_path = root.join("clone");
     let clone_path_str = clone_path.to_str().unwrap();
@@ -646,11 +669,10 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     ]);
     assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
 
-    // One ordinary git push updates an existing branch, advances another
-    // existing branch, and creates a third branch. The server does not
-    // advertise Git's separate `--atomic` capability; canonical NewGit refs
-    // nevertheless share one local journaled transaction after all updates
-    // have passed projection-side Git checks.
+    // One `git push --atomic` updates an existing branch, advances another
+    // existing branch, and creates a third branch. Git's projection-side
+    // all-or-none checks and NewGit's canonical transaction back the
+    // advertised capability.
     std::fs::write(clone_path.join("multi-ref.txt"), b"one multi-ref push\n").unwrap();
     git(&["-C", clone_path_str, "add", "multi-ref.txt"]);
     git(&[
@@ -667,6 +689,7 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "-C",
         clone_path_str,
         "push",
+        "--atomic",
         "origin",
         "main",
         "main:refs/heads/published",
@@ -854,6 +877,34 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         .is_none());
     assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
     assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
+
+    // With atomic advertised, a policy failure on one ref rejects the whole
+    // push in Git's projection. No companion branch or received object is
+    // promoted into canonical NewGit storage.
+    let atomic_multi_push = git_fails(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--atomic",
+        "--force",
+        "origin",
+        "divergent:refs/heads/main",
+        "main:refs/heads/atomic-rejected-companion",
+    ]);
+    let atomic_multi_stderr = String::from_utf8_lossy(&atomic_multi_push.stderr);
+    assert!(
+        !atomic_multi_stderr.is_empty(),
+        "Git should report the rejected atomic multi-ref push"
+    );
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
+    assert!(newgit
+        .refs
+        .read_opt("refs/atomic-rejected-companion")
+        .unwrap()
+        .is_none());
 
     server.shutdown();
 }

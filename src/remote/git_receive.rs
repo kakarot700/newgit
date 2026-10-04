@@ -63,9 +63,9 @@ pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
     Ok(response)
 }
 
-/// Accept exactly one create/fast-forward branch update. Git handles packfile
+/// Accept one or more create/fast-forward branch updates. Git handles packfile
 /// decoding and fsck in the disposable projection; NewGit's canonical objects
-/// and refs are changed only after import/validation succeeds and the observed
+/// and refs are changed only after import/validation succeeds and every observed
 /// old canonical tip still passes a CAS check under the transaction lock.
 pub fn receive_pack(
     repo: &Repo,
@@ -142,10 +142,10 @@ pub fn receive_pack(
         )));
     }
 
-    // Git may accept some commands in a non-atomic protocol request while
-    // rejecting others. Never promote such a partial projection: NewGit refs
-    // are committed together below, and HTTP failure avoids reporting a
-    // projected success that was not made canonical.
+    // Git may accept some commands in an ordinary (non-atomic) protocol
+    // request while rejecting others. Never promote such a partial projection:
+    // NewGit refs are committed together below, and HTTP failure avoids
+    // reporting a projected success that was not made canonical.
     let mut accepted = 0usize;
     for update in &updates {
         let final_git_tip = git_ref_oid(&view, &update.push.ref_name, deadline)?;
@@ -379,7 +379,7 @@ fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
             "-c",
             "receive.denyCurrentBranch=ignore",
             "-c",
-            "receive.advertiseAtomic=false",
+            "receive.advertiseAtomic=true",
             "-c",
             "receive.advertisePushOptions=false",
             "receive-pack",
