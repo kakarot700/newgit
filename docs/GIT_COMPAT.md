@@ -35,6 +35,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | Symbolic `HEAD` | NewGit symbolic HEAD, moved **in the same transaction** as refs | tested for an ordinary branch HEAD |
 | Detached `HEAD` | NewGit direct snapshot HEAD, moved **in the same transaction** as refs | the `fast-export` pseudo-ref `HEAD` is not imported as a named ref; tested for detached-only and detached-ahead-of-branch histories |
 | Non-`HEAD` symbolic refs | not imported; detected with `git for-each-ref` and listed in `refs_skipped` | unsupported: NewGit refs are direct object pointers; a real-Git fixture with two branch aliases confirms Git 2.43.0 `fast-export --all` omits them |
+| Git replace refs | `refs/replace/*` skipped and reported; `fast-export` runs with `GIT_NO_REPLACE_OBJECTS=1` | replacement overlays are unsupported; the test proves ordinary branch history is imported from stored objects rather than silently rewritten through a replacement commit |
 
 **Atomicity.** Objects are written first (content-addressed, idempotent);
 then ALL refs + HEAD move in ONE transaction. A crash or any error mid-import
@@ -50,6 +51,14 @@ repos yields **identical object ids** for every ref — tested
 `refs/worktree/*`. Non-`HEAD` symbolic refs are separately discovered and
 reported because `fast-export --all` omits them. NewGit-internal namespaces
 (`workspaces/*`, `chains/*`) are never exported.
+
+Replace-ref semantics are not imported. Since Git normally applies replacement
+objects transparently during history traversal, the importer sets
+`GIT_NO_REPLACE_OBJECTS=1` for `fast-export`: this avoids silently changing an
+ordinary branch's stored commit/tree/message when `refs/replace/*` is skipped.
+The regression fixture confirms this policy for one replacement commit on Git
+2.43.0/Linux. Git commands that honor replacement refs can therefore display a
+different effective history than the stored-object history NewGit imports.
 
 ## Export mapping (NewGit → git)
 
@@ -151,6 +160,12 @@ environment and does not claim other Git versions or operating systems.
    refs; the tested branch aliases are omitted by Git 2.43.0 `fast-export --all`.
    The pre-scan and export are separate Git commands, so concurrent source-ref
    mutation is not synchronized or covered by this guarantee.
+10. **Replace-ref overlays are unsupported.** `refs/replace/*` are skipped and
+    reported. Import disables Git's replacement-object substitution while
+    running `fast-export`, preserving stored ordinary-branch history rather than
+    silently rewriting it through an omitted replacement ref. The Git-visible
+    replacement-aware view is not reproduced; this behavior is regression-tested
+    for one replacement commit on Git 2.43.0/Linux.
 
 ## CLI details
 

@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: make Git non-`HEAD` symbolic-ref omission explicit and regression-tested (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: prevent unsupported replace refs from silently rewriting ordinary branch history during import (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -112,7 +112,7 @@
   validation head listed above; this final state-record commit is rechecked on
   its own pushed SHA before completion.
 
-## Current Git compatibility milestone — non-`HEAD` symbolic refs (2026-10-04)
+## Previous Git compatibility milestone — non-`HEAD` symbolic refs (2026-10-04)
 
 - **Evidence gap and reproduction:** Git 2.43.0 `for-each-ref` listed two
   ordinary branch aliases pointing to `refs/heads/master`, while
@@ -140,12 +140,41 @@
   refs are direct object pointers. Evidence is limited to Git 2.43.0 on Linux.
   Symbolic-ref discovery and `fast-export` are separate Git commands; concurrent
   mutation of the source refs is not synchronized or tested.
-- **Local verification:** Git interoperability suite **19 passed**; complete
-  debug and release suites **288 passed each**; `cargo fmt --check`,
+- **Local verification:** Git interoperability suite **19 passed**; complete debug and release suites **288 passed each**; `cargo fmt --check`,
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `cargo build --release --locked`, SBOM drift check, and `git diff --check` all
+  pass. The implementation SHA above passed hosted CI and CodeQL; the
+  final state-record head is checked separately before completion.
+
+## Current Git compatibility milestone — replace-ref overlays (2026-10-04)
+
+- **Defect and reproduction:** a real Git 2.43.0 fixture created an ordinary
+  three-commit branch plus `refs/replace/<target>` pointing to a different
+  commit. Default `git fast-export --all` substituted the replacement object
+  while traversing the branch; before the fix, import stored the replacement
+  message (`replacement object`) as the original target commit's content.
+- **Implementation:** the importer sets `GIT_NO_REPLACE_OBJECTS=1` only for its
+  `fast-export` subprocess. Since NewGit has no replacement-ref semantics, it
+  skips and reports `refs/replace/*` while importing the stored Git objects
+  underlying ordinary refs, rather than silently applying an omitted overlay.
+- **Regression:** `tests/git_compat.rs::replace_refs_do_not_rewrite_imported_branch_history`
+  verifies the source Git replacement-aware view differs, then checks the
+  skipped-ref report, absence of that ref in NewGit, ordinary branch tip,
+  original target message and blob bytes, target/tip parent links, descendant
+  tree, and deep repository verification. The first version failed before the
+  fix; independent review then identified missing branch/ancestry/blob checks,
+  which were added before final verification.
+- **Boundary:** replace refs remain **UNSUPPORTED**. NewGit imports stored
+  object history; it does not reproduce the replacement-aware view shown by
+  Git commands that honor overlays. Evidence covers one replacement commit on
+  Git 2.43.0/Linux only; it does not establish behavior for other Git versions,
+  nested replacements, or every ref target kind.
+- **Local verification:** Git interoperability suite **20 passed**; complete
+  debug and release suites **289 passed each**. `cargo fmt --check`,
   `cargo clippy --all-targets --locked -- -D warnings`,
   `cargo build --release --locked`, SBOM drift check, and `git diff --check`
-  all pass. The implementation SHA above passed hosted CI and CodeQL; the
-  final state-record head is checked separately before completion.
+  all pass. Hosted validation will be recorded after the implementation is
+  pushed and CI/CodeQL finish on the exact commit.
 
 ## Local development setup
 

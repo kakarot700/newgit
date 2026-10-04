@@ -166,6 +166,10 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
             "--signed-tags=strip",
             "--tag-of-filtered-object=drop",
         ])
+        // Replace refs are not represented in NewGit. Without this override,
+        // fast-export can transparently substitute their target objects while
+        // walking ordinary branches, silently changing imported history.
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

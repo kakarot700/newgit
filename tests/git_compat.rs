@@ -1483,3 +1483,88 @@ fn snapshot_req(
         extras: BTreeMap::new(),
     }
 }
+
+#[test]
+fn replace_refs_do_not_rewrite_imported_branch_history() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "base.txt", b"base\n");
+    commit(&gdir, "base");
+    let base_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+
+    write(&gdir, "target.txt", b"original target\n");
+    commit(&gdir, "target");
+    let target_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+
+    write(&gdir, "tip.txt", b"tip\n");
+    commit(&gdir, "tip");
+    let tip_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+
+    // Create a valid replacement commit whose tree/message differ from the
+    // stored target commit. Replace refs are unsupported and skipped, so their
+    // view must not silently rewrite the ordinary branch history we import.
+    write(&gdir, "replacement-only.txt", b"replacement\n");
+    git(&gdir, &["add", "replacement-only.txt"]);
+    let replacement_tree = git_out(&gdir, &["write-tree"]).trim().to_string();
+    git(&gdir, &["reset", "--hard", "HEAD"]);
+    let replacement_sha = git_out(
+        &gdir,
+        &["commit-tree", &replacement_tree, "-m", "replacement object"],
+    )
+    .trim()
+    .to_string();
+    git(&gdir, &["replace", &target_sha, &replacement_sha]);
+    let replace_ref = format!("refs/replace/{target_sha}");
+    assert_eq!(
+        git_out(&gdir, &["rev-parse", &replace_ref]).trim(),
+        replacement_sha
+    );
+    assert_eq!(
+        git_out(&gdir, &["show", "-s", "--format=%s", &target_sha]).trim(),
+        "replacement object",
+        "the fixture must expose Git's replacement-aware view"
+    );
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert!(
+        report.refs_skipped.iter().any(|name| name == &replace_ref),
+        "unsupported replace ref must be reported: {report:?}"
+    );
+    assert!(repo.refs.read_opt(&replace_ref).unwrap().is_none());
+
+    let by_sha = snapshots_by_git_sha(&repo);
+    assert_eq!(
+        repo.refs.read("refs/heads/master").unwrap(),
+        by_sha[&tip_sha],
+        "ordinary branch ref must remain on its stored Git tip"
+    );
+    let target = match repo.objects.get(&by_sha[&target_sha]).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        other => panic!("expected target snapshot, got {}", other.type_tag().name()),
+    };
+    assert_eq!(target.message, "target\n");
+    assert_eq!(target.parents, vec![by_sha[&base_sha]]);
+    let target_tree = ng_tree(&repo, by_sha[&target_sha]);
+    assert_eq!(
+        target_tree.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["base.txt", "target.txt"]
+    );
+    assert_eq!(&target_tree["base.txt"].1[..], b"base\n");
+    assert_eq!(&target_tree["target.txt"].1[..], b"original target\n");
+
+    let tip = by_sha[&tip_sha];
+    let tip_snapshot = match repo.objects.get(&tip).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        other => panic!("expected tip snapshot, got {}", other.type_tag().name()),
+    };
+    assert_eq!(tip_snapshot.parents, vec![by_sha[&target_sha]]);
+    let tip_tree = ng_tree(&repo, tip);
+    assert_eq!(
+        tip_tree.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["base.txt", "target.txt", "tip.txt"]
+    );
+    assert_eq!(&tip_tree["tip.txt"].1[..], b"tip\n");
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
