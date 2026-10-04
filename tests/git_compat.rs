@@ -2023,6 +2023,46 @@ fn git_namespace_refs_are_reported_and_not_exported_as_branches() {
     git(&outdir, &["fsck", "--full", "--strict", "--no-reflogs"]);
 }
 
+#[test]
+fn omitted_unsupported_blob_refs_are_reported_from_the_ref_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "file.txt", b"ordinary branch content\n");
+    commit(&gdir, "ordinary branch");
+    write(&gdir, "orphan.txt", b"unreferenced blob\n");
+    let blob_oid = git_out(&gdir, &["hash-object", "-w", "orphan.txt"])
+        .trim()
+        .to_string();
+    let skipped_refs = [
+        "refs/remotes/origin/orphan-blob",
+        "refs/notes/probe/orphan-blob",
+    ];
+    for skipped in skipped_refs {
+        git(&gdir, &["update-ref", skipped, &blob_oid]);
+    }
+
+    let stream = git_out(&gdir, &["fast-export", "--all", "--show-original-ids"]);
+    for skipped in skipped_refs {
+        assert!(
+            !stream.contains(skipped),
+            "Git fast-export should omit non-commit ref {skipped}"
+        );
+    }
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    for skipped in skipped_refs {
+        assert!(
+            report.refs_skipped.iter().any(|name| name == skipped),
+            "unsupported ref omitted by fast-export must still be reported: {report:?}"
+        );
+        assert!(repo.refs.read_opt(skipped).unwrap().is_none());
+    }
+    assert!(repo.refs.read_opt("refs/heads/master").unwrap().is_some());
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
+
 fn snapshot_req(
     ws: &str,
     msg: &str,

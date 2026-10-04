@@ -53,7 +53,10 @@ repos yields **identical object ids** for every ref — tested
 **Skipped namespaces** (reported in `refs_skipped`): `refs/remotes/*`,
 `refs/notes/*`, `refs/namespaces/*`, `refs/replace/*`, `refs/stash`,
 `refs/bisect/*`, and `refs/worktree/*`. Non-`HEAD` symbolic refs are separately
-discovered and reported because `fast-export --all` omits them. NewGit-internal
+discovered and reported because `fast-export --all` omits them. The `for-each-ref`
+pre-scan seeds reports for all configured skipped families too, so unsupported
+refs with blob targets are still reported when `fast-export` omits them (tested
+for remote-tracking and notes refs on Git 2.43.0/Linux). NewGit-internal
 namespaces (`workspaces/*`, `chains/*`) are never exported.
 
 Git namespace refs under `refs/namespaces/<namespace>/...` are unsupported and

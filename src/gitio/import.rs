@@ -15,9 +15,9 @@
 //!   and listed in the report; commit signatures omitted by fast-export are
 //!   reported by source commit ID (not preserved or verified); commit-message
 //!   control characters that the NewGit text model cannot represent are
-//!   refused before refs move; refs/remotes/*, refs/notes/*,
-//!   refs/namespaces/*, refs/replace/*, refs/stash, and symbolic refs outside
-//!   HEAD are skipped and listed.
+//!   refused before refs move; configured unsupported ref families and
+//!   symbolic refs outside HEAD are skipped and listed, including refs omitted
+//!   by fast-export.
 //! * Ordinary refs targeting non-commit objects are refused before fast-export:
 //!   Git may omit lightweight blob/tree refs, and NewGit export only represents
 //!   snapshot histories.
@@ -78,14 +78,15 @@ fn skip_ref(name: &str) -> bool {
 #[derive(Default)]
 struct GitRefScan {
     symbolic_refs: HashSet<String>,
-    namespace_refs: Vec<String>,
+    skipped_refs: Vec<String>,
     non_commit_refs: Vec<(String, String)>,
 }
 
-/// `git fast-export --all` omits symbolic refs outside HEAD. Discover them
-/// separately so import reports the loss and never reconstructs one as an
-/// ordinary direct ref if a Git version happens to emit it in the stream.
-/// Also refuse ordinary refs whose target is not a commit: fast-export omits
+/// `git fast-export --all` omits symbolic refs outside HEAD and can omit
+/// unsupported refs with non-commit targets. Discover these separately so
+/// import reports the loss and never reconstructs one as an ordinary direct
+/// ref if a Git version happens to emit it in the stream. Also refuse ordinary
+/// refs whose target is not a commit: fast-export omits
 /// lightweight blob/tree refs and cannot be exported from NewGit's
 /// snapshot-only history model. Annotated refs are checked against their
 /// peeled target type.
@@ -123,14 +124,12 @@ fn scan_git_refs(git_dir: &Path) -> Result<GitRefScan> {
                 "Git ref name is not valid UTF-8; import is refused before refs move".into(),
             )
         })?;
-        if name.starts_with("refs/namespaces/") {
-            scan.namespace_refs.push(name.clone());
-        }
         if !fields[1].is_empty() {
             scan.symbolic_refs.insert(name);
             continue;
         }
         if skip_ref(&name) {
+            scan.skipped_refs.push(name);
             continue;
         }
 
@@ -145,8 +144,8 @@ fn scan_git_refs(git_dir: &Path) -> Result<GitRefScan> {
             scan.non_commit_refs.push((name, target_type));
         }
     }
-    scan.namespace_refs.sort();
-    scan.namespace_refs.dedup();
+    scan.skipped_refs.sort();
+    scan.skipped_refs.dedup();
     scan.non_commit_refs.sort();
     Ok(scan)
 }
@@ -332,7 +331,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
     // so seed the report from the ref scan as well as from stream events.
     let symbolic_ref_names = ref_scan.symbolic_refs;
     let mut skipped_scan_refs: Vec<String> = symbolic_ref_names.iter().cloned().collect();
-    skipped_scan_refs.extend(ref_scan.namespace_refs);
+    skipped_scan_refs.extend(ref_scan.skipped_refs);
     skipped_scan_refs.sort();
     skipped_scan_refs.dedup();
 

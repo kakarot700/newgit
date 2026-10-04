@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: explicitly skip/report Git namespace refs rather than flattening them into unrelated branches (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: seed skip reports from the ref scan so unsupported refs omitted by `fast-export` are not silently unreported (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,18 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — Git namespace refs (2026-10-04)
+## Current Git compatibility milestone — reporting unsupported refs omitted by fast-export (2026-10-04)
+
+- **Evidence gap:** the pre-scan explicitly retained physical namespace refs, but other configured unsupported families depended on `fast-export` events to appear in `refs_skipped`. Git can omit refs in those families when they point to blobs.
+- **Observed Git behavior:** Git 2.43.0/Linux `fast-export --all` warns and omits remote-tracking and notes refs targeting blobs, while `for-each-ref` lists both.
+- **Implementation:** the existing ref scan now captures every non-symbolic ref matching the existing unsupported-family filter and seeds `refs_skipped` with them; symbolic-ref handling and ordinary non-commit-ref refusal remain unchanged. No subprocess or extra history walk was added.
+- **Regression:** `tests/git_compat.rs::omitted_unsupported_blob_refs_are_reported_from_the_ref_scan` creates real Git blob refs under `refs/remotes/*` and `refs/notes/*`, verifies the stream omits both, then checks the import report, absent NewGit refs, retained ordinary branch, and deep integrity.
+- **Compatibility boundary:** evidence is Git 2.43.0/Linux and these two omitted-ref families; every unsupported family with non-commit targets and other Git/platform versions are not established. As before, skipped refs are not a confidentiality boundary: reachable objects may still be streamed, and the pre-scan/export race is unsynchronized.
+- **Independent review:** no blocker. The reviewer checked the scan/report flow, ordinary non-commit refusal and symbolic-ref handling, regression adequacy, and documentation consistency; no files were changed.
+- **Local verification:** the focused real-Git regression passed, followed by one full pass: `cargo test --locked` **297/297** (including **27/27** `git_compat` tests), `cargo test --release --locked` **297/297**, `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift, Git >=2.34.0/`ssh-keygen` prerequisites, and `git diff --check` all passed on Git 2.43.0/Linux and Rust 1.99.0.
+- **Hosted verification:** exact-SHA CI and CodeQL are checked after the single combined push; run links are delivered in the task result so no follow-up state-only commit is needed.
+
+## Previous Git compatibility milestone — Git namespace refs (2026-10-04)
 
 - **Evidence gap:** Git virtualizes physical refs under `refs/namespaces/<namespace>/...` for namespaced clients. The importer skipped several unsupported ref families but not this one, while export maps generic `refs/X` names to `refs/heads/X`; this could change a namespace ref's meaning.
 - **Observed Git behavior:** on Git 2.43.0/Linux, `GIT_NAMESPACE=tenant git ls-remote` presents physical namespace branch, tag, and blob refs as virtual refs. `git fast-export --all` includes commit-target refs but omits the namespace ref targeting a blob.
@@ -30,7 +41,7 @@
 - **Compatibility boundary:** refs are not preserved or verified; reachable objects may still be streamed from skipped refs, so this is not a confidentiality boundary. The pre-scan and stream are separate commands and concurrent source-ref mutation is not synchronized. Evidence is limited to Git 2.43.0/Linux.
 - **Independent review:** no blocking correctness issue. The reviewer confirmed inherited `GIT_NAMESPACE` does not bypass the physical-ref scan/filter and recommended precise virtual-ref and concurrent-mutation caveats, now documented.
 - **Local verification:** the focused regression passed. One full local pass completed: `cargo test --locked` **296/296** (including **26/26** `git_compat` tests), `cargo test --release --locked` **296/296** (same suite counts), `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift, Git >=2.34.0/`ssh-keygen` prerequisites, and `git diff --check` all passed on Git 2.43.0/Linux.
-- **Hosted verification:** after the single combined commit is pushed, exact-SHA CI and CodeQL results will be recorded in task completion. Push-run CI does not execute PR-only or tag-only jobs.
+- **Hosted verification:** the namespace milestone commit `3fe7f8abdcb7941bda32871d8c0a9bf072f315bb` passed [CI run 37213203513](https://github.com/kakarot700/newgit/actions/runs/37213203513) and [CodeQL run 37213203534](https://github.com/kakarot700/newgit/actions/runs/37213203534), both on that exact SHA. Push-run CI does not execute PR-only or tag-only jobs.
 
 ## Previous Git compatibility milestone — signed annotated tags (2026-10-04)
 

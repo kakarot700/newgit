@@ -37,9 +37,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     discovers and reports them because `fast-export --all` omits them. Replace
     refs and physical `refs/namespaces/*` refs are skipped and reported on
     import; export also skips namespace-shaped NewGit refs rather than mapping
-    them to ordinary branches. A real Git 2.43.0/Linux fixture verifies
-    namespaced `ls-remote` visibility and scan-side reporting even for a blob
-    ref that `fast-export` omits. Namespace-only commit history may still be
+    them to ordinary branches. The `for-each-ref` pre-scan seeds reports for
+    every configured skipped family, including remote-tracking and notes refs
+    with blob targets that Git 2.43.0/Linux `fast-export` omits; a real fixture
+    verifies those reports and namespaced `ls-remote` visibility. Namespace-only
+    commit history may still be
     streamed/imported as unreachable objects, so this is not a confidentiality
     boundary. The namespace pre-scan and `fast-export` are separate commands;
     concurrent source-ref mutation is not synchronized. Git commit signature headers are not
