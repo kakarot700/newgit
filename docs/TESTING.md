@@ -26,9 +26,10 @@ the functional, security, and distribution jobs.
 
 An independent clean clone at commit `b648079` also passed the locked build,
 all 278 debug and release tests, the README install/CLI quick start, an agent
-workflow through human approval and integration, and a real-Git import/export
-smoke test. These are results for the tested Linux x86_64 environment, not a
-claim that every operating system or deployment is verified.
+workflow that exercised the explicit `proposal approve` CLI step under a test
+reviewer identity and then integrated the proposal, plus a real-Git
+import/export smoke test. These are results for the tested Linux x86_64
+environment, not a claim that every operating system or deployment is verified.
 
 ## Layers
 

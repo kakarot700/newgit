@@ -14,9 +14,10 @@ checksum verification. The PR-only dependency review and tag-only release jobs
 did not run on that push event.
 
 An independent clean clone at `b648079` passed the locked build, all 278 debug
-and 278 release tests, README install/CLI quick start, a full agent workflow
-through human approval and integration, and real-Git import/export smoke
-checks. The pre-publication Gitleaks scan found zero findings. GitHub secret
+and 278 release tests, README install/CLI quick start, an agent workflow that
+exercised the explicit proposal-approval command under a test reviewer identity
+and then integrated the proposal, and real-Git import/export smoke checks. The
+pre-publication Gitleaks scan found zero findings. GitHub secret
 scanning and push protection, Dependabot alerts/security updates, private
 vulnerability reporting, and read-only-by-default Actions token permissions
 are enabled.
