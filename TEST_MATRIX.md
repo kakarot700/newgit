@@ -77,6 +77,12 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 - `cargo build --release --locked`: clean
 - `python3 scripts/sbom.py | diff -u SBOM.md -`: clean (no dependency drift)
 - `git diff --check`: clean
+- Empty-tree compatibility commit
+  `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [hosted CI run
+  37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979)
+  and [CodeQL run
+  37203669978](https://github.com/kakarot700/newgit/actions/runs/37203669978),
+  both on that exact SHA.
 - Previous hosted checks passed on implementation SHA
   `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2`: [CI run 37201393466](https://github.com/kakarot700/newgit/actions/runs/37201393466),
   [CodeQL run 37201393416](https://github.com/kakarot700/newgit/actions/runs/37201393416).
