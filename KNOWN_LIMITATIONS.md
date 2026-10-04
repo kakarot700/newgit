@@ -21,8 +21,10 @@ Honest, current list. Anything not listed here that fails is a bug — report it
    will be inode-heavy; packfile-style bundling is a post-v1 optimization
    gated on benchmark evidence (iteration 11).
 8. zlib level 6 fixed; no delta compression between objects.
-9. Status/diff are O(worktree) with an index cache; no untracked-content
-   ignore grammar yet (`.newgitignore` planned, iteration 3).
+9. Status/diff are O(worktree) with an index cache (racily-clean mtime guard
+   included); `.newgitignore` implements a documented gitignore *subset*
+   (no `[]` character-class negation corner cases beyond `[!a-z]`, no
+   backslash escapes).
 
 ## Interop
 10. Git interop requires the **system git binary** (fast-export/fast-import).
@@ -36,6 +38,14 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     server speaks plain HTTP/1.1 and MUST NOT be exposed to hostile networks
     directly until TLS support or proxy setup is documented per deployment.
 
+## Diff (arrives iteration 4)
+13. Line diff uses Myers with a bounded edit distance (default 1024 per
+    file). Beyond the cap the output falls back to a whole-file replace —
+    always correct and reconstructible, but not minimal. Rename similarity
+    uses a cheap prefix/suffix heuristic for candidate scoring (full Myers
+    only for the chosen pair) and is capped at 1000 candidate pairs; beyond
+    that only exact-content renames are detected.
+
 ## Process
-13. Benchmarks are measured on modest hardware (2 vCPU / 2 GB) — relative
+14. Benchmarks are measured on modest hardware (2 vCPU / 2 GB) — relative
     numbers, not marketing numbers (docs/BENCHMARKS.md).

@@ -51,16 +51,19 @@ pub fn status(repo: &Repo, ws_name: &str, list_limit: usize) -> Result<StatusRep
     let walk = crate::repo::walk::walk(&ws.dir, &ignore, repo.limits())?;
     report.ignored = walk.ignored;
     report.warnings = walk.warnings;
-    let index = Index::load(&workspace::index_path(repo, ws_name));
+    let (index, idx_mtime) = Index::load_with_mtime(&workspace::index_path(repo, ws_name));
 
     let mut live: BTreeMap<String, (EntryMode, ObjectId)> = BTreeMap::new();
     for e in &walk.entries {
-        // index fast path (cache-only: if it disagrees we hash for real)
+        // index fast path (cache-only: if it disagrees — or is racily clean
+        // — we hash for real)
         if let Some(c) = index.get(&e.rel) {
-            if c.size == e.size
-                && c.mtime_sec == e.mtime_sec
-                && c.mtime_nsec == e.mtime_nsec
-                && c.mode == e.mode
+            if c.mode == e.mode
+                && crate::repo::index::cache_trustworthy(
+                    c,
+                    (e.mtime_sec, e.mtime_nsec, e.size),
+                    idx_mtime,
+                )
             {
                 live.insert(e.rel.clone(), (e.mode, c.oid));
                 continue;

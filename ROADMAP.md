@@ -23,9 +23,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - E2E subprocess tests (7 suites) + ops integration (13) + crash tests for
   snapshot/workspace-create. ✅ (120 tests total)
 
-## Iteration 4 — Diff engine  [ ]
-- Myers line diff, unified + JSON output, rename detection, binary/large-file handling.
-- Property tests: patch reconstruction, determinism.
+## Iteration 4 — Diff engine  [x]
+- Myers O(ND) line diff (bounded edit distance, coarse-exact fallback),
+  unified + JSON renderers, binary/symlink/mode handling. ✅
+- Two-stage deterministic rename detection (exact + similarity ≥50%). ✅
+- CLI `newgit diff` (worktree vs position, snapshot↔snapshot, refs, ws:). ✅
+- Property tests: reconstruction + determinism; 21 new tests (total 141). ✅
+- Found & fixed: racily-clean index race (D-011). ✅
 
 ## Iteration 5 — Merge/integration engine  [ ]
 - 3-way tree merge; diff3 content merge; conflict records; integrate/rollback.

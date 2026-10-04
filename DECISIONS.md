@@ -100,3 +100,37 @@ fuzz/property tests for each hand-rolled parser.
 crate + one `newgit` binary (workspace split deferred until build times hurt).
 **Consequences:** No unsafe; compile-time enforcement of memory safety;
 single artifact to ship.
+
+## D-011 · Diff design: bounded Myers + racily-clean index guard (Iteration 4)
+
+**Context.** The diff engine needs (a) exact, deterministic line diffs,
+(b) memory safety on hostile/pathological inputs, (c) an index cache that
+can never report stale content as current.
+
+**Decision.**
+1. Line diff = greedy Myers O(ND) with common prefix/suffix trimming and a
+   bounded edit distance (`max_edit_distance`, default 1024 per file). When
+   the bound is exceeded we emit a whole-file *replace* (still exact and
+   reconstructible, just not minimal) and flag `edit_distance_capped` in
+   JSON. Full-trace memory is therefore ≤ ~8 MiB per file. Hirschberg
+   linear-space refinement is deferred until benchmarks justify it
+   (KNOWN_LIMITATIONS #13).
+2. Rename detection runs in two deterministic stages: exact (mode+oid)
+   first, then similarity ≥50% via a cheap common-prefix/suffix line ratio
+   (full Myers only for the *chosen* pair, at render time). Candidate
+   scoring is skipped entirely when deleted×added pairs > `rename_pair_cap`
+   (1000). Greedy assignment sorted by (score DESC, old path, new path) —
+   same input ⇒ same output, no hash-map iteration order dependence.
+3. Binary = NUL byte in first 8000 bytes (git-compatible rule). Binary
+   files diff at metadata level only.
+4. **Racily-clean guard**: the index cache is trusted only when
+   size+mtime match AND file mtime < index-file mtime (git's rule). A file
+   modified within the same timestamp tick as the index write would
+   otherwise be invisible to status/snapshot; the symlink-diff test caught
+   this in practice. Unit-tested in `repo::index::tests`.
+5. `capture_tree(save_index)` factors the walk→hash→tree pipeline shared by
+   snapshot (index-writing) and diff (read-only).
+
+**Consequences.** Deterministic, memory-bounded diffs; correctness of
+status/diff under coarse filesystem clocks; slight extra hashing for files
+touched in the same tick as the last snapshot (acceptable, git-identical).

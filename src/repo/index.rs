@@ -154,14 +154,46 @@ impl Index {
     /// (it is a cache — rebuild is always safe; corruption is surfaced by
     /// `newgit verify`, not by failing status).
     pub fn load(path: &Path) -> Index {
-        match std::fs::read(path) {
+        Index::load_with_mtime(path).0
+    }
+
+    /// Load the index together with the index file's own mtime — needed for
+    /// the racily-clean guard (see `cache_trustworthy`).
+    pub fn load_with_mtime(path: &Path) -> (Index, Option<(u64, u32)>) {
+        let mtime = std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs(), d.subsec_nanos()));
+        let idx = match std::fs::read(path) {
             Ok(bytes) => Index::decode(&bytes).unwrap_or_default(),
             Err(_) => Index::new(),
-        }
+        };
+        (idx, mtime)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         fsx::atomic_write(path, &self.encode())
+    }
+}
+
+/// Decide whether a cached entry may be trusted without re-reading content.
+///
+/// Git's "racily clean" rule: an entry whose recorded mtime is ≥ the index
+/// file's own mtime is *suspect* — a modification in the same timestamp tick
+/// is otherwise undetectable — so it must be re-hashed. `file` is
+/// (mtime_sec, mtime_nsec, size) from the live walk.
+pub fn cache_trustworthy(
+    cached: &IndexEntry,
+    file: (u64, u32, u64),
+    idx_mtime: Option<(u64, u32)>,
+) -> bool {
+    if cached.size != file.2 || cached.mtime_sec != file.0 || cached.mtime_nsec != file.1 {
+        return false;
+    }
+    match idx_mtime {
+        Some((s, n)) => (file.0, file.1) < (s, n),
+        None => false, // no index on disk ⇒ nothing is trustworthy
     }
 }
 
@@ -188,6 +220,27 @@ mod tests {
         let back = Index::decode(&bytes).unwrap();
         assert_eq!(back, idx);
         assert_eq!(back.len(), 2);
+    }
+
+    #[test]
+    fn racily_clean_guard() {
+        let e = IndexEntry {
+            oid: ObjectId::from_bytes([1; 32]),
+            size: 7,
+            mtime_sec: 100,
+            mtime_nsec: 0,
+            mode: EntryMode::File,
+        };
+        // file mtime older than index mtime ⇒ trusted
+        assert!(cache_trustworthy(&e, (100, 0, 7), Some((100, 500))));
+        // equal timestamp ⇒ suspect (racily clean)
+        assert!(!cache_trustworthy(&e, (100, 0, 7), Some((100, 0))));
+        // newer than index ⇒ suspect
+        assert!(!cache_trustworthy(&e, (101, 0, 7), Some((100, 0))));
+        // size mismatch ⇒ never
+        assert!(!cache_trustworthy(&e, (100, 0, 8), Some((200, 0))));
+        // no index mtime ⇒ never
+        assert!(!cache_trustworthy(&e, (100, 0, 7), None));
     }
 
     #[test]

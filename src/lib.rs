@@ -12,6 +12,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod cli;
+pub mod diff;
 pub mod error;
 pub mod object;
 pub mod obs;

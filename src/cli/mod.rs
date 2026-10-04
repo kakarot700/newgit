@@ -129,6 +129,7 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "cat" | "cat-object" => cmd_cat(ctx, tail),
         "hash-object" => cmd_hash_object(ctx, tail),
         "workspace" | "ws" => cmd_workspace(ctx, tail),
+        "diff" => cmd_diff(ctx, tail),
         "actor" => cmd_actor(ctx, tail),
         "config" => cmd_config(ctx, tail),
         other => Err(Error::Invalid(format!(
@@ -655,6 +656,154 @@ fn cmd_workspace(ctx: &Ctx, tail: &[String]) -> Result<Output> {
             "unknown workspace subcommand {other:?}; see `newgit help workspace`"
         ))),
     }
+}
+
+fn cmd_diff(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &["workspace", "context"], COMMON_ALIASES)?;
+    a.reject_unknown(&[
+        "workspace",
+        "context",
+        "name-only",
+        "no-renames",
+        "exit-code",
+        "json",
+        "debug",
+        "repo",
+    ])?;
+    let repo = open_repo(ctx)?;
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN);
+    let mut opts = crate::diff::DiffOpts::default();
+    if a.flag("no-renames") {
+        opts.detect_renames = false;
+    }
+    if let Some(c) = a.opt("context") {
+        opts.context = c
+            .parse()
+            .map_err(|_| Error::Invalid(format!("bad --context {c:?}")))?;
+    }
+    let pos = a.positional();
+    if pos.len() > 2 {
+        return Err(Error::Invalid(
+            "usage: newgit diff [<a> [<b>]] (specs: ref, oid, ws:<name>; omit b for live workspace)".into(),
+        ));
+    }
+    // resolve sides to trees
+    let (old_tree, new_tree, label_a, label_b) = match pos.len() {
+        0 => {
+            // position vs live workspace
+            let head = workspace::position(&repo, ws)?;
+            let old_tree = match head {
+                Some(h) => crate::diff::snapshot_or_tree_to_root(&repo, h)?,
+                None => repo
+                    .objects
+                    .put(&Object::Tree(crate::object::types::Tree::empty()))?,
+            };
+            let cap = crate::ops::snapshot::capture_tree(&repo, ws, false)?;
+            (
+                old_tree,
+                cap.root,
+                format!("position[{ws}]"),
+                format!("workspace[{ws}]"),
+            )
+        }
+        1 => {
+            let old_tree = crate::diff::resolve_tree(&repo, &pos[0])?;
+            let cap = crate::ops::snapshot::capture_tree(&repo, ws, false)?;
+            (
+                old_tree,
+                cap.root,
+                pos[0].clone(),
+                format!("workspace[{ws}]"),
+            )
+        }
+        _ => {
+            let old_tree = crate::diff::resolve_tree(&repo, &pos[0])?;
+            let new_tree = crate::diff::resolve_tree(&repo, &pos[1])?;
+            (old_tree, new_tree, pos[0].clone(), pos[1].clone())
+        }
+    };
+    let _span = obs::span("diff");
+    let td = crate::diff::diff_trees(&repo, old_tree, new_tree, &opts)?;
+
+    if a.flag("name-only") {
+        if ctx.json {
+            let names: Vec<&str> = td.files.iter().map(|f| f.path.as_str()).collect();
+            return Ok(Output::Json(json!({ "files": names })));
+        }
+        let mut out = String::new();
+        for f in &td.files {
+            out.push_str(&f.path);
+            out.push('\n');
+        }
+        return Ok(if td.files.is_empty() {
+            Output::Text(String::new())
+        } else {
+            Output::Text(out.trim_end().to_string())
+        });
+    }
+
+    // content diffs for modified/added/deleted/renamed-with-changes
+    let mut contents: Vec<(usize, crate::diff::ContentDiff)> = Vec::new();
+    for (i, f) in td.files.iter().enumerate() {
+        if f.binary || f.old_oid == f.new_oid {
+            continue;
+        }
+        let cd = crate::diff::diff_blob_content(&repo, f.old_oid, f.new_oid, &opts)?;
+        contents.push((i, cd));
+    }
+
+    if ctx.json {
+        let mut files_json = Vec::new();
+        for (i, f) in td.files.iter().enumerate() {
+            let mut v = serde_json::to_value(f).map_err(|e| Error::Bug(e.to_string()))?;
+            if let Some((_, cd)) = contents.iter().find(|(j, _)| *j == i) {
+                if !cd.binary {
+                    let hs = crate::diff::render::hunks(
+                        &cd.a_lines,
+                        &cd.b_lines,
+                        &cd.ops2,
+                        opts.context,
+                    );
+                    v.as_object_mut().unwrap().insert(
+                        "hunks".into(),
+                        serde_json::to_value(&hs).unwrap_or_default(),
+                    );
+                    if cd.ops.is_none() {
+                        v.as_object_mut()
+                            .unwrap()
+                            .insert("edit_distance_capped".into(), json!(true));
+                    }
+                }
+            }
+            files_json.push(v);
+        }
+        return Ok(Output::Json(json!({
+            "a": label_a,
+            "b": label_b,
+            "rename_detection": td.rename_detection,
+            "files": files_json,
+        })));
+    }
+
+    let mut out = String::new();
+    for (i, f) in td.files.iter().enumerate() {
+        out.push_str(&crate::diff::render::file_header(f));
+        if let Some((_, cd)) = contents.iter().find(|(j, _)| *j == i) {
+            out.push_str(&crate::diff::render::render_content(f, cd, opts.context));
+        }
+    }
+    if td.is_empty() {
+        if a.flag("exit-code") {
+            return Ok(Output::Text(String::new()));
+        }
+        return Ok(Output::Text(String::new()));
+    }
+    if a.flag("exit-code") {
+        // print then exit 1 (git-compatible); handled via sentinel error
+        print!("{}", out);
+        std::process::exit(1);
+    }
+    Ok(Output::Text(out.trim_end().to_string()))
 }
 
 fn cmd_actor(ctx: &Ctx, tail: &[String]) -> Result<Output> {

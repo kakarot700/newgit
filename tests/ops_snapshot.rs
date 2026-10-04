@@ -95,6 +95,9 @@ fn index_reuse_and_index_is_just_a_cache() {
             format!("content {i}").as_bytes(),
         );
     }
+    // ensure file mtimes are strictly older than the index file mtime so the
+    // racily-clean guard deterministically trusts the cache (coarse-clock FSs)
+    std::thread::sleep(std::time::Duration::from_millis(30));
     let o1 = snapshot(&repo, &req("main", "s1", author, 1)).unwrap();
     assert_eq!(o1.hashed, 20);
     // no changes: everything reused via index

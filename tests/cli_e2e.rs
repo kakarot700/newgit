@@ -326,6 +326,80 @@ fn deterministic_snapshot_via_cli() {
 }
 
 #[test]
+fn diff_cli_flows() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("pd");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "a.txt", b"one\ntwo\nthree\n");
+    write(&proj, "keep.txt", b"k\n");
+    let snap1 = {
+        let out = ok(&proj, &["snapshot", "-m", "s1", "--time", "1000", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v["data"]["oid"].as_str().unwrap().to_string()
+    };
+    // live changes vs position
+    write(&proj, "a.txt", b"one\nTWO\nthree\nfour\n");
+    write(&proj, "b.txt", b"new file\n");
+    let out = ok(&proj, &["diff"]);
+    assert!(out.contains("diff --newgit a/a.txt b/a.txt"), "{out}");
+    assert!(out.contains("-two"));
+    assert!(out.contains("+TWO"));
+    assert!(out.contains("new file"), "added file shown: {out}");
+    // name-only
+    let out = ok(&proj, &["diff", "--name-only"]);
+    assert!(out.contains("a.txt"));
+    assert!(out.contains("b.txt"));
+    assert!(!out.contains("keep.txt"));
+    // json with hunks
+    let out = ok(&proj, &["diff", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], true);
+    let files = v["data"]["files"].as_array().unwrap();
+    let fa = files.iter().find(|f| f["path"] == "a.txt").unwrap();
+    assert_eq!(fa["kind"], "modified");
+    let hunks = fa["hunks"].as_array().unwrap();
+    assert!(!hunks.is_empty());
+    assert!(hunks[0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l.as_str().unwrap().starts_with("+TWO")));
+    // snapshot after changes; diff snapshot..snapshot
+    let snap2 = {
+        let out = ok(&proj, &["snapshot", "-m", "s2", "--time", "2000", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v["data"]["oid"].as_str().unwrap().to_string()
+    };
+    let out = ok(&proj, &["diff", &snap1, &snap2, "--name-only"]);
+    assert_eq!(out.lines().collect::<Vec<_>>(), vec!["a.txt", "b.txt"]);
+    // ref spec works too
+    let out = ok(&proj, &["diff", "refs/main", "--name-only"])
+        .lines()
+        .count();
+    assert_eq!(out, 0, "position vs worktree: clean after snapshot");
+    // clean diff prints nothing, exit 0
+    let r = ng(&proj, &["diff"]);
+    assert_eq!(r.code, 0);
+    assert_eq!(r.out.trim(), "");
+    // --exit-code with differences
+    write(&proj, "a.txt", b"one\n");
+    let r = ng(&proj, &["diff", "--exit-code"]);
+    assert_eq!(r.code, 1);
+    // rename detection through CLI
+    ok(&proj, &["snapshot", "-m", "s3", "--time", "3000"]);
+    std::fs::rename(proj.join("keep.txt"), proj.join("moved.txt")).unwrap();
+    let out = ok(&proj, &["diff", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let files = v["data"]["files"].as_array().unwrap();
+    let mv = files.iter().find(|f| f["path"] == "moved.txt").unwrap();
+    assert_eq!(mv["kind"], "renamed");
+    assert_eq!(mv["old_path"], "keep.txt");
+    assert_eq!(mv["similarity"], 100);
+    let _ = snap2;
+}
+
+#[test]
 fn debug_logging_goes_to_stderr_jsonl() {
     let (_d, dir) = tmp();
     let proj = dir.join("p6");

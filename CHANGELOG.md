@@ -4,6 +4,24 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 4 — 2026-10-04)
+- Diff engine: Myers O(ND) line diff with bounded edit distance and
+  exact coarse fallback; canonical opcodes; reconstruction property.
+- Tree diff: added/deleted/modified/mode-change; two-stage deterministic
+  rename detection (exact + similarity); binary detection; symlink diffs.
+- Renderers: git-shaped unified diff (hunks, context merging, no-newline
+  markers, rename/mode headers) + structured JSON hunks.
+- CLI `newgit diff [<a> [<b>]]` with `-w`, `--name-only`, `--json`,
+  `--context`, `--no-renames`, `--exit-code`.
+- Read-only worktree capture (`capture_tree(save_index=false)`).
+- 22 new tests (total 142 incl. property diff-reconstruct).
+
+### Fixed (iteration 4)
+- **Racily-clean index race** (D-011): entries whose mtime ≥ the index
+  file's mtime are re-hashed; a same-tick file replacement (e.g. symlink
+  swap) could previously reuse stale content ids. Caught by the symlink
+  diff test; guarded by a unit test.
+
 ### Added (iteration 3 — 2026-10-04)
 - `.newgitignore` engine (gitignore subset, deterministic, documented).
 - Safe workspace walk with limits, symlink policy (record, never follow),

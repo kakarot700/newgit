@@ -19,7 +19,7 @@ cargo test --release                # same suites, optimized (chaos uses this)
 | Layer | Location | Covers | Status |
 |---|---|---|---|
 | Unit | `src/**/mod tests` | hex, varint (incl. non-minimal/truncation), fsx (atomic write, locks, stale reclaim, path traversal, symlink escape), ObjectId determinism, all 9 type codecs roundtrip + garbage rejection, envelope (bit-flip, truncation sweep, type mismatch, decompression bomb), ostore (roundtrip, idempotent put, corruption, misfiling, truncation, iter/prefix, limits, temp sweep), config parse/reject | ✅ iter 1 |
-| Property | `tests/property_core.rs` | hex/varint/base64 roundtrips; blob/tree/snapshot/actor canonical roundtrips; total decoder (no panics on arbitrary bytes); envelope single-bit-flip detection; canonical uniqueness under re-sort | ✅ iter 2 (10 suites × 256 cases) |
+| Property | `tests/property_core.rs` | hex/varint/base64 roundtrips; blob/tree/snapshot/actor canonical roundtrips; total decoder (no panics on arbitrary bytes); envelope single-bit-flip detection; canonical uniqueness under re-sort; **diff reconstructs + deterministic** | ✅ iter 2–4 (11 suites × 256 cases) |
 | Integration | `tests/txn_recovery.rs`, `tests/ops_snapshot.rs`, `tests/version.rs` | ref CRUD/CAS/reflog, txn atomicity, quarantine, snapshot/status/history/workspace cycles, checkout safety, VERSION sync | ✅ iter 2–3 |
 | E2E (CLI) | `tests/cli_e2e.rs` | full workflow, JSON envelopes, exit codes, discovery, determinism, debug logging | ✅ iter 3 (7 suites) |
 | Concurrency | `tests/concurrency_refs.rs` | CAS races (one winner/version, reflog count equality), parallel multi-ref txns, concurrent object writes, concurrent open/recover vs writers | ✅ iter 2 (workspace races: iter 3) |
@@ -52,9 +52,9 @@ cargo test --release                # same suites, optimized (chaos uses this)
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (iteration 3)
-- `cargo test`: **120 passed; 0 failed** (75 lib unit, 7 cli_e2e,
-  4 concurrency_refs, 13 ops_snapshot, 10 property_core, 10 txn_recovery,
-  1 version)
+- Date: 2026-10-04 (iteration 4)
+- `cargo test`: **142 passed; 0 failed** (87 lib unit, 8 cli_e2e,
+  4 concurrency_refs, 8 diff_engine, 13 ops_snapshot, 11 property_core,
+  10 txn_recovery, 1 version)
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo fmt --check`: clean

@@ -50,6 +50,19 @@ Prefixes: ≥4 hex chars, must be unambiguous.
 ### `newgit hash-object <file> [--write]`
 Compute the blob id of a file; `--write` stores it.
 
+### `newgit diff [<a> [<b>]] [-w <ws>] [--name-only] [--json] [--context <N>] [--no-renames] [--exit-code]`
+Compare two states. Specs: ref name, snapshot/tree oid (prefix ok),
+`ws:<name>` (workspace position). With no `<b>` (or no args) the second
+side is the **live workspace** (read-only capture). No args at all ⇒
+position vs live workspace.
+* `--name-only` — just paths.
+* `--json` — `{a,b,rename_detection,files:[…]}`; text files carry structured
+  `hunks`; `edit_distance_capped:true` marks coarse fallbacks.
+* `--exit-code` — exit 1 when differences exist (git-compatible; the only
+  command using exit 1).
+Renames: exact-content first, then ≥50% similarity (deterministic greedy).
+Binary files (NUL in first 8000 bytes) diff at metadata level only.
+
 ### `newgit workspace <create|list|show|discard>`
 See `newgit help workspace`. Workspaces are isolated concurrent work areas;
 `main` is the repository root. Non-main workspaces live in
@@ -68,7 +81,7 @@ Repository configuration and resource limits (`key = value` format).
 
 ## Coming in later iterations
 
-`diff` (it4) · `integrate`/`rollback`/merge (it5) · `goal`/`change`/`evidence`/
+`integrate`/`rollback`/merge (it5) · `goal`/`change`/`evidence`/
 `proposal`/`verify`/`gc` (it6–7) · `import-git`/`export-git` (it8) ·
 `remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
 

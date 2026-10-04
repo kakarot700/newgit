@@ -1,5 +1,8 @@
 //! Snapshot creation: workspace walk → content hashing (index-accelerated)
 //! → tree build → Snapshot object → journaled ref update.
+//!
+//! `capture_tree` is the read-only core (also used by `diff`): it never
+//! touches refs and only writes the index cache when asked.
 
 use std::collections::BTreeMap;
 
@@ -41,14 +44,26 @@ pub struct SnapshotOutcome {
     pub warnings: Vec<String>,
 }
 
-pub fn snapshot(repo: &Repo, req: &SnapshotRequest) -> Result<SnapshotOutcome> {
-    let ws = workspace::info(repo, &req.workspace)?;
-    let _lock = workspace::lock(repo, &req.workspace)?;
+/// Result of capturing a workspace's live state as a tree.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CaptureStats {
+    pub root: ObjectId,
+    pub entries: usize,
+    pub hashed: usize,
+    pub reused: usize,
+    pub warnings: Vec<String>,
+}
 
+/// Walk + hash + build the tree for a workspace WITHOUT touching refs.
+/// When `save_index` is false the index cache is only read, never written
+/// (read-only callers like diff/status).
+pub fn capture_tree(repo: &Repo, ws_name: &str, save_index: bool) -> Result<CaptureStats> {
+    let ws = workspace::info(repo, ws_name)?;
+    let _lock = workspace::lock(repo, ws_name)?;
     let ignore = IgnoreSet::load(&ws.dir.join(".newgitignore"))?;
     let report = workspace_walk(repo, &ws.dir, &ignore)?;
 
-    let mut index = Index::load(&workspace::index_path(repo, &req.workspace));
+    let (mut index, idx_mtime) = Index::load_with_mtime(&workspace::index_path(repo, ws_name));
     let mut items: Vec<(String, ObjectId, EntryMode)> = Vec::with_capacity(report.entries.len());
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut hashed = 0usize;
@@ -57,12 +72,15 @@ pub fn snapshot(repo: &Repo, req: &SnapshotRequest) -> Result<SnapshotOutcome> {
     for e in &report.entries {
         seen.insert(e.rel.clone());
         fsx::check_rel_path(&e.rel, repo.limits().max_path_component)?;
-        // index fast path: same size+mtime+mode ⇒ same content oid
+        // index fast path: same size+mtime+mode ⇒ same content oid, unless
+        // the entry is racily clean (mtime ≥ index mtime) — then re-hash.
         if let Some(cached) = index.get(&e.rel) {
-            if cached.size == e.size
-                && cached.mtime_sec == e.mtime_sec
-                && cached.mtime_nsec == e.mtime_nsec
-                && cached.mode == e.mode
+            if cached.mode == e.mode
+                && crate::repo::index::cache_trustworthy(
+                    cached,
+                    (e.mtime_sec, e.mtime_nsec, e.size),
+                    idx_mtime,
+                )
             {
                 items.push((e.rel.clone(), cached.oid, e.mode));
                 reused += 1;
@@ -76,33 +94,49 @@ pub fn snapshot(repo: &Repo, req: &SnapshotRequest) -> Result<SnapshotOutcome> {
                 repo.objects.put_blob_from_file(&p)?
             }
         };
-        index.insert(
-            e.rel.clone(),
-            IndexEntry {
-                oid,
-                size: e.size,
-                mtime_sec: e.mtime_sec,
-                mtime_nsec: e.mtime_nsec,
-                mode: e.mode,
-            },
-        );
+        if save_index {
+            index.insert(
+                e.rel.clone(),
+                IndexEntry {
+                    oid,
+                    size: e.size,
+                    mtime_sec: e.mtime_sec,
+                    mtime_nsec: e.mtime_nsec,
+                    mode: e.mode,
+                },
+            );
+        }
         items.push((e.rel.clone(), oid, e.mode));
         hashed += 1;
     }
-    // prune index entries for files that disappeared
-    let stale: Vec<String> = index
-        .iter()
-        .filter(|(p, _)| !seen.contains(p.as_str()))
-        .map(|(p, _)| p.clone())
-        .collect();
-    for p in stale {
-        index.remove(&p);
+    if save_index {
+        // prune index entries for files that disappeared
+        let stale: Vec<String> = index
+            .iter()
+            .filter(|(p, _)| !seen.contains(p.as_str()))
+            .map(|(p, _)| p.clone())
+            .collect();
+        for p in stale {
+            index.remove(&p);
+        }
+        fault::fault("snap:before_index_save")?;
+        index.save(&workspace::index_path(repo, ws_name))?;
     }
-    fault::fault("snap:before_index_save")?;
-    index.save(&workspace::index_path(repo, &req.workspace))?;
-
     let root = build_tree(repo, &items)?;
+    Ok(CaptureStats {
+        root,
+        entries: items.len(),
+        hashed,
+        reused,
+        warnings: report.warnings,
+    })
+}
+
+pub fn snapshot(repo: &Repo, req: &SnapshotRequest) -> Result<SnapshotOutcome> {
+    let ws = workspace::info(repo, &req.workspace)?;
+    let cap = capture_tree(repo, &req.workspace, true)?;
     let _ = fault::fault_action("snap:after_tree");
+    let root = cap.root;
 
     let parent = repo.refs.read_opt(&ws.ref_name)?;
     let ts = req.timestamp_ms.unwrap_or_else(txn::now_ms);
@@ -146,10 +180,10 @@ pub fn snapshot(repo: &Repo, req: &SnapshotRequest) -> Result<SnapshotOutcome> {
         root,
         ref_name: ws.ref_name.clone(),
         parent,
-        entries: items.len(),
-        hashed,
-        reused,
-        warnings: report.warnings,
+        entries: cap.entries,
+        hashed: cap.hashed,
+        reused: cap.reused,
+        warnings: cap.warnings,
     })
 }
 

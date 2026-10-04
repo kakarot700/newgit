@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 3 of 12 complete).
+**Current classification: NOT PRODUCTION READY** (iteration 4 of 12 complete).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -12,6 +12,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 ## FUNCTIONALITY
 - [x] core repository operations (init/open/discover/refs/txn/HEAD/actors) — iteration 2 ✅ (74 tests)
 - [x] snapshots / status / history / workspaces — iteration 3 ✅ (13 ops + 7 e2e suites)
+- [x] diff engine (line + tree, renames, binary, mode, unified + JSON) — iteration 4 ✅ (8 suites + property reconstruct)
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
 - [ ] changes / goals / evidence / proposals — iteration 6
 - [ ] integration (merge) + rollback — iteration 5
@@ -34,7 +35,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [ ] access control (remote authn/authz) tested — iteration 9
 
 ## QUALITY
-- [x] unit tests (75) + integration (23) + e2e (7) + property (10) — iterations 1–3
+- [x] unit tests (87) + integration (31) + e2e (8) + property (11) — iterations 1–4
 - [x→partial] integration/E2E/property suites ✅ it2–3; fuzz + chaos due it7; regression discipline active
 
 ## PERFORMANCE

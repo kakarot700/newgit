@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 3 COMPLETE — workspaces, snapshots, status, history, CLI foundation.
-- **Classification:** NOT PRODUCTION READY (no diff/merge yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **120/120** ✓ (75 unit + 7 cli-e2e + 4 concurrency + 13 ops + 10 property + 10 txn-recovery + 1 version).
+- **Phase:** Iteration 4 COMPLETE — diff engine (Myers, renames, binary, unified+JSON).
+- **Classification:** NOT PRODUCTION READY (no merge/goals yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **142/142** ✓ (87 unit + 8 cli-e2e + 4 concurrency + 8 diff + 13 ops + 11 property + 10 txn-recovery + 1 version).
 
 ## Environment / how to resume
 
@@ -35,10 +35,11 @@ src/
   repo/{config,ostore,refs,txn,mod}.rs  # store, refs (CAS+reflog), WAL transactions, Repo facade
   repo/{ignore,index,walk,workspace}.rs  # .newgitignore engine, NGIX cache, safe walk, workspaces
   ops/{tree,snapshot,checkout,status,history}.rs  # core operations
+  diff/{myers,render,mod}.rs     # line diff, tree diff, rename detection, unified+JSON render
   cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
-tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,cli_e2e}.rs
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,cli_e2e}.rs
 docs/{STORAGE_FORMAT,CLI}.md
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
@@ -108,21 +109,46 @@ None.
 - E2E: 7 subprocess suites incl. full workflow, JSON errors, exit codes,
   cross-repo snapshot determinism.
 
+
+## What iteration 4 added (verified)
+
+- Myers O(ND) line diff with prefix/suffix trimming, bounded edit distance
+  (cap 1024/file; coarse whole-file replace fallback that stays exact).
+- Canonical opcodes (Equal/Delete/Insert/Replace) + reconstruction property
+  (reconstruct(a,b,ops) == b for random inputs) + determinism property.
+- Tree diff: added/deleted/modified/mode-change classification; rename
+  detection in two deterministic stages (exact oid ⇒ 100%, then prefix/
+  suffix similarity ≥50% with bounded candidate pairs, greedy with
+  (score, old, new) tiebreak); binary detection (NUL in first 8000 bytes);
+  symlink target diffs shown as text.
+- Renderers: git-shaped unified output (@@ hunks, context merging at gap
+  ≤ 2·context, "\ No newline at end of file" markers, rename/mode headers)
+  and structured JSON hunks.
+- CLI `newgit diff [<a> [<b>]] [-w ws] [--name-only] [--json] [--context N]
+  [--no-renames] [--exit-code]`; specs: refs, snapshot/tree oids (prefix ok),
+  ws:<name>; omitted b ⇒ live workspace (read-only capture).
+- Racily-clean guard (D-011): index entries with mtime ≥ index-file mtime
+  are re-hashed — closes the same-tick modification race (caught by the
+  symlink diff test; regression-tested).
+- capture_tree(save_index=false): read-only worktree capture for diff/status.
+
 ## Current task (next iteration)
 
-**Iteration 4: diff engine.**
+**Iteration 5: merge/integration engine.**
 Completion condition:
-1. Myers O(ND) line diff + unified & JSON output; binary detection; rename
-   detection (exact + similarity); mode-change reporting.
-2. `newgit diff [a] [b] [--name-only|--json|--unified]` for snapshots,
-   workspaces, and arbitrary trees.
-3. Property tests: patch application reconstructs target; determinism.
-4. Large-file guards (limits) + tests. Docs updated; commit.
+1. 3-way tree merge (base/ours/theirs) with rename awareness; diff3-style
+   content merge for text; conflicts recorded deterministically.
+2. `newgit integrate` (atomic: merged snapshot + ref CAS txn; fast-forward
+   detection), `newgit merge-tree` dry-run, `newgit rollback` for workspaces.
+3. Conflict output: unified+JSON, stable ordering, exit code 5 on conflicts
+   for integrate --dry-run style commands.
+4. Crash tests: integrate killed before/after txn (reuse faultlab).
+5. Property tests: merge(ours==theirs)==ours; ff-merge identity;
+   determinism; reconstruct merged content from conflict-free cases.
+6. Docs + state updates; commit.
 
 ## Next tasks (ordered)
 
-5. Workspaces + tree building from filesystem + snapshot/status/history ops + CLI foundation (`init`, `snapshot`, `status`, `history`, `log`, `cat`, `hash-object`).
-4. Diff engine (Myers line diff, rename detection, binary handling, JSON+unified output).
 5. Merge engine (3-way tree + diff3 content merge, conflicts, integrate/rollback).
 6. Goals/Changes/Actors/Evidence/Evaluations/Proposals ops + CLI.
 7. verify (fsck) + gc + reflog + chaos/failure-injection suite.

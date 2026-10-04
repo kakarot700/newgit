@@ -168,4 +168,37 @@ proptest! {
             prop_assert_eq!(a2.extras, m);
         }
     }
+    // ── diff: opcodes reconstruct exactly and are deterministic ──
+    #[test]
+    fn diff_reconstructs_and_is_deterministic(
+        va in prop::collection::vec("[abc]\n", 0..40),
+        vb in prop::collection::vec("[abc]\n", 0..40),
+    ) {
+        let a: Vec<&[u8]> = va.iter().map(|s| s.as_bytes()).collect();
+        let b: Vec<&[u8]> = vb.iter().map(|s| s.as_bytes()).collect();
+        let ops1 = newgit::diff::myers::diff_lines(&a, &b, 1024);
+        let ops2 = newgit::diff::myers::diff_lines(&a, &b, 1024);
+        prop_assert_eq!(
+            ops1.as_ref().map(|o| format!("{o:?}")),
+            ops2.as_ref().map(|o| format!("{o:?}"))
+        );
+        if let Some(ops) = &ops1 {
+            // ranges monotone and in-bounds; Equal ranges truly equal
+            let mut alast = 0usize;
+            let mut blast = 0usize;
+            for op in ops {
+                prop_assert!(op.a1 >= alast && op.b1 >= blast);
+                prop_assert!(op.a2 <= a.len() && op.b2 <= b.len());
+                alast = op.a2;
+                blast = op.b2;
+                if op.tag == newgit::diff::myers::Tag::Equal {
+                    prop_assert_eq!(&a[op.a1..op.a2], &b[op.b1..op.b2]);
+                }
+            }
+            prop_assert_eq!(alast, a.len());
+            prop_assert_eq!(blast, b.len());
+            // reconstruction invariant: applying opcodes to a yields b
+            prop_assert_eq!(newgit::diff::myers::reconstruct(&a, &b, ops), b);
+        }
+    }
 }
