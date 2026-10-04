@@ -59,10 +59,22 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   transcript; 20 new tests (total 186). ✅
 
 
-## Iteration 7 — verify + gc + chaos  [ ]
-- `newgit verify` (fsck): objects, refs, relationships, indexes, workspaces.
-- Safe GC with grace period, reachability from all registries; interruption tests.
-- Chaos suite: seeded random ops + crashes + malformed fixtures; regression capture.
+## Iteration 7 — verify + gc + chaos  [x]
+- `newgit verify [--deep]` (fsck): objects (layout/name/envelope/digest/
+  misfiled/canonicality + deep link walk), refs/HEAD/reflogs, chains
+  (head/prev/cycle/type), workspaces (meta/files/refs/index cache), txn dir,
+  config; stable issue codes; errors ⇒ exit 3; strictly read-only (D-014). ✅
+- `newgit gc [--dry-run|--force-now]`: roots = HEAD + refs + reflogs +
+  workspace bases; extras.prev-aware mark; txn lock held; 24 h grace window;
+  never deletes corrupt/misfiled/quarantine/debris; `newgit recover` CLI. ✅
+- Journal checkpointing (D-015): txn dir bounded; found by e2e test. ✅
+- Chaos suite: 6 seeds × 14–25 random ops × random fault-point child kills;
+  per-step invariants (auto-recovery, deep verify clean, refs resolve,
+  status computes); end-of-seed gc + history walk. Found 2 real bugs. ✅
+- Fuzz-like parser firehose (110k inputs, 7 parsers, no panics). ✅
+- Benchmarks: `newgit-bench` (no deps) + real numbers in docs/BENCHMARKS.md
+  (pulled forward from iteration 11). ✅
+- 33 new tests (total 219); fmt/clippy clean. ✅
 
 ## Iteration 8 — Git compatibility  [ ]
 - `newgit import-git` (parse `git fast-export`), `newgit export-git` (emit `git fast-import`).

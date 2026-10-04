@@ -205,3 +205,71 @@ immutable and content-addressed.
 **Consequences.** Full auditability (who changed a status, when, from what
 to what — via chain + reflogs), safe concurrency, and machine-checkable
 honesty rules without a database.
+
+---
+
+## D-014 · verify + gc: read-only fsck, strictly non-destructive gc (Iteration 7)
+
+**Decision.** `newgit verify` is strictly read-only — it classifies and
+reports (stable machine codes, `error`/`warning` severities), never repairs;
+messages name the next command to run. Error ⇒ exit 3; warnings ⇒ exit 0
+(debris that the engine tolerates by design: quarantined objects, orphan
+workspace dirs, stale locks, temp-file debris, corrupt index caches).
+Crash-debris classes are warnings, not corruption: a workspace whose files/
+vanished between the create-txn and the (unjournaled) checkout is repairable
+by `checkout` (same policy as D-012's post-commit checkout).
+
+`newgit gc` is mark-and-sweep with four safety rules:
+1. **Roots** = HEAD + every ref value (refs/, workspaces/, chains/) + every
+   reflog OLD/NEW oid (audit history is never collected) + workspace
+   base_oids. Mark follows every link type **including `extras.prev`** chain
+   links (older Goal/Change/Proposal versions are reachable audit trail).
+2. The **global txn lock is held for the whole run** (after a recovery pass),
+   so refs cannot move between root collection and sweep. Object writes by
+   concurrent processes don't take the txn lock — they are protected by a
+   **24 h mtime grace window** (`--force-now` overrides; tests/single-user).
+3. **Never destructive about anomalies**: only objects that decode cleanly
+   AND match their file name are deleted. Unreadable/corrupt/misfiled files
+   are kept and counted (`kept_corrupt`), quarantine (`*.corrupt`) is never
+   touched, non-object debris is left for humans. A damaged repo does not
+   block gc — missing links are counted (`missing_links`) and reported.
+4. Deletion needs **no journaling**: removing provably-unreachable,
+   fully-decodable objects cannot destroy reachable state; shard dirs are
+   pruned when empty and fsynced.
+
+`reachable()` is lenient by construction (missing objects are collected, not
+fatal) so gc stays usable on damaged repos; `verify` remains the tool that
+reports damage. Deep verify (`--deep`) re-encodes every object and compares
+bytes (canonical-form drift detection) and walks every link (existence +
+type).
+
+**Consequences.** Operators get git-fsck/git-gc-equivalent guarantees with
+stronger forensic preservation (corrupt data is never auto-deleted). gc
+blocks writers for its duration — acceptable at current scale, documented in
+KNOWN_LIMITATIONS #16.
+
+## D-015 · Journal checkpointing: delete on success, recovery deletes terminal states (Iteration 7)
+
+**Decision.** A successful transaction deletes its own journal after the
+COMPLETE state is durably written (still under the txn lock). Recovery
+deletes any journal found in a terminal state (COMPLETE/RECOVERED) and, after
+redoing a RUNNING journal and marking it RECOVERED, deletes it too.
+
+**Context.** Discovered by the iteration-7 e2e test: successful txns left
+COMPLETE journals forever — unbounded txn-dir growth, every open/recover
+rescanned dead journals, and `verify` correctly-but-noisily warned about
+"unrecovered" journals that were in fact complete. The reflog (which carries
+the txn id + message per ref update) is the durable audit trail; journal
+content is redundant after apply.
+
+**Crash-safety argument.** At any crash point the journal is either absent
+(nothing committed), RUNNING (redo — idempotent apply + reflog txn-id dedup,
+D-009), COMPLETE (durable + applied ⇒ safe to delete), or RECOVERED (redo
+already durable ⇒ safe to delete). Deletion after the COMPLETE fsync can
+only lose a redundant file.
+
+**Consequences.** `txn/` stays bounded (journals exist only while live or
+awaiting recovery); recovery scans shrink to O(pending); `verify`'s
+journal_pending warning becomes meaningful (concurrent activity or genuinely
+unrecovered crash). Tests upgraded to the stronger invariant: after
+recovery, zero journal files remain.

@@ -110,3 +110,24 @@ Spec: **docs/STORAGE_FORMAT.md** (normative).
 * Path safety enforced at every filesystem boundary (walk, checkout, join).
 * Evidence honesty protocol: claimed vs deterministic results distinguished.
 * Resource limits configurable and enforced (sizes, counts, depth, requests).
+
+## 7. Maintenance layer (verify · gc · recover)
+
+```
+verify (read-only fsck)          gc (mark & sweep)                recover (WAL)
+  objects: layout/name/            roots: HEAD + refs +             redo RUNNING journals
+    envelope/digest/misfiled/        reflogs + ws bases             (idempotent apply,
+    canonical (--deep re-encode)   mark: all links incl.             reflog txn-id dedup)
+  links: existence + type           extras.prev chains            delete terminal journals
+  refs/HEAD/reflog grammar        lock: global txn lock            (checkpointing, D-015)
+  chains: head/prev/cycle/type    grace: 24 h mtime window         quarantine corrupt
+  workspaces: meta/files/refs/    NEVER deletes: corrupt,           journals; sweep stale
+    index cache                     misfiled, quarantine,           object temp files
+  txn dir + config                  non-object debris
+  ⇒ coded Issues (error|warn)     ⇒ GcReport counters
+```
+
+Design rules (D-014/D-015): verify never mutates; gc is strictly
+non-destructive about anything it cannot fully decode; crash debris classes
+are warnings with repair hints, not corruption; journals exist only while a
+transaction is live or awaiting recovery.

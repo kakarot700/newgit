@@ -189,10 +189,14 @@ txn/<ts_ms>-<pid>-<rand>.journal
 
 Protocol: acquire global txn lock → write journal (RUNNING) → fsync →
 materialize all new contents as temp files → fsync → rename each → fsync dirs
-→ append reflog lines → rewrite header state=COMPLETE → fsync → release lock.
-Recovery on open: any journal not COMPLETE is **redone** from its recorded
-final state (renames are idempotent), then marked RECOVERED. This yields
-all-or-nothing semantics across process death.
+→ append reflog lines → rewrite header state=COMPLETE → fsync → **delete the
+journal (checkpoint)** → release lock.
+Recovery on open: any RUNNING journal is **redone** from its recorded final
+state (renames are idempotent), marked RECOVERED, then deleted; COMPLETE or
+RECOVERED journals (crash between commit and checkpoint-delete) are deleted
+without re-apply. This yields all-or-nothing semantics across process death
+and keeps `txn/` bounded: a journal exists only while a transaction is live
+or a crash is awaiting recovery (D-015).
 
 ## 7. Workspace index (status cache)
 

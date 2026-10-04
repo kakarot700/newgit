@@ -138,13 +138,10 @@ fn cas_precondition_failure_writes_nothing() {
     assert!(matches!(r, Err(newgit::Error::CasFailed(_))));
     assert_eq!(repo.refs.read("x").unwrap(), oid(1));
     assert!(repo.refs.read_opt("y").unwrap().is_none());
-    // the failed txn must not have left a RUNNING journal (earlier successful
-    // txns leave COMPLETE journals, which is fine)
+    // Checkpointing: successful txns delete their journals, and the failed
+    // CAS txn never wrote one — the txn dir must be empty.
     let states = journal_states(&repo);
-    assert!(
-        states.iter().all(|(_, s)| s == "COMPLETE"),
-        "unexpected journal states: {states:?}"
-    );
+    assert!(states.is_empty(), "unexpected journals: {states:?}");
 }
 
 #[test]
@@ -199,8 +196,9 @@ fn crash_after_journal_commits_on_recovery() {
     let repo = newgit::repo::Repo::open(&root).unwrap();
     assert_eq!(repo.refs.read("r1").unwrap(), oid(1));
     assert_eq!(repo.refs.read("r2").unwrap(), oid(2));
+    // recovery redoes the txn and checkpoint-deletes the journal
     let st = journal_states(&repo);
-    assert!(st.iter().all(|(_, s)| s == "RECOVERED"), "{st:?}");
+    assert!(st.is_empty(), "{st:?}");
     // reflog deduped even though redo re-appended
     assert_eq!(repo.refs.reflog("r1").unwrap().len(), 1);
     assert_eq!(repo.refs.reflog("r2").unwrap().len(), 1);
@@ -246,7 +244,7 @@ fn crash_before_complete_marker_recovers_and_dedupes_reflog() {
     assert_eq!(repo.refs.reflog("k1").unwrap().len(), 1);
     assert_eq!(repo.refs.reflog("k2").unwrap().len(), 1);
     let st = journal_states(&repo);
-    assert!(st.iter().all(|(_, s)| s == "RECOVERED"), "{st:?}");
+    assert!(st.is_empty(), "{st:?}");
     // repeated recovery is a no-op
     let (rep, _) = repo.recover().unwrap();
     assert!(rep.redone.is_empty());

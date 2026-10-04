@@ -29,31 +29,47 @@ confused (`deterministic`, `ai_generated`).
 
 - **Immutable, content-addressed state** — SHA-256 identity; self-verifying
   on-disk envelope; corruption is always detected, never silent.
-- **Crash-safe by construction** — atomic writes, WAL-journaled transactions,
-  idempotent recovery; fault-injection tested.
+- **Crash-safe by construction** — atomic writes, WAL-journaled transactions
+  with checkpointing, idempotent recovery; fault-injection AND chaos tested
+  (seeded crash storms with per-step integrity invariants).
+- **Verifiable & collectable** — `newgit verify` is a strictly read-only
+  fsck with stable issue codes; `newgit gc` is strictly non-destructive
+  (never deletes anything it cannot fully decode; reflogs and audit chains
+  are roots; corrupt data is preserved for forensics).
 - **Concurrency first-class** — lock+CAS refs, isolated workspaces, races and
   interrupted operations under test.
 - **Secure by design** — no implicit execution of repo content, total parsers
   (no panics on malformed input), path-safety grammar, configurable resource
   limits, threat-model-driven tests.
 - **Git-compatible where it matters** — import real git repos, export back
-  (fast-export/fast-import), documented exact limitations.
+  (fast-export/fast-import via system git), documented exact limitations
+  (landing iteration 8).
 - **Zero-rupee, self-hostable** — 5 small runtime dependencies, no cloud,
   no paid services, single static binary + optional built-in server/web UI.
 
-## Quickstart (once iteration 3 lands)
+## Quickstart (real, working syntax — full transcript in docs/AGENT_WORKFLOW.md)
 
 ```bash
 newgit init myproject && cd myproject
+newgit actor set-default --id agent:qwen-coder --name "Qwen Coder"
 newgit snapshot -m "initial state"
-newgit goal create "Add OAuth authentication"
-newgit workspace create ws-agent-a --goal <goal-id>
-# ... work happens in the workspace directory ...
-newgit change create --workspace ws-agent-a --goal <goal-id> -m "implement OAuth"
-newgit evidence run --change <change-id> -- cargo test        # deterministic evidence
-newgit proposal create --change <change-id>
-newgit integrate --proposal <proposal-id>
-newgit verify && newgit history
+
+newgit goal create "Add OAuth authentication"        # → <goal-id>
+newgit goal set-status <goal-id> in_progress
+newgit workspace create ws-agent-a
+# ... the agent works in .newgit/workspaces/ws-agent-a/files ...
+newgit snapshot -w ws-agent-a -m "implement OAuth" --goal <goal-id>   # → <snap>
+newgit change create "implement OAuth" --base <initial-snap> --result <snap> --goal <goal-id>  # → <change-id>
+
+newgit evidence record --kind unit_test --target <change-id> -w ws-agent-a -- cargo test
+newgit change attach-evidence <change-id> <evidence-oid>
+newgit change set-status <change-id> tested          # honesty gate: needs evidence
+
+newgit proposal create "Ship OAuth" --change <change-id>              # → <proposal-id>
+newgit proposal approve <proposal-id> --author human:reviewer --author-name "Reviewer"
+newgit proposal integrate <proposal-id>              # atomic: position + both chains
+newgit goal set-status <goal-id> achieved
+newgit verify && newgit history --goal <goal-id>
 ```
 
 All commands support `--json` for agents and scripts; exit codes are stable

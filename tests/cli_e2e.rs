@@ -832,3 +832,84 @@ fn debug_logging_goes_to_stderr_jsonl() {
     // stdout stays clean for scripts
     assert!(r.out.contains("initialized"));
 }
+
+#[test]
+fn verify_gc_recover_cli_contract() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("p7");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    ok(
+        &proj,
+        &["actor", "set-default", "--id", "a1", "--name", "A"],
+    );
+    std::fs::write(proj.join("x.txt"), b"content").unwrap();
+    ok(&proj, &["snapshot", "-m", "one"]);
+
+    // clean repo: exit 0; JSON envelope carries the full report
+    let r = ng(&proj, &["verify", "--deep", "--json"]);
+    assert_eq!(r.code, 0, "{}{}", r.out, r.err);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["ok"], serde_json::json!(true));
+    assert!(v["data"]["objects_checked"].as_u64().unwrap() > 0);
+    assert_eq!(v["data"]["issues"], serde_json::json!([]));
+
+    // orphan object: dry-run reports, real gc deletes, cat then fails 3
+    std::fs::write(proj.join("y.txt"), b"orphan payload").unwrap();
+    let orphan = ok(&proj, &["hash-object", "y.txt", "--write"]);
+    let orphan = orphan.trim();
+    assert_eq!(orphan.len(), 64);
+    let r = ng(&proj, &["gc", "--dry-run", "--force-now", "--json"]);
+    assert_eq!(r.code, 0);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["data"]["deleted_objects"], serde_json::json!(1));
+    assert_eq!(v["data"]["dry_run"], serde_json::json!(true));
+    ok(&proj, &["gc", "--force-now"]);
+    let r = ng(&proj, &["cat", orphan]);
+    assert_eq!(r.code, 3, "collected blob must be gone");
+
+    // corrupt an object: verify exits 3 in BOTH formats, JSON still ok=true
+    // (the report is the payload; the exit code carries pass/fail)
+    let mut victim = PathBuf::new();
+    for shard in std::fs::read_dir(proj.join(".newgit").join("objects")).unwrap() {
+        for f in std::fs::read_dir(shard.unwrap().path()).unwrap() {
+            let f = f.unwrap().path();
+            if f.file_name().unwrap().to_string_lossy().len() == 62 {
+                victim = f;
+                break;
+            }
+        }
+        if !victim.as_os_str().is_empty() {
+            break;
+        }
+    }
+    let mut bytes = std::fs::read(&victim).unwrap();
+    let mid = bytes.len() / 2;
+    bytes[mid] ^= 0xff;
+    std::fs::write(&victim, &bytes).unwrap();
+
+    let r = ng(&proj, &["verify", "--json"]);
+    assert_eq!(r.code, 3);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["ok"], serde_json::json!(true));
+    assert!(!v["data"]["issues"].as_array().unwrap().is_empty());
+    let r = ng(&proj, &["verify"]);
+    assert_eq!(r.code, 3);
+    assert!(r.out.contains("object.corrupt"));
+
+    // gc on a damaged repo: keeps the unreadable file (forensics), exits 0
+    let r = ng(&proj, &["gc", "--force-now", "--json"]);
+    assert_eq!(r.code, 0, "{}{}", r.out, r.err);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["data"]["kept_corrupt"], serde_json::json!(1));
+    assert!(victim.exists());
+
+    // recover is clean-running and JSON-shaped
+    let r = ng(&proj, &["recover", "--json"]);
+    assert_eq!(r.code, 0);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["data"]["redone"], serde_json::json!([]));
+    let r = ng(&proj, &["recover"]);
+    assert_eq!(r.code, 0);
+    assert!(r.out.contains("recover:"));
+}

@@ -150,10 +150,58 @@ Repository configuration and resource limits (`key = value` format).
 
 ### `newgit version` · `newgit help [<topic>]`
 
+## Maintenance commands (iteration 7)
+
+### `newgit verify [--deep] [--json]`
+
+Read-only filesystem integrity check (fsck). Never modifies anything
+(D-014). Prints a coded issue list (`object.corrupt`, `ref.target_missing`,
+`chain.cycle`, `workspace.orphan_dir`, …) with `error`/`warning` severities.
+
+* Exit 0 when there are no **errors** (warnings are tolerable debris with
+  repair hints in the message); exit 3 when any error is found.
+* `--deep` additionally re-encodes every object and compares bytes
+  (canonical-form drift) and walks every object link (existence + type).
+* `--json`: `{ok:true, data:{objects_checked, refs_checked, chains_checked,
+  workspaces_checked, quarantined, issues:[{code, severity, detail, oid?,
+  path?}]}}` — the report is always the payload; the **exit code** carries
+  pass/fail.
+* Warning classes (exit stays 0): quarantined objects, orphan workspace
+  dirs, missing workspace `files/` (hint: `checkout -w <name>`), corrupt
+  index caches (hint: safe to delete), leftover locks, pending journals,
+  object-store temp debris.
+
+### `newgit gc [--dry-run] [--force-now] [--json]`
+
+Strictly non-destructive mark-and-sweep garbage collection.
+
+* Roots: HEAD, every ref (incl. `workspaces/*` positions and `chains/*`
+  heads), every reflog OLD/NEW oid, workspace `base_oid`s. Reachability
+  follows **all** links, including `extras.prev` chain history — audit
+  trails are never collected.
+* Holds the global txn lock for the run (writers block briefly); runs a
+  recovery pass first.
+* Unreachable objects **younger than 24 h** are kept (`kept_young`) to
+  protect concurrent in-flight writes; `--force-now` disables the grace
+  window (tests / single-user repos).
+* Never deletes anything it cannot fully decode and identify: corrupt or
+  misfiled files stay for forensics (`kept_corrupt`), quarantine
+  (`*.corrupt`) is untouchable, non-object debris is left alone.
+* `--dry-run` reports without deleting. `--json` returns the full
+  `GcReport` (`live_objects, deleted_objects, freed_bytes, kept_young,
+  kept_corrupt, quarantined, missing_links, deleted_oids`).
+
+### `newgit recover [--json]`
+
+Explicit crash-recovery pass (also runs automatically on every repository
+open): redoes RUNNING journals (idempotent), checkpoint-deletes terminal
+journals, quarantines unparsable journals, sweeps stale object temp files.
+JSON: `{redone:[ids], quarantined:[names], cleaned:N, temp_files_swept:N}`.
+
 ## Coming in later iterations
 
-`verify`/`gc` (it7) · `import-git`/`export-git` (it8) ·
-`remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
+`import-git`/`export-git` (it8) · `remote`/`serve`/`push`/`pull` (it9) ·
+`ui` (it10).
 
 ## Agent usage notes
 

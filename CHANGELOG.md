@@ -4,6 +4,45 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 7 — 2026-10-04)
+- `newgit verify [--deep] [--json]` — read-only fsck with stable issue codes
+  and error/warning severities: object layout/name/envelope/digest/misfiled/
+  non-canonical, deep link walks (existence + type), refs + HEAD + reflog
+  line format, chain head/prev-walk/cycle/type/root checks, workspace
+  meta/files/position-ref/index-cache consistency, txn-dir leftovers, config
+  parse. Errors ⇒ exit 3; crash debris classes are warnings (D-014).
+- `newgit gc [--dry-run] [--force-now] [--json]` — strictly non-destructive
+  mark-and-sweep: roots = HEAD + all refs + reflogs + workspace bases; mark
+  follows extras.prev chain links; global txn lock held for the run; 24 h
+  mtime grace window; corrupt/misfiled/quarantine/debris never deleted
+  (kept_corrupt / quarantined counters); empty shards pruned + fsynced.
+- `newgit recover [--json]` — explicit crash-recovery pass (also automatic
+  on every open); reports redone/cleaned/quarantined/swept.
+- Journal checkpointing (D-015): successful txns delete their journal;
+  recovery deletes terminal-state journals — `txn/` stays bounded.
+- Chaos suite (`tests/chaos.rs`): 6 fixed xorshift64* seeds × 14–25
+  randomized ops (snapshot/workspace-create/integrate/put-blob/txn-set) each
+  killed at random fault points in child processes; after EVERY step: open
+  auto-recovers, deep verify has zero errors, all refs resolve, status
+  computes; end-of-seed gc + full history walk. Found and fixed two real
+  bugs (temp-debris misclassification, journal accumulation).
+- Fuzz-like parser suite (`tests/fuzz_parsers.rs`): 110k seeded prefix-
+  anchored garbage inputs across envelope/canonical/index/journal/config/
+  hex/base64/ref-grammar parsers — no panics, no unbounded allocation (I4).
+- Benchmarks (`src/bin/newgit-bench.rs`, zero extra deps) + real recorded
+  numbers in docs/BENCHMARKS.md: put_blob 0.09 ms, snapshot 1k cold ~50 ms /
+  warm 2.4 ms, 5k cold ~214 ms, status 1.9/4.5 ms cached/uncached, diff 1k
+  ~1 ms, integrate 3-way ~5.3 ms, history 500 ~4 ms, verify --deep ~37 ms,
+  gc 1000 orphans ~19 ms (sandbox Xeon 2.6 GHz, overlay FS).
+- 33 new tests (20 verify_gc + 6 chaos + 6 fuzz + 1 cli e2e) — total 219.
+
+### Changed (iteration 7)
+- `verify` classifies object-store temp files (`*.tmp.*`) as warning-level
+  crash debris (swept by recovery once stale), not layout errors.
+- `workspace.files_missing` downgraded error → warning with a
+  `newgit checkout -w <name>` repair hint (repairable debris, D-012/D-014).
+- faultlab: unknown command now exits non-zero (was silently 0).
+
 ### Added (iteration 6 — 2026-10-04)
 - Workflow entities on CAS-guarded version chains (`chains/<root>` refs,
   `extras.prev` audit links): goals, changes, proposals.

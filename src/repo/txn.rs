@@ -85,6 +85,8 @@ pub struct TxnReport {
 pub struct RecoveryReport {
     pub redone: Vec<String>,
     pub quarantined: Vec<String>,
+    /// Terminal-state journals checkpoint-deleted during this pass.
+    pub cleaned: usize,
 }
 
 pub fn now_ms() -> i64 {
@@ -365,6 +367,12 @@ pub fn execute(ng: &Path, ops: Vec<TxnOp>, limits: &Limits) -> Result<TxnReport>
     fsx::atomic_write(&jpath, done.serialize().as_bytes())?;
     let _ = fault::fault_action("txn:after_complete");
 
+    // Checkpoint: the txn is durable and applied — remove its journal.
+    // A crash before this delete is harmless: recovery deletes journals
+    // in terminal states. Without checkpointing the txn dir would grow
+    // without bound and every open/recover would rescan dead journals.
+    let _ = std::fs::remove_file(&jpath);
+
     drop(lock);
     Ok(TxnReport {
         txn_id: journal.id,
@@ -422,14 +430,22 @@ fn recover_locked(ng: &Path, limits: &Limits) -> Result<RecoveryReport> {
             }
         };
         match journal.state {
-            JournalState::Complete | JournalState::Recovered => continue,
+            JournalState::Complete | JournalState::Recovered => {
+                // Terminal state: the txn is durable and applied. Delete
+                // (checkpoint cleanup — the writer normally deletes it
+                // itself; this covers a crash between commit and delete).
+                std::fs::remove_file(&jpath).map_err(|e| Error::io(&jpath, e))?;
+                report.cleaned += 1;
+            }
             JournalState::Running => {
                 // Crash happened before COMPLETE: redo (idempotent).
                 apply_journal(ng, &journal, limits)?;
                 let mut done = journal.clone();
                 done.state = JournalState::Recovered;
                 fsx::atomic_write(&jpath, done.serialize().as_bytes())?;
-                report.redone.push(journal.id);
+                report.redone.push(journal.id.clone());
+                std::fs::remove_file(&jpath).map_err(|e| Error::io(&jpath, e))?;
+                report.cleaned += 1;
             }
         }
     }

@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 6 of 12 complete).
+**Current classification: NOT PRODUCTION READY** (iteration 7 of 12 complete — no Git compatibility, no remote/auth yet).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -16,7 +16,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
 - [x] changes / goals / evidence / evaluations / proposals — iteration 6 ✅ (9 workflow suites + two-agent e2e)
 - [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
-- [ ] verification (fsck) — iteration 7
+- [x] verification (fsck) — iteration 7 ✅ (`newgit verify [--deep]`, 20 verify_gc suites + chaos per-step)
 - [ ] Git compatibility path — iteration 8
 
 ## RELIABILITY
@@ -24,8 +24,9 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] crash recovery for transactions (forward recovery, quarantine, dedup) — iteration 2 ✅ (5 abort scenarios)
 - [x] corruption detection (digest, misfiling, truncation, bombs) — iteration 1
 - [x→partial] concurrency testing: refs/txn races ✅ it2; integrate serialization ✅ it5; remote races due it9
-- [ ] failure injection suite end-to-end — iterations 2–7
-- [ ] recovery verification (chaos) — iteration 7
+- [x] failure injection suite end-to-end — iterations 2–7 ✅ (30+ fault-point scenarios via newgit-faultlab)
+- [x] recovery verification (chaos) — iteration 7 ✅ (tests/chaos.rs: 6 seeds × random ops × random kills; per-step deep-verify invariant)
+- [x] safe gc — iteration 7 ✅ (non-destructive mark-sweep, D-014; `gc_*` suites + chaos end-of-seed)
 
 ## SECURITY
 - [x] threat model — THREAT_MODEL.md (surfaces A–G; pending tests tracked)
@@ -35,11 +36,11 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [ ] access control (remote authn/authz) tested — iteration 9
 
 ## QUALITY
-- [x] unit tests (101) + integration (49) + e2e (9) + property (12) — iterations 1–5
-- [x→partial] integration/E2E/property suites ✅ it2–3; fuzz + chaos due it7; regression discipline active
+- [x] unit tests (101) + integration (49) + e2e (11) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (6) — iterations 1–7 (219 total)
+- [x] integration/E2E/property/fuzz/chaos suites ✅ it2–7; regression discipline active (chaos seeds grow per bug found)
 
 ## PERFORMANCE
-- [ ] representative benchmarks — iteration 11
+- [x] representative benchmarks — iteration 7 ✅ (src/bin/newgit-bench.rs + docs/BENCHMARKS.md real numbers; release re-check due it11)
 
 ## OPERABILITY
 - [ ] structured diagnostics/logs, health checks, deployment docs — iterations 9–11

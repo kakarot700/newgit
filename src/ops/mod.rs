@@ -3,9 +3,11 @@
 //! inputs — the CLI and the remote server share this layer.
 
 pub mod checkout;
+pub mod gc;
 pub mod history;
 pub mod integrate;
 pub mod snapshot;
 pub mod status;
 pub mod tree;
+pub mod verify;
 pub mod workflow;

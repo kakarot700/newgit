@@ -30,11 +30,13 @@ Each threat: vector → impact → mitigation → test that proves it.
 
 | Threat | Mitigation | Test |
 |---|---|---|
-| Process killed mid-write (object) | tmp+fsync+rename; debris swept | fault points `ostore:*` ✅ hooks; crash tests (it2) |
-| Kill mid-transaction (multi-ref) | WAL journal + idempotent redo on open | (it2) pending |
-| Racing ref updates | per-ref lock + CAS with expected-old | (it2) pending |
-| Double integration / duplicate ops | CAS on proposal state + snapshot parents; idempotent object puts | (it5) pending |
-| GC vs concurrent writer | txn lock + grace period; unreachable-and-old only | (it7) pending |
+| Process killed mid-write (object) | tmp+fsync+rename; debris swept by recovery; verify classifies temp debris as warning | `ostore:*` fault tests (it2/3), `temp_debris_is_warning_and_survives_gc`, chaos ✅ |
+| Kill mid-transaction (multi-ref) | WAL journal + idempotent redo on open; checkpoint-delete after COMPLETE (D-015) | `txn_recovery.rs` (10 suites) ✅ |
+| Racing ref updates | global txn lock + CAS with expected-old | `concurrency_refs.rs` ✅ |
+| Double integration / duplicate ops | CAS on proposal state + snapshot parents; idempotent object puts; reflog txn-id dedup | `merge_integrate.rs` race suites ✅ |
+| GC vs concurrent writer | txn lock held for whole gc; 24 h mtime grace window protects in-flight object writes; only fully-decodable unreachable objects deleted | `gc_grace_window_keeps_young_objects`, chaos per-step invariants ✅ |
+| GC/verify against damaged repo | gc keeps corrupt/misfiled/quarantine files (forensics), reports missing_links; verify never mutates | `gc_keeps_unreadable_objects...`, `verify_never_modifies_the_repository` ✅ |
+| Local DoS via long gc | gc duration linear in object count, lock bounded by lock_wait_ms for clients; documented in KNOWN_LIMITATIONS #16 | bench: gc 1000 orphans ≈ 19 ms ✅ |
 
 ## D. CLI / local interface
 

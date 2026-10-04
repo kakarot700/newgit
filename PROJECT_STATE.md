@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 6 COMPLETE — goals/changes/evidence/evaluations/proposals + two-agent workflow.
-- **Classification:** NOT PRODUCTION READY (no verify/gc/remotes yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **186/186** ✓ (101 unit + 10 cli-e2e + 4 concurrency + 8 diff + 18 merge + 13 ops + 12 property + 10 txn-recovery + 1 version + 9 workflow).
+- **Phase:** Iteration 7 COMPLETE — verify (fsck) + non-destructive gc + recover CLI + chaos suite + fuzz-like parsers + benchmarks (D-014, D-015).
+- **Classification:** NOT PRODUCTION READY (no Git compatibility, no remote/auth yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **219/219** ✓ (101 unit + 6 chaos + 11 cli-e2e + 4 concurrency + 8 diff + 6 fuzz + 18 merge + 13 ops + 12 property + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks recorded in docs/BENCHMARKS.md (real runs, `cargo run --release --bin newgit-bench`).
 
 ## Environment / how to resume
 
@@ -39,12 +39,15 @@ src/
   merge/{diff3,base,mod}.rs      # 3-way content merge, LCA/ancestry, tree merge
   ops/integrate.rs               # atomic integrate, rollback, checkout_position
   ops/workflow.rs                # goals/changes/evidence/evaluations/proposals (chains)
+  ops/verify.rs                  # fsck: coded Issues, deep link walk, reachable() for gc
+  ops/gc.rs                      # non-destructive mark&sweep (D-014), grace window
   cli/workflow_cmds.rs           # workflow CLI command families
   cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
-tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e}.rs
-docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW}.md
+  bin/newgit-bench.rs              # benchmark harness (no bench deps)
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e,verify_gc,chaos,fuzz_parsers}.rs
+docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,BENCHMARKS}.md
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
 ```
@@ -184,36 +187,79 @@ None.
   atomicity at proposal:before/after_txn, evidence truncation/signal,
   honesty gates) + two-agent e2e.
 
+## What iteration 7 added (verified)
+
+- `newgit verify [--deep] [--json]` — read-only fsck (D-014): object
+  layout/name/envelope/digest/misfiled/noncanonical (+deep re-encode &
+  link walks), refs/HEAD/reflog-line grammar, chains (head/prev/cycle/
+  type/root-prev), workspaces (meta/files/position-ref/index cache),
+  txn dir (locks, pending journals), config. Stable issue codes;
+  errors ⇒ exit 3; crash debris ⇒ warnings with repair hints;
+  `verify_never_modifies_the_repository` enforces read-only.
+- `newgit gc [--dry-run] [--force-now] [--json]` — strictly non-destructive
+  mark&sweep: roots = HEAD + all refs + ALL reflog oids + workspace
+  base_oids; mark follows extras.prev chain links; global txn lock held;
+  24h mtime grace window; corrupt/misfiled/quarantine/non-object debris
+  NEVER deleted (kept_corrupt/quarantined counters); missing_links reported
+  on damaged repos instead of failing; empty shards pruned + fsynced.
+- `newgit recover [--json]` — explicit recovery pass + journal
+  CHECKPOINTING (D-015): successful txns delete their journal; recovery
+  deletes terminal-state journals. Found by the new e2e test — before the
+  fix, COMPLETE journals accumulated forever and every open rescanned them.
+- Chaos suite (tests/chaos.rs): 6 fixed xorshift64* seeds × 14–25 random
+  ops (snapshot/ws-create/integrate/put-blob/txn-set) each killed at random
+  fault points in child processes; after EVERY step: open auto-recovers,
+  deep verify zero errors, all refs resolve, status computes; end-of-seed:
+  gc cleans debris, full history walk survives, repo still usable.
+  Found 2 real bugs (temp-debris misclassified as error; journal buildup).
+- Fuzz-like parsers (tests/fuzz_parsers.rs): 110k seeded prefix-anchored
+  garbage inputs vs envelope/canonical/index/journal/config/hex/base64/
+  ref-grammar — no panics, no unbounded allocation (I4).
+- Benchmarks: src/bin/newgit-bench.rs (zero extra deps) + docs/BENCHMARKS.md
+  with REAL numbers (put_blob 0.09ms; snapshot 1k cold ~50ms / warm 2.4ms;
+  5k cold ~214ms; status 1.9/4.5ms; diff ~1ms; integrate ~5.3ms; history
+  500 ~4ms; verify deep ~37ms; gc 1000 orphans ~19ms) + regression policy.
+- CLI e2e: verify/gc/recover contract test (exit codes, JSON envelopes,
+  forensics preservation). 33 new tests total.
+
 ## Current task (next iteration)
 
-**Iteration 7: verify (fsck) + gc + chaos/failure-injection suite.**
+**Iteration 8: Git compatibility (import/export via system git, D-007).**
 Completion condition:
-1. `newgit verify [--deep] [--json]`: object digests, envelope integrity,
-   ref targets exist + type-correct, chain heads resolvable + prev-links
-   walk, tree acyclicity + entry validation, snapshot parent existence,
-   workspace meta/index/ref consistency, orphan workspace debris, leftover
-   journals/locks, quarantine inventory; exit 3 on any problem; repair
-   suggestions in messages (no silent auto-repair except documented sweeps).
-2. `newgit gc [--dry-run]`: reachability from refs + chains + workspace
-   positions + reflogs (bounded window) + HEAD; unreachable objects
-   removed atomically (mark-sweep with grace period); never runs during
-   active txns; quarantine dir compacted only when empty-of-active.
-3. Chaos suite: randomized op sequences (snapshot/integrate/discard/
-   rollback) × random fault points × child-process kills, then verify +
-   status consistency assertions (property-style, seeded, reproducible).
-4. Benchmarks scaffold (criterion-free: `newgit-bench` bin or #[ignore]
-   tests recording to docs/BENCHMARKS.md) for: snapshot 1k/10k files,
-   status cached/uncached, diff sizes, integrate throughput.
-5. Docs + state updates; commit.
+1. `src/gitio/` module: hand-rolled `git fast-export` stream parser and
+   `git fast-import` stream emitter (no new dependencies). Mapping:
+   git commit → Snapshot (author+committer → Actor objects with
+   deterministic ids derived from name+email; timestamps preserved;
+   message preserved byte-exact; merge parents → sorted parents set),
+   git tree → Tree (modes 100644/100755/120000/040000 → EntryMode),
+   blob → Blob byte-exact, refs/heads/* + refs/tags/* → NewGit refs.
+2. `newgit import-git <git-repo-path>`: runs `git -C <path> fast-export
+   --all` in a child (system git per D-007), streams into the object
+   store, moves refs via txn engine; progress + summary; deterministic:
+   importing the same git repo twice into fresh newgit repos yields
+   identical oids (test this).
+3. `newgit export-git <target-dir>`: walks NewGit history, emits
+   fast-import stream, pipes into `git fast-import` child; round-trip
+   test: git → import → export → git; compare file trees, messages,
+   timestamps, authorship via git itself.
+4. Honest limitations (docs/GIT_COMPAT.md + KNOWN_LIMITATIONS): no
+   submodules (gitlink 160000 → loud error, documented), signed tags →
+   signatures stripped + recorded in extras, no git notes/LFS smudging,
+   octopus merges supported (parents set), criss-cross history preserved.
+5. tests/git_compat.rs against REAL system-git repos (branches, merges,
+   renames, binary files, symlinks, exec bits, unicode messages, tags,
+   empty commits, deep history); malformed fast-export input → clean
+   errors (fuzz the parser too); exit codes documented.
+6. Docs + state updates; commit.
 
 ## Next tasks (ordered)
 
-7. verify (fsck) + gc + chaos/failure-injection suite.
 8. Git import/export via fast-export/fast-import + compatibility tests.
 9. Remote protocol (HTTP/1.1, JSON v1) server+client, auth, audit.
 10. Web UI served by remote server; MCP/agent-API docs.
-11. Benchmarks + BENCHMARKS.md; release engineering (dist script, checksums);
-    full docs set; final forensic audit; readiness gate.
+11. Release engineering (dist script, checksums, reproducible build);
+    benchmark re-run + full docs set; dependency audit/SBOM.
+12. Final forensic audit; production-readiness gate decision.
 
 ## Important decisions (full log in DECISIONS.md)
 

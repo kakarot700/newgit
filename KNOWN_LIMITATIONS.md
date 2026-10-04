@@ -38,7 +38,7 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     server speaks plain HTTP/1.1 and MUST NOT be exposed to hostile networks
     directly until TLS support or proxy setup is documented per deployment.
 
-## Diff (arrives iteration 4)
+## Diff
 13. Line diff uses Myers with a bounded edit distance (default 1024 per
     file). Beyond the cap the output falls back to a whole-file replace —
     always correct and reconstructible, but not minimal. Rename similarity
@@ -46,7 +46,7 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     only for the chosen pair) and is capped at 1000 candidate pairs; beyond
     that only exact-content renames are detected.
 
-## Merge (arrives iteration 5)
+## Merge
 14. Merge base selection picks the maximal common ancestor by
     (timestamp, oid) — criss-cross merges with several merge bases do not
     get git's "recursive" virtual-base treatment. Rename tracking in merges
@@ -55,6 +55,24 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     manual: NewGit stores the marker-annotated blob and expects a human or
     agent to edit + snapshot it (no rerere-style reuse yet).
 
+## Maintenance (verify / gc)
+16. `gc` holds the global transaction lock for its whole run — writers block
+    until it finishes. Bounded by repo size (mark + sweep are linear in
+    objects); at very large scale gc would need incremental/partial modes.
+17. The gc grace window is a fixed 24 h constant (protects concurrent
+    in-flight object writes); it is not repo-configurable yet. `--force-now`
+    disables it (tests, single-user repos).
+18. `verify` checks structural integrity (digests, canonical form, link
+    existence + types, ref/chain/reflog/workspace grammar) but NOT semantic
+    history rules: past chain transitions are not re-validated against the
+    state machines, timestamp monotonicity is not enforced, and there is no
+    cross-check that reflog actor ids exist. Also no repair mode by design
+    (D-014) — messages point at the fixing command.
+
 ## Process
 15. Benchmarks are measured on modest hardware (2 vCPU / 2 GB) — relative
     numbers, not marketing numbers (docs/BENCHMARKS.md).
+19. The chaos suite is deterministic (6 fixed seeds, 14–25 ops each) — a
+    regression net, not an open-ended fuzzer; seeds are added when bugs are
+    found (regression capture). Fuzz-like parser tests are likewise seeded
+    firehoses, not coverage-guided.

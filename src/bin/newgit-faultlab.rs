@@ -107,8 +107,8 @@ fn run(args: &[String]) -> Result<()> {
             let repo = Repo::open(root)?;
             let (rep, swept) = repo.recover()?;
             println!(
-                "OK redone={:?} quarantined={:?} swept={swept}",
-                rep.redone, rep.quarantined
+                "OK redone={:?} quarantined={:?} cleaned={} swept={swept}",
+                rep.redone, rep.quarantined, rep.cleaned
             );
             Ok(())
         }
@@ -177,9 +177,8 @@ fn run(args: &[String]) -> Result<()> {
             println!("OK {}", info.name);
             Ok(())
         }
-        other => {
-            eprintln!("faultlab: unknown command {other:?}");
-            Ok(())
-        }
+        other => Err(newgit::error::Error::Invalid(format!(
+            "faultlab: unknown command {other:?}"
+        ))),
     }
 }

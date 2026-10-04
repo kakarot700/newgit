@@ -137,6 +137,9 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "checkout" => cmd_checkout(ctx, tail),
         "actor" => cmd_actor(ctx, tail),
         "config" => cmd_config(ctx, tail),
+        "verify" | "fsck" => cmd_verify(ctx, tail),
+        "gc" => cmd_gc(ctx, tail),
+        "recover" => cmd_recover(ctx, tail),
         "goal" | "change" | "evidence" | "evaluation" | "proposal" => {
             workflow_cmds::dispatch(ctx, cmd, tail)
         }
@@ -218,6 +221,11 @@ Workflow (goals / changes / evidence / evaluations / proposals):
   evaluation from-evidence <change-id> | show <oid>
   proposal create <title> --change <id> [--rationale R] [--base s] [--evidence oids] [--depends ids]
   proposal show <id> | list | approve <id> | reject <id> | close <id> | integrate <id> [-w ws]
+
+Maintenance:
+  verify [--deep]              integrity check (fsck); exit 3 on errors
+  gc [--dry-run] [--force-now] delete unreachable objects (reflog kept)
+  recover                      apply pending crash-recovery journals
 
 Identity:
   actor show                   show the default actor
@@ -1183,4 +1191,128 @@ fn cmd_config(ctx: &Ctx, tail: &[String]) -> Result<Output> {
             "unknown config subcommand {other:?}"
         ))),
     }
+}
+
+fn cmd_verify(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo", "deep"])?;
+    let repo = open_repo(ctx)?;
+    let _span = obs::span("verify");
+    let rep = crate::ops::verify::verify(
+        &repo,
+        &crate::ops::verify::VerifyOpts {
+            deep: a.flag("deep"),
+        },
+    );
+    obs::event(
+        "verify_done",
+        &[
+            ("objects", json!(rep.objects_checked)),
+            ("errors", json!(rep.errors())),
+            ("warnings", json!(rep.warnings())),
+        ],
+    );
+    if ctx.json {
+        // always a full report; the exit code carries pass/fail
+        let v = serde_json::to_value(&rep).map_err(|e| Error::Bug(e.to_string()))?;
+        println!("{}", json!({ "ok": true, "data": v }));
+    } else {
+        let mut t = String::new();
+        t.push_str(&format!(
+            "checked {} objects, {} refs, {} chains, {} workspaces ({} quarantined)\n",
+            rep.objects_checked,
+            rep.refs_checked,
+            rep.chains_checked,
+            rep.workspaces_checked,
+            rep.quarantined
+        ));
+        for i in &rep.issues {
+            let sev = match i.severity {
+                crate::ops::verify::Severity::Error => "error",
+                crate::ops::verify::Severity::Warning => "warn ",
+            };
+            t.push_str(&format!("  [{sev}] {} — {}\n", i.code, i.detail));
+        }
+        t.push_str(&format!(
+            "{} error(s), {} warning(s)\n",
+            rep.errors(),
+            rep.warnings()
+        ));
+        print!("{t}");
+    }
+    if !rep.ok() {
+        std::process::exit(exit_code::REPO);
+    }
+    Ok(Output::Text(String::new()))
+}
+
+fn cmd_gc(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo", "dry-run", "force-now"])?;
+    let repo = open_repo(ctx)?;
+    let _span = obs::span("gc");
+    let rep = crate::ops::gc::gc(
+        &repo,
+        &crate::ops::gc::GcOpts {
+            dry_run: a.flag("dry-run"),
+            force_now: a.flag("force-now"),
+        },
+    )?;
+    obs::event(
+        "gc_done",
+        &[
+            ("deleted", json!(rep.deleted_objects)),
+            ("live", json!(rep.live_objects)),
+            ("dry_run", json!(rep.dry_run)),
+        ],
+    );
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&rep).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let verb = if rep.dry_run {
+        "would delete"
+    } else {
+        "deleted"
+    };
+    let mut t = format!(
+        "gc: {verb} {} unreachable object(s) ({} bytes); {} live, {} kept young, {} kept corrupt, {} quarantined\n",
+        rep.deleted_objects,
+        rep.freed_bytes,
+        rep.live_objects,
+        rep.kept_young,
+        rep.kept_corrupt,
+        rep.quarantined
+    );
+    if rep.missing_links > 0 {
+        t.push_str(&format!(
+            "note: {} root/link object(s) unreadable — run `newgit verify` for details\n",
+            rep.missing_links
+        ));
+    }
+    Ok(Output::Text(t.trim_end().to_string()))
+}
+
+fn cmd_recover(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let _span = obs::span("recover");
+    let (rep, swept) = repo.recover()?;
+    if ctx.json {
+        return Ok(Output::Json(json!({
+            "redone": rep.redone,
+            "quarantined": rep.quarantined,
+            "cleaned": rep.cleaned,
+            "temp_files_swept": swept,
+        })));
+    }
+    Ok(Output::Text(format!(
+        "recover: {} journal(s) redone, {} terminal journal(s) cleaned, {} object(s) quarantined, {} temp file(s) swept",
+        rep.redone.len(),
+        rep.cleaned,
+        rep.quarantined.len(),
+        swept
+    )))
 }
