@@ -99,6 +99,21 @@ Spec: **docs/STORAGE_FORMAT.md** (normative).
 * Workspaces: per-workspace lock; two actors never share one workspace.
 * Remote: server serializes ref updates through the same txn machinery.
 
+Git smart-HTTP projections are currently built per request; they are not an
+immutable repository snapshot and are not cached. The transaction lock
+serializes writers, but export readers do not hold it while collecting refs,
+`HEAD`, and object history, so they cannot yet prove a single committed view
+while a multi-ref transaction or recovery is applying. Do not add a projection
+cache or process-local generation counter until a durable repository generation
+covers every relevant object/ref/`HEAD` mutation (including initialization and
+recovery), readers can pin a stable committed snapshot, and each advertisement
+or upload-pack request independently validates the current generation before
+serving an immutable cache entry. An earlier entry can be reused only when that
+fresh check still identifies its generation as current. Advertisement and
+upload-pack are separate stateless HTTP requests, so without an explicit
+protocol-level snapshot token they cannot be guaranteed to use the same
+generation if a mutation lands between them.
+
 ## 5. Failure philosophy
 
 * Fail loudly, never silently: corruption, unknown config keys, non-minimal

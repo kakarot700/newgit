@@ -177,16 +177,55 @@ the remaining child drain/finalization after NewGit closes stdin. The upload-pac
 protocol subprocess is not the source of the 1.95-s delay. No production
 optimization was retained: removing already-tested request-local tree clones did
 not help, and reusing a projection without a proven invalidation boundary risks
-serving stale refs or `HEAD`. The safe next architecture is a versioned immutable
-read projection, keyed to a canonical repository generation that atomically
-covers all object/ref/`HEAD` writes and permits readers to pin one consistent
-generation across the advertisement and fetch. That generation and its
-concurrent-writer semantics must be implemented and proven before caching.
+serving stale refs or `HEAD`. Before caching, the canonical core needs a durable
+generation covering all relevant object/ref/`HEAD` writes and a consistent
+snapshot/publication protocol. Each HTTP request must independently validate
+the current generation; advertisement and fetch cannot be guaranteed the same
+generation if a mutation occurs between their stateless requests. That
+generation and its concurrent-writer semantics must be implemented and proven
+before caching.
 
 These are one-run measurements on a shared host, not cold-cache or capacity
 results. Timers are wall-clock intervals, not CPU attribution; `fast-import`
 stream feeding overlaps child consumption, and the existing 100-Hz CPU and
 leader-only RSS limitations described above still apply.
+
+### Projection-cache safety audit (2026-10-05)
+
+**Decision: do not cache projections or add a generation counter yet.** The
+performance case is real—an 800-commit unchanged fetch returns 219 bytes but
+spends a median 1,830.84 ms building two projections—yet the current mutation
+and read APIs do not provide a generation that can safely key reusable views.
+This is an architecture boundary, not a claim that a cache has been implemented
+or benchmarked.
+
+The current transaction engine serializes ref/metadata writers, but projection
+readers do not hold its lock. `apply_journal` writes each ref (and recovery
+replays each op) sequentially, while the exporter separately enumerates and
+reads refs, reads `HEAD`, walks histories, and reads objects. A concurrent
+multi-ref commit can therefore overlap projection construction. Object writes
+are lock-free and available through public object-store APIs; GC removes objects
+directly; `Repo::init_with` creates an initial `HEAD` outside the transaction
+engine; and generic transaction FILE/FDEL ops can target paths under `refs/` or
+`HEAD`. Recovery must be part of any future generation protocol, not treated as
+a process-local counter update. Separately, `info/refs` and stateless
+`git-upload-pack` are distinct requests, each opening the repository and
+building its own temporary projection; neither request carries a snapshot token
+for the other.
+
+A safe cache remains a possible future optimization only after the canonical
+core supplies a durable generation that advances or is idempotently repaired
+for every relevant object/ref/`HEAD` mutation, including GC and crash recovery;
+prevents or detects readers observing a partially applied transaction; and
+supports publication only when the captured generation is still current. Each
+HTTP request must independently validate the current committed generation
+before using an immutable cached view; an earlier entry is reusable only if that
+fresh check still finds its generation current. Because advertisement and
+upload-pack are separate stateless requests, they are not guaranteed to use the
+same generation if a mutation lands between them. If protocol-level pinning is
+required, it needs an explicit request/session token rather than an implicit
+cache hit. Cached Git files must remain disposable derived data; NewGit's
+objects and refs remain canonical.
 
 ## Environment (as measured)
 

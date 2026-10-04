@@ -2,6 +2,28 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-020 · Defer smart-HTTP projection caching until canonical generations are safe (2026-10-05)
+**Context:** An 800-commit unchanged smart-HTTP fetch returns 219 bytes but
+measures 1,944.18 ms median, including 1,830.84 ms for two temporary Git
+projections (`docs/BENCHMARKS.md`).
+**Decision:** Keep projections request-local; add neither a cache nor a
+process-local generation counter until the canonical core can prove a durable,
+consistent generation across all relevant object/ref/`HEAD` writes, GC, and
+crash recovery. Readers must capture a stable committed view, and every HTTP
+request must validate the current generation before using an immutable cache
+entry. A cache remains disposable derived data; NewGit stays canonical.
+**Rationale:** Current object writes are lock-free/public, GC deletes objects
+directly, journal application/recovery updates refs sequentially while readers
+do not hold the transaction lock, initialization creates `HEAD` outside the
+transaction engine, and generic FILE/FDEL ops can target refs or `HEAD`.
+Advertisement and upload-pack are separate stateless requests; without an
+explicit token, a mutation between them means they cannot be promised the same
+generation. These are current implementation facts, not hypothetical cache
+risks.
+**Consequences:** No production behavior or performance claim changes. Revisit
+only after the canonical mutation and reader-snapshot invariants are enforced
+and tested across competing writes, recovery, and HTTP request races.
+
 ## D-019 · Git smart HTTP through a separate read-only upload-pack adapter (2026-10-04)
 **Context:** The project needs ordinary Git clone/fetch/pull interoperability
 without making NewGit's canonical SHA-256 object store depend on Git's pack

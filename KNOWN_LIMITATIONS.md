@@ -180,9 +180,23 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     seconds); import is exact at git's own precision.
 24. **No efficient direct NewGit-object/Git-remote bridge**: import/export
     conversion is whole-history, and both smart-HTTP adapters rematerialize
-    the complete Git view for each discovery/request. Git's ordinary
-    upload-pack negotiation works at the wire/transfer layer, but does not
-    avoid that server-side export work.
+    the complete Git view for each discovery/request. A projection cache is
+    deliberately not implemented: object-store writes are lock-free and
+    `ObjectStore::put`/`put_canonical` are public; GC deletes object files
+    directly; multi-ref transactions and recovery apply refs one at a time
+    while projection readers do not hold the transaction lock; initial `HEAD`
+    creation bypasses the transaction engine; and generic transaction FILE/
+    FDEL operations are not restricted from targeting refs or `HEAD`. A
+    process-local counter would not cover other processes or survive restart,
+    and a counter advanced only by ref transactions would miss these paths.
+    Each advertisement and stateless upload-pack exchange opens and projects
+    separately, with no request token that pins the earlier advertised view.
+    Git's ordinary upload-pack negotiation works at the wire/transfer layer,
+    but does not avoid that server-side export work. Before caching, the core
+    needs a durable generation advanced/recovered across every relevant write,
+    a consistent reader snapshot/publication protocol, and per-request current-
+    generation validation; cached projections must remain disposable derived
+    data, never the source of truth.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
     (`extras.git_message_lossy`); a real Git plumbing fixture verifies the raw
     source bytes, fast-export payload, replacement text, marker, and lossy export
