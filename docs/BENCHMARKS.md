@@ -16,27 +16,28 @@ environment block first; results are only meaningful together with it.
 Reproduce the real-client benchmark with:
 
 ```sh
-cargo test --release --locked --lib --no-run
-time -p cargo test --release --locked --lib \
+cargo test --release --locked --lib \
   remote::git_http::benchmark::live_git_transfer_baseline -- \
   --ignored --nocapture
 ```
 
-The ignored test builds a deterministic NewGit fixture (80 commits, 40 paths
-per commit, 12 KiB per blob version), starts the live smart-HTTP server, and
-uses installed Git over loopback through a byte-counting HTTP proxy. It reports
-end-to-end wall time for full clone, `--depth=1`, `--filter=blob:none
---no-checkout`, one-file lazy hydration, and three unchanged fetches. Response
-bytes are the exact HTTP response-body `Content-Length` totals for each client
-operation. Three fresh temporary projections are also timed directly through
-the same builder called by the server; their on-disk size is measured
-recursively. `time -p` adds aggregate user/system CPU for the test command and
-its child processes; the harness does not report per-operation CPU or peak RSS.
-The crate forbids unsafe code, and no portable safe process-tree sampler is
-available in the benchmark. Do not compare aggregate CPU when the command also
-compiles the project; the `--no-run` command above warms that build first.
+The ignored test builds deterministic 80- and 800-commit NewGit fixtures (40
+paths per commit, 12 KiB per blob version) and sends real Git clients through the
+live loopback smart-HTTP server and a byte-counting proxy. For each fixture it
+prints three direct projection-build samples and temporary bytes, three full
+clones into fresh client directories, three unchanged fetches against the first
+clone, and a batch of four simultaneous full clones. Response-body bytes are
+the HTTP `Content-Length` totals observed by the proxy. There is no OS page-cache
+eviction: later samples are warm-cache observations, not cold-storage tests.
 
-### Measured result
+On Linux, `/proc/<pid>/stat` and `/proc/<pid>/status` are sampled every 2 ms for
+the Git leader process; this **excludes helper descendants** such as
+`index-pack`. CPU figures have kernel clock-tick resolution (100 Hz here). The
+test process's own CPU and high-water RSS include its in-process server threads
+but exclude its child Git commands. These are partial resource measurements,
+not whole-process-tree CPU or peak server RSS; non-Linux systems may report `n/a`.
+
+### Historical before/after comparison (80 commits)
 
 One before/after run on Git 2.43.0, Linux, loopback, the 2026-10-05 shared
 computer. The fixture and client commands were identical; only the temporary
@@ -69,13 +70,67 @@ retains its existing worktree behavior. Measured projection median was 6.71 ms
 unchanged-fetch median difference was only 3.32 ms (0.95%), so no general
 latency or throughput improvement is claimed. All measured response-body totals
 matched between the two runs. The benchmark does not measure concurrent load,
-peak RSS, or a large-repository scaling curve. It measures an adapter cost and
-temporary-storage reduction on this fixture only.
+peak RSS, or a large-repository scaling curve; the expanded observations below
+cover those dimensions with the process-scope limitations stated above.
 
 The projection change does not cache refs or Git objects, so it adds no cache
 invalidation window: each request still exports the current repository state
 using the existing request deadline. Ordinary `export-git` continues to
 materialize its checkout.
+
+### Larger-history, repeated, and concurrent reads (2026-10-05)
+
+The expanded benchmark ran on Git 2.43.0, Linux 6.18.38+, an Intel Xeon @
+2.50 GHz shared host with 8 online logical CPUs and 24,788,980 kB total memory.
+The fixtures were generated once per size; the 80-commit fixture took 484.99 ms
+to build (1,645,477 canonical-repository bytes), and the 800-commit fixture
+took 3,972.29 ms (12,002,285 bytes). Each operation's wall time excludes
+fixture creation and compilation. Projection directories are new per build and
+per live HTTP request; no persistent projection cache is used. The OS page cache
+was not cleared. Every row gives raw wall-time samples and their median where
+three serial samples were taken.
+
+| Workload | 80 commits | 800 commits |
+|---|---|---|
+| Projection wall time (ms), 3 samples | 125.48, 129.09, 125.67; median **125.67** | 928.33, 909.17, 926.67; median **926.67** |
+| Projection temporary bytes / Git object-store bytes | 1,497,394 / 1,496,958 | 10,629,021 / 10,628,585 |
+| Unique exported blobs | 119 | 839 |
+| Full-clone wall time (ms), 3 samples | 537.49, 545.32, 508.27; median **537.49** | 3,134.53, 3,138.91, 3,147.69; median **3,138.91** |
+| Full-clone response-body bytes, 3 samples | 1,486,989 each | 10,542,749; 10,542,784; 10,542,804 |
+| Unchanged-fetch wall time (ms), 3 samples | 358.44, 344.50, 301.29; median **344.50** | 1,946.69, 1,965.36, 1,929.67; median **1,946.69** |
+| Unchanged-fetch response-body bytes, 3 samples | 219 each | 219 each |
+| Four simultaneous full clones: batch wall time / aggregate response bytes | 650.15 ms / 5,947,946 | 3,182.38 ms / 42,170,091 |
+| Simultaneous individual client wall samples (ms) | 645.59, 649.95, 542.18, 602.98 | 3,157.08, 3,159.34, 3,182.14, 3,161.10 |
+
+At 800 commits the projection median was **7.37×** the 80-commit result, while
+the canonical fixture occupied 7.29× as many bytes. The unchanged-fetch median
+was **1.95 s** despite a 219-byte response body, versus 345 ms at 80 commits.
+The request path builds a temporary Git view for both smart-HTTP advertisement
+and upload-pack; a stateless fetch therefore rebuilds the history projection
+more than once. This points to projection construction—not response transfer—as
+the next bottleneck. The full-clone response grew to about 10.54 MB and its
+median wall time to 3.14 s. The four-client 800-commit batch took 3.18 s on this
+shared host; one batch per size is an observation, not a concurrency capacity
+claim.
+
+The harness process's overall high-water RSS was 102,380 KiB for the complete
+run. The highest sampled Git leader RSS was 6,184 KiB in serial 800-commit
+clones and 6,376 KiB among the four concurrent clients. Those RSS values omit
+the leaders' helper descendants. The Linux 100 Hz CPU counters are quantized
+(many Git-leader readings round to 0.000 s); the harness-process counter for an
+800-commit direct projection was 0.24–0.25 s, but excludes the child `git init`
+and `fast-import` CPU. CPU figures therefore do not provide complete cost
+attribution.
+
+No production optimization was retained: an experiment removing clones from
+the request-local flattened-tree map showed no measurable projection improvement
+and was discarded. There is no persistent cache. A concrete next profiling step
+is to time export stages and sample the full child-process tree around object
+walk/flattening, `fast-import`, and upload-pack. Reusing a built view across
+requests is an attractive latency lever, but should not be shipped until a
+monotonic repository generation can be proven to cover every canonical object,
+ref, and `HEAD` write and readers can obtain a consistent generation under
+concurrent writes; that invalidation and race-safety proof does not exist here.
 
 ## Environment (as measured)
 

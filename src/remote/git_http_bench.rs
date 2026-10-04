@@ -16,15 +16,19 @@ use crate::repo::{Head, Repo};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const FILES: usize = 40;
 const FILE_BYTES: usize = 12 * 1024;
-const COMMITS: usize = 80;
+const HISTORY_SIZES: &[usize] = &[80, 800];
+const PROJECTION_SAMPLES: usize = 3;
+const CLONE_SAMPLES: usize = 3;
+const CONCURRENT_CLONES: usize = 4;
+static CLOCK_TICKS_PER_SECOND: OnceLock<Option<f64>> = OnceLock::new();
 
 #[derive(Clone, Debug, Default)]
 struct TransferStats {
@@ -142,8 +146,6 @@ fn proxy_connection(
         }
         remaining -= n as u64;
     }
-    let _ = client.flush();
-    let _ = client.shutdown(std::net::Shutdown::Write);
     let mut totals = stats.lock().unwrap();
     totals.responses += 1;
     totals.response_body_bytes += response_len;
@@ -153,6 +155,9 @@ fn proxy_connection(
             String::from_utf8_lossy(&preview)
         ));
     }
+    drop(totals);
+    let _ = client.flush();
+    let _ = client.shutdown(std::net::Shutdown::Write);
 }
 
 fn read_http_head(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
@@ -217,7 +222,7 @@ fn randomish_bytes(file: usize, revision: usize) -> Vec<u8> {
         .collect()
 }
 
-fn build_fixture(root: &Path) -> Repo {
+fn build_fixture(root: &Path, commits: usize) -> Repo {
     std::fs::create_dir_all(root).unwrap();
     let repo = Repo::init(root).unwrap();
     let author = repo
@@ -240,7 +245,7 @@ fn build_fixture(root: &Path) -> Repo {
         files.push((format!("src/module-{index:03}.dat"), blob, EntryMode::File));
     }
     let mut parent = None;
-    for revision in 0..COMMITS {
+    for revision in 0..commits {
         let file_index = revision % FILES;
         let blob = repo
             .objects
@@ -345,17 +350,146 @@ fn run_git(args: &[String]) -> Output {
         .unwrap_or_else(|error| panic!("could not start git {args:?}: {error}"))
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct GitResources {
+    user_seconds: Option<f64>,
+    system_seconds: Option<f64>,
+    peak_rss_kib: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProcessCpu {
+    user_ticks: u64,
+    system_ticks: u64,
+}
+
+fn process_cpu() -> Option<ProcessCpu> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let fields = stat
+        .get(stat.rfind(')')? + 1..)?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    Some(ProcessCpu {
+        user_ticks: fields.get(11)?.parse().ok()?,
+        system_ticks: fields.get(12)?.parse().ok()?,
+    })
+}
+
+fn clock_tick_rate() -> Option<f64> {
+    *CLOCK_TICKS_PER_SECOND.get_or_init(|| {
+        let output = Command::new("getconf").arg("CLK_TCK").output().ok()?;
+        String::from_utf8(output.stdout)
+            .ok()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+    })
+}
+
+fn process_cpu_seconds(before: Option<ProcessCpu>, after: Option<ProcessCpu>) -> Option<f64> {
+    let (before, after, hz) = (before?, after?, clock_tick_rate()?);
+    Some(
+        (after.user_ticks.saturating_sub(before.user_ticks)
+            + after.system_ticks.saturating_sub(before.system_ticks)) as f64
+            / hz,
+    )
+}
+
+fn harness_peak_rss_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmHWM:")?.split_whitespace().next()?;
+        value.parse().ok()
+    })
+}
+
+fn child_process_sample(pid: u32) -> Option<(u64, u64, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat
+        .get(stat.rfind(')')? + 1..)?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let user_ticks = fields.get(11)?.parse().ok()?;
+    let system_ticks = fields.get(12)?.parse().ok()?;
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let peak_rss_kib = status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmHWM:")?.split_whitespace().next()?;
+        value.parse().ok()
+    })?;
+    Some((user_ticks, system_ticks, peak_rss_kib))
+}
+
+fn sample_child_resources(pid: u32) -> GitResources {
+    let mut last_cpu = None;
+    let mut peak_rss_kib = None;
+    while let Some((user_ticks, system_ticks, rss)) = child_process_sample(pid) {
+        last_cpu = Some((user_ticks, system_ticks));
+        peak_rss_kib = Some(peak_rss_kib.unwrap_or(0u64).max(rss));
+        thread::sleep(Duration::from_millis(2));
+    }
+    let (user_seconds, system_seconds) = match (last_cpu, clock_tick_rate()) {
+        (Some((user, system)), Some(hz)) if hz > 0.0 => {
+            (Some(user as f64 / hz), Some(system as f64 / hz))
+        }
+        _ => (None, None),
+    };
+    GitResources {
+        user_seconds,
+        system_seconds,
+        peak_rss_kib,
+    }
+}
+
+fn run_timed_git(args: &[String]) -> (Duration, Output, GitResources) {
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_TEMPLATE_DIR"] {
+        command.env_remove(key);
+    }
+    let start = Instant::now();
+    let child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("could not start git {args:?}: {error}"));
+    let pid = child.id();
+    let (output, resources) = thread::scope(|scope| {
+        let sampler = scope.spawn(move || sample_child_resources(pid));
+        let output = child.wait_with_output();
+        let resources = sampler.join().unwrap_or_default();
+        (output, resources)
+    });
+    let elapsed = start.elapsed();
+    let output = output.unwrap_or_else(|error| panic!("could not wait for git {args:?}: {error}"));
+    (elapsed, output, resources)
+}
+
+fn optional_seconds(value: Option<f64>) -> String {
+    value
+        .map(|seconds| format!("{seconds:.3}"))
+        .unwrap_or_else(|| "n/a".into())
+}
+
 fn measure(label: &str, proxy: &CountingProxy, args: &[String]) -> Duration {
     proxy.reset();
-    let start = Instant::now();
-    let output = run_git(args);
-    let elapsed = start.elapsed();
+    let process_cpu_before = process_cpu();
+    let (elapsed, output, resources) = run_timed_git(args);
+    let process_cpu_elapsed = process_cpu_seconds(process_cpu_before, process_cpu());
     let transfer = proxy.snapshot();
     println!(
-        "transfer {label}: wall_ms={:.2}, http_responses={}, response_body_bytes={}, non_200={:?}",
+        "transfer {label}: wall_ms={:.2}, http_responses={}, response_body_bytes={}, client_leader_user_s={}, client_leader_system_s={}, client_leader_peak_rss_kib={}, harness_process_cpu_s={}, non_200={:?}",
         elapsed.as_secs_f64() * 1000.0,
         transfer.responses,
         transfer.response_body_bytes,
+        optional_seconds(resources.user_seconds),
+        optional_seconds(resources.system_seconds),
+        resources.peak_rss_kib.map(|rss| rss.to_string()).unwrap_or_else(|| "n/a".into()),
+        optional_seconds(process_cpu_elapsed),
         transfer.non_200,
     );
     assert!(
@@ -365,6 +499,55 @@ fn measure(label: &str, proxy: &CountingProxy, args: &[String]) -> Duration {
         String::from_utf8_lossy(&output.stderr)
     );
     elapsed
+}
+
+fn measure_concurrent_clones(proxy: &CountingProxy, args: Vec<Vec<String>>) -> Vec<Duration> {
+    proxy.reset();
+    let process_cpu_before = process_cpu();
+    let wall_start = Instant::now();
+    let measurements = thread::scope(|scope| {
+        let handles = args
+            .iter()
+            .map(|args| scope.spawn(move || run_timed_git(args)))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("concurrent clone thread panicked"))
+            .collect::<Vec<_>>()
+    });
+    let wall = wall_start.elapsed();
+    let process_cpu_elapsed = process_cpu_seconds(process_cpu_before, process_cpu());
+    let transfer = proxy.snapshot();
+    for (index, (elapsed, output, resources)) in measurements.iter().enumerate() {
+        assert!(
+            output.status.success(),
+            "concurrent git clone {} failed ({}): {}",
+            index + 1,
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!(
+            "concurrent clone client {}: wall_ms={:.2}, client_leader_user_s={}, client_leader_system_s={}, client_leader_peak_rss_kib={}",
+            index + 1,
+            elapsed.as_secs_f64() * 1000.0,
+            optional_seconds(resources.user_seconds),
+            optional_seconds(resources.system_seconds),
+            resources.peak_rss_kib.map(|rss| rss.to_string()).unwrap_or_else(|| "n/a".into()),
+        );
+    }
+    println!(
+        "concurrent clone batch: clients={}, wall_ms={:.2}, http_responses={}, response_body_bytes={}, harness_process_cpu_s={}, non_200={:?}",
+        measurements.len(),
+        wall.as_secs_f64() * 1000.0,
+        transfer.responses,
+        transfer.response_body_bytes,
+        optional_seconds(process_cpu_elapsed),
+        transfer.non_200,
+    );
+    measurements
+        .into_iter()
+        .map(|(elapsed, _, _)| elapsed)
+        .collect()
 }
 
 fn directory_bytes(path: &Path) -> u64 {
@@ -487,130 +670,165 @@ fn live_git_transfer_baseline() {
         .prefix("newgit-git-http-bench-")
         .tempdir()
         .unwrap();
-    let newgit_path = root.path().join("canonical-newgit");
-    let repo = build_fixture(&newgit_path);
-    let server = server::spawn(ServerConfig {
-        bind: "127.0.0.1:0".into(),
-        repo_root: newgit_path,
-        token_file: root.path().join("missing-tokens.json"),
-        allow_anonymous_read: true,
-        ..Default::default()
-    })
-    .unwrap();
-    let proxy = CountingProxy::spawn(server.addr());
-    let url = format!("http://{}/", proxy.addr);
-
+    let _ = clock_tick_rate();
     println!("benchmark: live Git smart-HTTP via loopback counting proxy");
     println!(
         "git: {}",
         String::from_utf8_lossy(&run_git(&["--version".into()]).stdout).trim()
     );
-    println!("fixture: {COMMITS} commits, {FILES} paths/commit, {FILE_BYTES} bytes/version");
-    println!("workflows: full clone, depth=1 clone, blob:none clone+one-file lazy hydration, 3 unchanged fetches");
+    println!(
+        "context: fixture built once then served; client outputs use fresh directories; no OS page-cache eviction (warm-cache observation); projection temporary directory is fresh per HTTP request; {PROJECTION_SAMPLES} direct projection samples, {CLONE_SAMPLES} serial full-clone samples, {CONCURRENT_CLONES} simultaneous full clones, 3 unchanged fetches"
+    );
+    println!(
+        "resources: /proc/{{pid}}/stat and /proc/{{pid}}/status are sampled every 2ms for each Git leader process (CPU and high-water RSS; excludes helper descendants); /proc/self/stat and VmHWM cover only the harness process, including its server threads but excluding child Git processes; CPU resolution is kernel clock ticks; non-Linux resource fields may be n/a"
+    );
+    println!(
+        "process_clock_ticks_per_second={}",
+        clock_tick_rate()
+            .map(|hz| format!("{hz:.0}"))
+            .unwrap_or_else(|| "n/a".into())
+    );
 
-    let mut projection_ms = Vec::new();
-    let mut projection_total_bytes = 0u64;
-    let mut projection_git_bytes = 0u64;
-    let mut projection_objects_bytes = 0u64;
-    let mut projection_commits = 0usize;
-    let mut projection_blobs = 0usize;
-    for _ in 0..3 {
-        let start = Instant::now();
-        let (view, report) = TempGitView::from_newgit_for_upload_pack_with_export(
-            &repo,
-            Instant::now() + Duration::from_secs(120),
-        )
+    for &commits in HISTORY_SIZES {
+        let case_root = root.path().join(format!("history-{commits}"));
+        std::fs::create_dir_all(&case_root).unwrap();
+        let newgit_path = case_root.join("canonical-newgit");
+        let fixture_start = Instant::now();
+        let repo = build_fixture(&newgit_path, commits);
+        println!(
+            "fixture: commits={commits}, paths_per_commit={FILES}, blob_bytes_per_version={FILE_BYTES}, build_ms={:.2}, canonical_repo_bytes={}",
+            fixture_start.elapsed().as_secs_f64() * 1000.0,
+            directory_bytes(&newgit_path),
+        );
+
+        let mut projection_samples = Vec::with_capacity(PROJECTION_SAMPLES);
+        let mut projection_temp_bytes = 0;
+        let mut projection_git_bytes = 0;
+        let mut projection_objects_bytes = 0;
+        let mut exported_blobs = 0;
+        for sample in 1..=PROJECTION_SAMPLES {
+            let cpu_before = process_cpu();
+            let start = Instant::now();
+            let (view, report) = TempGitView::from_newgit_for_upload_pack_with_export(
+                &repo,
+                Instant::now() + Duration::from_secs(120),
+            )
+            .unwrap();
+            let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let cpu_seconds = process_cpu_seconds(cpu_before, process_cpu());
+            let container = view.path.parent().unwrap_or(&view.path);
+            projection_temp_bytes = directory_bytes(container);
+            projection_git_bytes = directory_bytes(&view.path.join(".git"));
+            projection_objects_bytes = directory_bytes(&view.path.join(".git/objects"));
+            exported_blobs = report.blobs;
+            println!(
+                "projection sample {sample}/{PROJECTION_SAMPLES}: wall_ms={wall_ms:.2}, harness_process_cpu_s={}, temp_bytes={projection_temp_bytes}, git_dir_bytes={projection_git_bytes}, object_store_bytes={projection_objects_bytes}, exported_commits={}, exported_unique_blobs={exported_blobs}",
+                optional_seconds(cpu_seconds), report.commits,
+            );
+            projection_samples.push(wall_ms);
+            drop(view);
+        }
+        let projection_median = median_ms(&mut projection_samples.clone());
+        println!(
+            "projection summary: commits={commits}, raw_wall_ms={:?}, median_wall_ms={projection_median:.2}, last_sample_temp_bytes={projection_temp_bytes}, git_dir_bytes={projection_git_bytes}, object_store_bytes={projection_objects_bytes}, exported_unique_blobs={exported_blobs}",
+            projection_samples.iter().map(|x| format!("{x:.2}")).collect::<Vec<_>>(),
+        );
+
+        let server = server::spawn(ServerConfig {
+            bind: "127.0.0.1:0".into(),
+            repo_root: newgit_path,
+            token_file: case_root.join("missing-tokens.json"),
+            allow_anonymous_read: true,
+            ..Default::default()
+        })
         .unwrap();
-        projection_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-        projection_total_bytes = directory_bytes(&view.path);
-        projection_git_bytes = directory_bytes(&view.path.join(".git"));
-        projection_objects_bytes = directory_bytes(&view.path.join(".git/objects"));
-        projection_commits = report.commits;
-        projection_blobs = report.blobs;
-        drop(view);
-    }
-    let projection_median = median_ms(&mut projection_ms);
-    println!(
-        "projection: samples_ms={:?}, median_ms={projection_median:.2}, commits={projection_commits}, exported_unique_blobs={projection_blobs}, total_temp_bytes={projection_total_bytes}, git_dir_bytes={projection_git_bytes}, object_store_bytes={projection_objects_bytes}",
-        projection_ms.iter().map(|x| format!("{x:.2}")).collect::<Vec<_>>(),
-    );
-
-    let full = root.path().join("clone-full");
-    let mut clone_full = vec![
-        "-c".into(),
-        "protocol.version=2".into(),
-        "clone".into(),
-        "--quiet".into(),
-    ];
-    clone_full.extend([url.clone(), full.display().to_string()]);
-    measure("full clone", &proxy, &clone_full);
-
-    let shallow = root.path().join("clone-shallow");
-    let mut clone_shallow = vec![
-        "-c".into(),
-        "protocol.version=2".into(),
-        "clone".into(),
-        "--quiet".into(),
-        "--depth=1".into(),
-    ];
-    clone_shallow.extend([url.clone(), shallow.display().to_string()]);
-    measure("shallow clone --depth=1", &proxy, &clone_shallow);
-
-    let partial = root.path().join("clone-blob-none");
-    let mut clone_partial = vec![
-        "-c".into(),
-        "protocol.version=2".into(),
-        "clone".into(),
-        "--quiet".into(),
-        "--filter=blob:none".into(),
-        "--no-checkout".into(),
-    ];
-    clone_partial.extend([url.clone(), partial.display().to_string()]);
-    measure("blob:none clone --no-checkout", &proxy, &clone_partial);
-
-    measure(
-        "blob:none lazy one-file checkout",
-        &proxy,
-        &[
-            "-C".into(),
-            partial.display().to_string(),
-            "checkout".into(),
-            "--quiet".into(),
-            "main".into(),
-            "--".into(),
-            "src/module-039.dat".into(),
-        ],
-    );
-
-    let mut fetch_ms = Vec::new();
-    for index in 1..=3 {
-        fetch_ms.push(measure(
-            &format!("unchanged fetch {index}/3"),
-            &proxy,
-            &[
-                "-C".into(),
-                full.display().to_string(),
-                "fetch".into(),
+        let proxy = CountingProxy::spawn(server.addr());
+        let url = format!("http://{}/", proxy.addr);
+        let mut serial_clones = Vec::with_capacity(CLONE_SAMPLES);
+        let mut first_clone = None;
+        for sample in 1..=CLONE_SAMPLES {
+            let destination = case_root.join(format!("clone-serial-{sample}"));
+            if sample == 1 {
+                first_clone = Some(destination.clone());
+            }
+            let args = vec![
+                "-c".into(),
+                "protocol.version=2".into(),
+                "clone".into(),
                 "--quiet".into(),
-                "origin".into(),
-            ],
-        ));
-    }
-    let fetch_values = fetch_ms
-        .iter()
-        .map(|duration| duration.as_secs_f64() * 1000.0)
-        .collect::<Vec<_>>();
-    let fetch_median = median_ms(&mut fetch_values.clone());
-    println!(
-        "repeated fetch summary: samples_ms={:?}, median_ms={fetch_median:.2}",
-        fetch_values
+                url.clone(),
+                destination.display().to_string(),
+            ];
+            serial_clones.push(measure(
+                &format!("{commits}-commit full clone {sample}/{CLONE_SAMPLES}"),
+                &proxy,
+                &args,
+            ));
+        }
+        let clone_ms = serial_clones
             .iter()
-            .map(|x| format!("{x:.2}"))
-            .collect::<Vec<_>>(),
-    );
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .collect::<Vec<_>>();
+        println!(
+            "serial clone summary: commits={commits}, raw_wall_ms={:?}, median_wall_ms={:.2}",
+            clone_ms
+                .iter()
+                .map(|x| format!("{x:.2}"))
+                .collect::<Vec<_>>(),
+            median_ms(&mut clone_ms.clone()),
+        );
 
-    server.shutdown();
-    drop(proxy);
-    drop(repo);
+        let full = first_clone.expect("at least one clone sample");
+        let mut fetch_samples = Vec::with_capacity(3);
+        for sample in 1..=3 {
+            fetch_samples.push(measure(
+                &format!("{commits}-commit unchanged fetch {sample}/3"),
+                &proxy,
+                &[
+                    "-C".into(),
+                    full.display().to_string(),
+                    "fetch".into(),
+                    "--quiet".into(),
+                    "origin".into(),
+                ],
+            ));
+        }
+        let fetch_ms = fetch_samples
+            .iter()
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .collect::<Vec<_>>();
+        println!(
+            "unchanged fetch summary: commits={commits}, raw_wall_ms={:?}, median_wall_ms={:.2}",
+            fetch_ms
+                .iter()
+                .map(|x| format!("{x:.2}"))
+                .collect::<Vec<_>>(),
+            median_ms(&mut fetch_ms.clone()),
+        );
+
+        let concurrent_args = (1..=CONCURRENT_CLONES)
+            .map(|client| {
+                let destination = case_root.join(format!("clone-concurrent-{client}"));
+                vec![
+                    "-c".into(),
+                    "protocol.version=2".into(),
+                    "clone".into(),
+                    "--quiet".into(),
+                    url.clone(),
+                    destination.display().to_string(),
+                ]
+            })
+            .collect();
+        measure_concurrent_clones(&proxy, concurrent_args);
+        server.shutdown();
+        drop(proxy);
+        drop(repo);
+    }
+    println!(
+        "harness_peak_rss_kib={}",
+        harness_peak_rss_kib()
+            .map(|rss| rss.to_string())
+            .unwrap_or_else(|| "n/a".into())
+    );
     drop(root);
 }
