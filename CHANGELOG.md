@@ -30,6 +30,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   every commit; it caught the previous `é` → `Ã©` pathname corruption.
 
 ### Added
+- A real-Git four-parent octopus merge now has an end-to-end semantic
+  interoperability regression: ordered parents and merge-tree paths, modes,
+  and blob IDs are checked through Git → NewGit → Git → NewGit, with Git `fsck`
+  and deep NewGit integrity verification.
 - A real-Git regression compares raw commit-object message payloads before and
   after import/export and the imported `Snapshot.message`. It pins exact UTF-8
   bytes for leading/trailing blank lines, trailing spaces, CRLF, no final LF,

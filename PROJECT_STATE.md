@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: refuse ordinary Git refs to non-commit objects before import when the snapshot-only export path cannot round-trip them (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: establish real-Git octopus-merge round-trip behavior and ordered-parent preservation (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -15,12 +15,39 @@
 - **Non-`HEAD` symbolic-ref hosted validation:** implementation commit `598b6dc1b26f28b92467115a1045c55e97b5471c` passed [CI run 37205307432](https://github.com/kakarot700/newgit/actions/runs/37205307432) and [CodeQL run 37205307501](https://github.com/kakarot700/newgit/actions/runs/37205307501), both on that exact SHA.
 - **Replace-ref hosted validation:** implementation commit `e1fc9e6a08c9314417f0d3324514bc105ad5a920` passed [CI run 37206487975](https://github.com/kakarot700/newgit/actions/runs/37206487975) and [CodeQL run 37206487941](https://github.com/kakarot700/newgit/actions/runs/37206487941), both on that exact SHA.
 - **SHA-256 compatibility hosted validation:** commit `9b0909b733fe769785a01b24c1ea0cac2b8bb7c9` passed [CI run 37209170207](https://github.com/kakarot700/newgit/actions/runs/37209170207) and [CodeQL run 37209170230](https://github.com/kakarot700/newgit/actions/runs/37209170230), both on that exact SHA.
+- **Non-commit-ref compatibility hosted validation:** commit `cb2590d07326f4ee9e0c4ee83a10ef6cbfbac198` passed [CI run 37210352051](https://github.com/kakarot700/newgit/actions/runs/37210352051) and [CodeQL run 37210352109](https://github.com/kakarot700/newgit/actions/runs/37210352109), both on that exact SHA.
 - **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
 - **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — non-commit Git refs (2026-10-04)
+## Current Git compatibility milestone — octopus merges (2026-10-04)
+
+- **Evidence gap:** the importer records the `from` parent followed by each
+  `merge` parent, and the exporter emits the stored order, but existing
+  real-Git regressions had only established two-parent merges. The mission
+  explicitly calls for octopus-merge fixtures.
+- **Regression added:** `tests/git_compat.rs::octopus_merge_preserves_parent_order_and_trees_across_roundtrip`
+  creates a four-parent merge with the Git CLI and checks its ordered parents
+  through Git → NewGit → Git → NewGit, compares merge-tree paths/modes/blob IDs,
+  checks both mapped NewGit parent sets, runs Git `fsck`, and deep-verifies both
+  NewGit repositories. The final reimported NewGit tree is compared against the
+  source Git tree's paths, modes, and blob bytes.
+- **Independent review:** a reviewer caught that the initial version checked
+  only exported-Git tree fidelity and parent counts. Those assertions were
+  strengthened to compare exact mapped parent sets and the final reimported
+  tree. The reviewer's targeted test run passed before this assertion-only
+  strengthening; the final code passed the full validation below.
+- **Evidence boundary:** semantic conversion evidence is limited to this
+  four-parent fixture on Git 2.43.0/Linux; commit-object identity and broad
+  platform/version coverage are not claimed.
+- **Local verification:** the one full validation pass succeeded: debug and
+  release suites each passed 294/294 tests, including 24/24 Git interoperability
+  tests; `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift,
+  and `git diff --check` passed. Hosted CI and CodeQL will be checked once on
+  this combined pushed SHA; exact run links are included in the task report.
+
+## Previous Git compatibility milestone — non-commit Git refs (2026-10-04)
 
 - **Observed issue:** Git 2.43.0 `fast-export --all` warns and omits lightweight
   refs to blobs/trees, while an annotated tag to a blob can be imported as a

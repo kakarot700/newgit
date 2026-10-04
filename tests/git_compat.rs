@@ -1665,6 +1665,165 @@ fn merge_with_redundant_ancestor_parent_exports_in_topological_order() {
 }
 
 #[test]
+fn octopus_merge_preserves_parent_order_and_trees_across_roundtrip() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "base.txt", b"base\n");
+    commit(&gdir, "octopus base");
+    let base = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+
+    for (branch, path, content) in [
+        ("topic-c", "topics/c.txt", &b"topic c\n"[..]),
+        ("topic-a", "topics/a.txt", &b"topic a\n"[..]),
+        ("topic-b", "topics/b.txt", &b"topic b\n"[..]),
+    ] {
+        git(&gdir, &["checkout", "--quiet", "-b", branch, &base]);
+        write(&gdir, path, content);
+        commit(&gdir, &format!("add {branch}"));
+        git(&gdir, &["checkout", "--quiet", "master"]);
+    }
+
+    // Three clean topic branches produce a real four-parent octopus merge.
+    git(
+        &gdir,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "topic-c",
+            "topic-a",
+            "topic-b",
+        ],
+    );
+    let source_merge = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    let source_fields = git_out(&gdir, &["rev-list", "--parents", "-n", "1", &source_merge]);
+    let source_ids = source_fields.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(
+        source_ids.len(),
+        5,
+        "expected four parents: {source_fields:?}"
+    );
+    let source_parent_subjects = source_ids[1..]
+        .iter()
+        .map(|parent| {
+            git_out(&gdir, &["show", "-s", "--format=%s", parent])
+                .trim()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    let source_tree = git_tree(&gdir, &source_merge);
+    git(&gdir, &["fsck", "--full", "--no-reflogs"]);
+
+    let (_nd, repo) = temp_repo();
+    import_git(&repo, &gdir).unwrap();
+    let source_map = snapshots_by_git_sha(&repo);
+    let source_merge_oid = source_map[&source_merge];
+    let source_snapshot = match repo.objects.get(&source_merge_oid).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        _ => panic!("octopus merge did not import as a snapshot"),
+    };
+    assert_eq!(source_snapshot.parents.len(), 4);
+    let expected_source_parents = source_ids[1..]
+        .iter()
+        .map(|parent| source_map[*parent])
+        .collect::<Vec<_>>();
+    let mut expected_source_parent_set = expected_source_parents.clone();
+    expected_source_parent_set.sort();
+    assert_eq!(source_snapshot.parents, expected_source_parent_set);
+    let expected_parent_order = expected_source_parents
+        .iter()
+        .map(ObjectId::to_hex)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        source_snapshot
+            .extras
+            .get("git_parents_ordered")
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        expected_parent_order
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+    let report = verify(&repo, &VerifyOpts { deep: true });
+    assert!(report.ok(), "{:?}", report.issues);
+
+    let outdir = d.path().join("out");
+    export_git(&repo, &outdir).unwrap();
+    git(&outdir, &["fsck", "--full", "--no-reflogs"]);
+    let exported_merge = git_out(&outdir, &["rev-parse", "refs/heads/master"])
+        .trim()
+        .to_string();
+    assert_eq!(git_tree(&outdir, &exported_merge), source_tree);
+    let exported_fields = git_out(
+        &outdir,
+        &["rev-list", "--parents", "-n", "1", &exported_merge],
+    );
+    let exported_ids = exported_fields.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(
+        exported_ids.len(),
+        5,
+        "expected four exported parents: {exported_fields:?}"
+    );
+    let exported_parent_subjects = exported_ids[1..]
+        .iter()
+        .map(|parent| {
+            git_out(&outdir, &["show", "-s", "--format=%s", parent])
+                .trim()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(exported_parent_subjects, source_parent_subjects);
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+
+    let (_nd2, reimported) = temp_repo();
+    import_git(&reimported, &outdir).unwrap();
+    let exported_map = snapshots_by_git_sha(&reimported);
+    let exported_merge_oid = exported_map[&exported_merge];
+    let exported_snapshot = match reimported.objects.get(&exported_merge_oid).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        _ => panic!("reimported octopus merge is not a snapshot"),
+    };
+    assert_eq!(exported_snapshot.parents.len(), 4);
+    let exported_parent_oids = exported_ids[1..]
+        .iter()
+        .map(|parent| exported_map[*parent])
+        .collect::<Vec<_>>();
+    let mut exported_parent_set = exported_parent_oids.clone();
+    exported_parent_set.sort();
+    assert_eq!(exported_snapshot.parents, exported_parent_set);
+    let exported_parent_ids = exported_parent_oids
+        .iter()
+        .map(ObjectId::to_hex)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exported_snapshot
+            .extras
+            .get("git_parents_ordered")
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        exported_parent_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+    let expected_reimported_tree = source_tree
+        .iter()
+        .map(|(path, (mode, blob_oid))| (path.clone(), (mode.clone(), git_blob(&gdir, blob_oid))))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        ng_tree(&reimported, exported_merge_oid),
+        expected_reimported_tree,
+        "final NewGit tree must preserve source paths, modes, and blob bytes"
+    );
+    let report = verify(&reimported, &VerifyOpts { deep: true });
+    assert!(report.ok(), "{:?}", report.issues);
+}
+
+#[test]
 fn reimport_after_export_is_stable() {
     // git → newgit → git → newgit: the second newgit import must produce
     // identical snapshots to the first (round-trip fixpoint on content).

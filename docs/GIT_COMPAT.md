@@ -25,7 +25,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | original Git commit object ID | `extras.git_oid` (via `--show-original-ids`); SHA-1 sources also retain legacy `extras.git_sha1` | exact source ID metadata; not the NewGit snapshot ID and not preserved in exported commit IDs |
 | SHA-256 Git repository | same semantic snapshot/ref mapping as SHA-1 input; source commit IDs recorded in `git_oid` | real-Git semantic import/export fixture; destination uses `git init`'s default object format, so object IDs are not expected to match |
 | signed commit | no signature field in NewGit; `signed_commits_stripped` reports source commit IDs whose `gpgsig` header was dropped by `fast-export` | lossy; the signature is neither preserved nor verified |
-| first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact (restored on export) |
+| first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact for tested ordinary, redundant-ancestor, and four-parent octopus merges; restored on export |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
 | empty Git tree | empty NewGit `Tree` object | tested for an empty root commit, returning to empty after deleting the only file, and a consecutive empty commit; exact Git tree id survives export in this fixture |
 | Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping; tested with Unicode plus quotes/backslashes and a rename through import/export |
@@ -129,6 +129,13 @@ between `main` and `refs/main`, validates the mapped destination with Git's
 `check-ref-format`, and verifies rejection before partial output. A separate
 real-Git round-trip fixture checks ordered parents for a valid merge whose second
 parent is already an ancestor of its first.
+
+`octopus_merge_preserves_parent_order_and_trees_across_roundtrip` creates a
+four-parent octopus merge using real Git and checks the ordered parents in
+NewGit's metadata, after export to Git, and after reimport. It also compares the
+merge tree's paths, modes, and blob IDs, runs Git `fsck`, and deep-verifies both
+NewGit repositories. This is semantic evidence from Git 2.43.0/Linux; it does
+not claim commit-object identity or broad platform/version coverage.
 
 `sha256_git_import_export_roundtrips_semantically` creates a real Git
 `--object-format=sha256` repository, confirms 64-character original IDs in the
