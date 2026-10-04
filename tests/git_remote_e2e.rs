@@ -788,10 +788,128 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "one multi-ref push\n"
     );
 
-    // Tags, deletions, multiple refs, and forced non-fast-forward updates are
-    // refused without adding canonical objects or moving refs.
-    let objects_before_rejections = newgit.objects.iter().unwrap();
-    let refs_before_rejections = newgit.refs.list(None).unwrap();
+    // Ordinary Git branch deletion removes only the requested canonical ref;
+    // existing clones observe it with --prune and fresh clones never see it.
+    let objects_before_delete = newgit.objects.iter().unwrap();
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--delete",
+        "origin",
+        "published",
+    ]);
+    assert!(newgit.refs.read_opt("refs/published").unwrap().is_none());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
+    assert_eq!(
+        newgit.refs.read("refs/multi-created").unwrap(),
+        multi_ref_tip
+    );
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_delete);
+    git(&[
+        "-c",
+        &auth_config,
+        "-C",
+        post_push_clone.to_str().unwrap(),
+        "fetch",
+        "--prune",
+        "--quiet",
+        "origin",
+    ]);
+    git_fails(&[
+        "-C",
+        post_push_clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/remotes/origin/published",
+    ]);
+
+    // One atomic real-Git request deletes multiple branches together.
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "origin",
+        "main:refs/heads/delete-a",
+        "main:refs/heads/delete-b",
+    ]);
+    assert_eq!(newgit.refs.read("refs/delete-a").unwrap(), multi_ref_tip);
+    assert_eq!(newgit.refs.read("refs/delete-b").unwrap(), multi_ref_tip);
+    git(&[
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--atomic",
+        "--delete",
+        "origin",
+        "delete-a",
+        "delete-b",
+    ]);
+    assert!(newgit.refs.read_opt("refs/delete-a").unwrap().is_none());
+    assert!(newgit.refs.read_opt("refs/delete-b").unwrap().is_none());
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_delete);
+
+    let post_delete_clone = root.join("post-delete-clone");
+    git(&[
+        "-c",
+        &auth_config,
+        "clone",
+        "--quiet",
+        &url,
+        post_delete_clone.to_str().unwrap(),
+    ]);
+    git(&[
+        "-c",
+        &auth_config,
+        "-C",
+        post_delete_clone.to_str().unwrap(),
+        "fetch",
+        "--prune",
+        "--quiet",
+        "origin",
+    ]);
+    git_fails(&[
+        "-C",
+        post_delete_clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/remotes/origin/published",
+    ]);
+    git_fails(&[
+        "-C",
+        post_delete_clone.to_str().unwrap(),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/remotes/origin/delete-a",
+    ]);
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            post_delete_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/main",
+        ]))
+        .trim(),
+        as_text(&git(&[
+            "-C",
+            post_delete_clone.to_str().unwrap(),
+            "rev-parse",
+            "refs/remotes/origin/multi-created",
+        ]))
+        .trim()
+    );
+
+    // Tags and forced non-fast-forward updates remain refused. A branch whose
+    // deletion is combined with a failing update must not be partially deleted.
     git(&["-C", clone_path_str, "tag", "forbidden-tag"]);
     let tag_push = git_fails(&[
         "-c",
@@ -803,16 +921,17 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "refs/tags/forbidden-tag",
     ]);
     assert!(!String::from_utf8_lossy(&tag_push.stderr).is_empty());
-    let delete_push = git_fails(&[
+    git(&[
         "-c",
         &write_auth_config,
         "-C",
         clone_path_str,
         "push",
         "origin",
-        ":main",
+        "main:refs/heads/delete-rejected",
     ]);
-    assert!(!String::from_utf8_lossy(&delete_push.stderr).is_empty());
+    let objects_before_rejections = newgit.objects.iter().unwrap();
+    let refs_before_rejections = newgit.refs.list(None).unwrap();
     let base_git_tip = as_text(&git(&["-C", clone_path_str, "rev-parse", "HEAD~1"]))
         .trim()
         .to_string();
@@ -846,12 +965,11 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     ]);
     assert!(!String::from_utf8_lossy(&non_ff.stderr).is_empty());
     assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
-    assert_eq!(newgit.refs.read("refs/published").unwrap(), multi_ref_tip);
+    assert!(newgit.refs.read_opt("refs/published").unwrap().is_none());
 
-    // Git accepts the new companion branch in its disposable projection but
-    // refuses the forced non-fast-forward update. The adapter rejects the
-    // whole request instead of returning a partial-success report or changing
-    // only the companion ref in canonical NewGit.
+    // Git accepts deletion in its disposable projection but refuses the
+    // forced non-fast-forward update. The adapter rejects the whole request
+    // instead of reporting partial success or deleting the canonical branch.
     let partial_multi_push = git_fails(&[
         "-c",
         &write_auth_config,
@@ -861,7 +979,7 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "--force",
         "origin",
         "divergent:refs/heads/main",
-        "main:refs/heads/rejected-companion",
+        ":refs/heads/delete-rejected",
     ]);
     let partial_multi_stderr = String::from_utf8_lossy(&partial_multi_push.stderr);
     assert!(
@@ -869,17 +987,16 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "mixed-result multi-ref push should fail at the atomic HTTP boundary: {partial_multi_stderr}"
     );
     assert_eq!(newgit.refs.read("refs/main").unwrap(), multi_ref_tip);
-    assert_eq!(newgit.refs.read("refs/published").unwrap(), multi_ref_tip);
-    assert!(newgit
-        .refs
-        .read_opt("refs/rejected-companion")
-        .unwrap()
-        .is_none());
+    assert!(newgit.refs.read_opt("refs/published").unwrap().is_none());
+    assert_eq!(
+        newgit.refs.read("refs/delete-rejected").unwrap(),
+        multi_ref_tip
+    );
     assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
     assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
 
-    // With atomic advertised, a policy failure on one ref rejects the whole
-    // push in Git's projection. No companion branch or received object is
+    // With atomic advertised, the same policy failure rejects the entire set
+    // in Git's projection. Neither the branch deletion nor any object is
     // promoted into canonical NewGit storage.
     let atomic_multi_push = git_fails(&[
         "-c",
@@ -890,8 +1007,8 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "--atomic",
         "--force",
         "origin",
+        ":refs/heads/delete-rejected",
         "divergent:refs/heads/main",
-        "main:refs/heads/atomic-rejected-companion",
     ]);
     let atomic_multi_stderr = String::from_utf8_lossy(&atomic_multi_push.stderr);
     assert!(
@@ -900,11 +1017,10 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     );
     assert_eq!(newgit.refs.list(None).unwrap(), refs_before_rejections);
     assert_eq!(newgit.objects.iter().unwrap(), objects_before_rejections);
-    assert!(newgit
-        .refs
-        .read_opt("refs/atomic-rejected-companion")
-        .unwrap()
-        .is_none());
+    assert_eq!(
+        newgit.refs.read("refs/delete-rejected").unwrap(),
+        multi_ref_tip
+    );
 
     server.shutdown();
 }

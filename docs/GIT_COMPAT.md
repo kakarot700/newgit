@@ -4,9 +4,9 @@ NewGit interoperates with real Git through the system Git's own stream
 formats (`git fast-export` / `git fast-import`) for conversion, and through a
 separate smart-HTTP adapter that delegates packet-line and pack behavior to
 the installed `git upload-pack` and `git receive-pack`. NewGit does not
-reimplement Git's pack format. The receive path translates one authenticated
-branch create/update into canonical NewGit objects and a transactional ref
-update. If `git` is not on PATH, conversion and the live Git adapter fail with
+reimplement Git's pack format. The receive path translates authenticated branch
+creates, fast-forward updates, and deletions into canonical NewGit refs using
+one CAS-guarded transaction per accepted request. If `git` is not on PATH, conversion and the live Git adapter fail with
 a clear error; NewGit's native operations and JSON remote remain independent
 of Git.
 
@@ -203,13 +203,13 @@ environment and does not claim other Git versions or operating systems.
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
    (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A separately
    tested receive-pack slice accepts one or more write-authenticated branch
-   creates or fast-forward updates per request, including an initial push to an
-   empty repository. Accepted canonical refs share one NewGit transaction; a
-   partially accepted projection request is rejected without changing canonical
-   refs. Git's `atomic` capability is advertised and tested with a successful
-   atomic multi-ref update and a policy rejection that leaves canonical refs and
-   objects unchanged. Tags, deletion, signed, and non-fast-forward pushes are
-   refused. Both directions rematerialize a complete temporary Git projection
+   creates, fast-forward updates, or deletions per request, including an initial
+   push to an empty repository. Accepted canonical refs share one NewGit
+   transaction; a partially accepted projection request is rejected without
+   changing canonical refs. Git's `atomic` capability is advertised and tested
+   with successful atomic multi-ref update and deletion plus policy rejection
+   that leaves canonical refs and objects unchanged. Tags, signed, and
+   non-fast-forward pushes are refused. Both directions rematerialize a complete temporary Git projection
    for every HTTP request; pack negotiation does not avoid the full NewGit-to-Git
    export. Git over SSH remains unsupported. See [protocol
    details](PROTOCOL.md#git-smart-http-compatibility) and the [evidence

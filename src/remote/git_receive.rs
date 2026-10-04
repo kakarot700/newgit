@@ -2,8 +2,8 @@
 //!
 //! Git receives and validates the pack in a short-lived isolated projection.
 //! Accepted branch tips are then imported into a temporary NewGit repository,
-//! reusing exported canonical commit IDs. All accepted creates and
-//! fast-forward updates are promoted under one NewGit ref transaction.
+//! reusing exported canonical commit IDs. Creates, fast-forward updates, and
+//! deletions are promoted under one NewGit ref transaction.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -63,10 +63,10 @@ pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
     Ok(response)
 }
 
-/// Accept one or more create/fast-forward branch updates. Git handles packfile
-/// decoding and fsck in the disposable projection; NewGit's canonical objects
-/// and refs are changed only after import/validation succeeds and every observed
-/// old canonical tip still passes a CAS check under the transaction lock.
+/// Accept one or more branch creates, fast-forward updates, or deletions. Git
+/// handles packfile decoding and fsck in the disposable projection; NewGit's
+/// canonical objects and refs change only after import/validation succeeds and
+/// every observed old canonical tip still passes a CAS check under the lock.
 pub fn receive_pack(
     repo: &Repo,
     request: &[u8],
@@ -77,9 +77,7 @@ pub fn receive_pack(
     let mut newgit_names = HashSet::new();
     for push in &pushes {
         let branch_suffix = push.ref_name.strip_prefix("refs/heads/").ok_or_else(|| {
-            Error::Invalid(
-                "Git push supports refs/heads/* only; tags and other refs are refused".into(),
-            )
+            Error::Invalid("Git push supports refs/heads/* only; other refs are refused".into())
         })?;
         if branch_suffix.is_empty() {
             return Err(Error::Invalid("Git push branch name is empty".into()));
@@ -149,9 +147,12 @@ pub fn receive_pack(
     let mut accepted = 0usize;
     for update in &updates {
         let final_git_tip = git_ref_oid(&view, &update.push.ref_name, deadline)?;
-        if update.request_old_matches
-            && final_git_tip.as_deref() == Some(update.push.new_oid.as_str())
-        {
+        let final_tip_matches = if update.push.new_oid == ZERO_SHA1 {
+            final_git_tip.is_none()
+        } else {
+            final_git_tip.as_deref() == Some(update.push.new_oid.as_str())
+        };
+        if update.request_old_matches && final_tip_matches {
             accepted += 1;
         }
     }
@@ -194,36 +195,41 @@ pub fn receive_pack(
     let mut ops = Vec::with_capacity(changed.len());
     let mut created_names = Vec::new();
     for update in &changed {
-        let new_tip = staged
-            .refs
-            .read_opt(&update.push.ref_name)?
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "Git receive-pack accepted {} but its imported branch is missing",
-                    update.push.ref_name
-                ))
-            })?;
-        if !matches!(
-            object_from_either_repo(repo, &staged, new_tip)?,
-            crate::object::types::Object::Snapshot(_)
-        ) {
-            return Err(Error::Invalid(
-                "Git branch tip did not import as a NewGit snapshot".into(),
-            ));
-        }
-        if let Some(old_tip) = update.expected_newgit {
-            // receive.denyNonFastForwards is enforced by Git before it returns
-            // an accepted status. The importer also proves every old
-            // projection commit maps back to the canonical parent ID.
-            debug_assert_ne!(old_tip, new_tip);
+        let new_tip = if update.push.new_oid == ZERO_SHA1 {
+            None
         } else {
-            created_names.push(update.newgit_ref.clone());
-        }
-        new_tips.push(new_tip);
+            let new_tip = staged
+                .refs
+                .read_opt(&update.push.ref_name)?
+                .ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "Git receive-pack accepted {} but its imported branch is missing",
+                        update.push.ref_name
+                    ))
+                })?;
+            if !matches!(
+                object_from_either_repo(repo, &staged, new_tip)?,
+                crate::object::types::Object::Snapshot(_)
+            ) {
+                return Err(Error::Invalid(
+                    "Git branch tip did not import as a NewGit snapshot".into(),
+                ));
+            }
+            if let Some(old_tip) = update.expected_newgit {
+                // receive.denyNonFastForwards is enforced by Git before it
+                // returns an accepted status. The importer also proves every
+                // old projection commit maps back to the canonical parent ID.
+                debug_assert_ne!(Some(old_tip), Some(new_tip));
+            } else {
+                created_names.push(update.newgit_ref.clone());
+            }
+            new_tips.push(new_tip);
+            Some(new_tip)
+        };
         ops.push(TxnOp::Ref {
             name: update.newgit_ref.clone(),
             cas: Cas::Exactly(update.expected_newgit),
-            new: Some(new_tip),
+            new: new_tip,
             log: RefLogEntry::system(format!("Git push by {principal}")),
         });
     }
@@ -325,9 +331,9 @@ fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
                 "Git push supports refs/heads/* only; tags and other refs are refused".into(),
             ));
         }
-        if fields[1] == ZERO_SHA1 {
+        if fields[0] == ZERO_SHA1 && fields[1] == ZERO_SHA1 {
             return Err(Error::Invalid(
-                "Git branch deletion is not supported".into(),
+                "receive-pack command cannot create or delete a ref from the zero object ID".into(),
             ));
         }
         if !ref_names.insert(ref_name.to_string()) {
@@ -373,7 +379,7 @@ fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
             "-c",
             "receive.denyNonFastForwards=true",
             "-c",
-            "receive.denyDeletes=true",
+            "receive.denyDeletes=false",
             "-c",
             "receive.fsckObjects=true",
             "-c",
@@ -645,7 +651,13 @@ mod tests {
 
         let deletion =
             request(format!("{new} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes());
-        assert!(parse_push_command(&deletion).is_err());
+        let parsed_deletion = parse_push_command(&deletion).unwrap();
+        assert_eq!(parsed_deletion.len(), 1);
+        assert_eq!(parsed_deletion[0].old_oid, new);
+        assert_eq!(parsed_deletion[0].new_oid, ZERO_SHA1);
+        let zero_to_zero =
+            request(format!("{ZERO_SHA1} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes());
+        assert!(parse_push_command(&zero_to_zero).is_err());
         let tag = request(format!("{ZERO_SHA1} {new} refs/tags/v1\0report-status\n").as_bytes());
         assert!(parse_push_command(&tag).is_err());
         let mut duplicate =

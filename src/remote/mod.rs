@@ -8,8 +8,8 @@
 //! * [`server`] — `newgit serve` (thread-per-connection, bounded).
 //! * [`client`] — `newgit remote/push/pull`.
 //! * [`git_http`] — ordinary Git upload-pack over smart HTTP.
-//! * [`git_receive`] — narrow receive-pack branch updates; Git handles the
-//!   pack while accepted NewGit ref moves use the canonical transaction engine.
+//! * [`git_receive`] — narrow receive-pack branch creates, fast-forward updates,
+//!   and deletes; accepted NewGit ref moves use the canonical transaction engine.
 //!
 //! Security posture (THREAT_MODEL §E): every parser total and capped, auth
 //! failures never downgrade to anonymous, objects are self-verifying

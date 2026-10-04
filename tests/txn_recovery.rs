@@ -319,6 +319,57 @@ fn racing_multi_ref_pushes_publish_only_one_complete_ref_set() {
 }
 
 #[test]
+fn racing_ref_deletion_and_update_have_one_cas_winner() {
+    let (_d, repo) = temp_repo();
+    let old = oid(10);
+    let updated = oid(12);
+    repo.refs
+        .update("main", Cas::Any, Some(old), RefLogEntry::system("init"))
+        .unwrap();
+    let repo = Arc::new(repo);
+    let barrier = Arc::new(Barrier::new(2));
+    let contenders = [Some(updated), None];
+    let threads: Vec<_> = contenders
+        .into_iter()
+        .map(|new| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                txn::execute(
+                    repo.ng(),
+                    vec![newgit::repo::txn::TxnOp::Ref {
+                        name: "main".into(),
+                        cas: Cas::Exactly(Some(old)),
+                        new,
+                        log: RefLogEntry::system("racing Git delete/update"),
+                    }],
+                    repo.limits(),
+                )
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|result| matches!(result, Err(newgit::Error::CasFailed(_))))
+            .count(),
+        1
+    );
+    assert!(
+        matches!(
+            repo.refs.read_opt("main").unwrap(),
+            Some(current) if current == updated
+        ) || repo.refs.read_opt("main").unwrap().is_none()
+    );
+}
+
+#[test]
 fn crash_before_journal_leaves_no_trace() {
     let (d, repo) = temp_repo();
     let root = repo.root().to_path_buf();

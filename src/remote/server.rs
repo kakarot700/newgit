@@ -245,8 +245,8 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
 }
 
 /// Smart-HTTP compatibility boundary. Read and write services share auth but
-/// use separate adapters; receive-pack only exposes the narrow transactional
-/// branch-update slice implemented by `git_receive`.
+/// use separate adapters; receive-pack exposes the narrow transactional
+/// branch create/update/delete slice implemented by `git_receive`.
 fn route_git_http(
     repo: &Repo,
     tokens: &TokenFile,
