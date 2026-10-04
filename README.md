@@ -37,9 +37,9 @@ The current implementation includes:
 - Snapshots, workspaces, status/history, tree and line diffs, three-way merges, integration, and rollback.
 - Goals, changes, evidence, evaluations, and proposals with compare-and-swap version chains and documented lifecycle checks.
 - `verify` for structural integrity checks and a deliberately non-destructive `gc`.
-- An optional self-hosted HTTP/1.1 + JSON remote with bearer-token roles, audit records, and negotiated NewGit push/pull.
+- An optional self-hosted HTTP/1.1 + JSON remote with bearer-token roles, audit records, and negotiated NewGit push/pull; plus a separate read-only Git smart-HTTP upload-pack adapter.
 - A read-only embedded Web UI, JSON CLI/API, and an MCP stdio server.
-- Git repository import/export through the system `git` program's `fast-export`/`fast-import` streams.
+- Git repository import/export through the system `git` program's `fast-export`/`fast-import` streams, and ordinary Git clone/fetch/pull/`ls-remote` against a NewGit server over smart HTTP.
 
 See [architecture](ARCHITECTURE.md), the [CLI reference](docs/CLI.md), [protocol](docs/PROTOCOL.md), and the [agent guide](docs/AGENT_GUIDE.md) for details. Feature claims and their test coverage are mapped in [TEST_MATRIX.md](TEST_MATRIX.md).
 
@@ -56,7 +56,7 @@ The object format and repository layout are documented in [ARCHITECTURE.md](ARCH
 ## Requirements
 
 - Rust and Cargo. The repository pins its development toolchain in `rust-toolchain.toml` (currently Rust 1.99.0); `rustup` can install it automatically when entering the checkout. `Cargo.toml` declares Rust 1.80 as the package minimum, but CI uses the pinned toolchain rather than separately testing that minimum.
-- A system `git` executable (Git 2.20 or newer) is needed only for `import-git`/`export-git` and their tests. Other NewGit operations do not use Git.
+- A system `git` executable is needed for `import-git`/`export-git` and the Git smart-HTTP read adapter. Conversion requires Git 2.20 or newer; the live adapter's recorded end-to-end environment is Git 2.43.0 on Linux, and no broader minimum-version/platform matrix is claimed. Other NewGit operations do not use Git.
 
 ## Build and install
 
@@ -113,13 +113,13 @@ Use the IDs returned by the preceding commands in place of the placeholders. `ev
 
 ## Git interoperability
 
-`newgit import-git <git-repo-path>` and `newgit export-git <target-dir>` use the local Git executable and stream formats. The project tests real Git repositories and documents the precise mapping and round-trip guarantees in [docs/GIT_COMPAT.md](docs/GIT_COMPAT.md).
+`newgit import-git <git-repo-path>` and `newgit export-git <target-dir>` use the local Git executable and stream formats. In addition, a running NewGit server exposes a separate **read-only** Git smart-HTTP upload-pack view: ordinary Git `clone`, `fetch`, `pull`, and `ls-remote` are covered by a real Git CLI test. See [Git compatibility](docs/GIT_COMPAT.md), the [compatibility matrix](docs/GIT_COMPATIBILITY_MATRIX.md), and [Git smart HTTP protocol details](docs/PROTOCOL.md#git-smart-http-compatibility).
 
-This is **not full Git compatibility**: NewGit does not speak Git smart HTTP, and import/export are whole-history operations rather than incremental Git-remote sync. Annotated tag metadata is not representable, submodules are refused, and several ref/path/message edge cases are lossy or skipped with a report. See [known limitations](KNOWN_LIMITATIONS.md) before relying on interoperability.
+This is **not full Git compatibility**: `git push`/receive-pack and Git-over-SSH are not implemented. The read adapter builds a temporary Git-format view from NewGit's canonical objects and refs for each HTTP request; Git object IDs therefore belong to that projection, not NewGit's SHA-256 object namespace, and materialization is not incremental. Annotated-tag metadata is not representable, submodules are refused, and several ref/path/message edge cases are lossy or skipped with a report. See [known limitations](KNOWN_LIMITATIONS.md) before relying on interoperability.
 
 ## Remote and agent interfaces
 
-A self-hosted NewGit server can exchange NewGit objects and refs. Protocol v1 is plain HTTP; put it behind a TLS-terminating reverse proxy or use a tunnel over untrusted networks. The CLI remote client currently accepts `http://` URLs only. See [deployment](docs/DEPLOYMENT.md) and the [protocol specification](docs/PROTOCOL.md).
+A self-hosted NewGit server can exchange NewGit objects and refs through its JSON protocol and can serve Git clients read-only via Git smart HTTP. The built-in server is plain HTTP; put it behind a TLS-terminating reverse proxy or use a tunnel over untrusted networks. The NewGit CLI remote client currently accepts `http://` URLs only; standard Git clients may use HTTPS through a TLS-terminating proxy. See [deployment](docs/DEPLOYMENT.md) and the [protocol specification](docs/PROTOCOL.md).
 
 The embedded UI is read-only. MCP uses stdio and inherits the operating-system privileges of the process that starts it. Consult [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md) when choosing a deployment model.
 

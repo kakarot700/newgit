@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: verify and document lossy conversion of Git commit messages containing invalid UTF-8 bytes (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. The active milestone is the first live, read-only Git smart-HTTP adapter, recorded below.
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,17 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — invalid UTF-8 commit-message loss (2026-10-04)
+## Current Git remote compatibility milestone — read-only smart HTTP (2026-10-04)
+
+- **Before:** Git interoperability was limited to one-shot `import-git`/`export-git`; a normal Git client could not use NewGit as an HTTP remote.
+- **Architecture decision:** keep the NewGit object/ref model and JSON remote canonical; add a separate HTTP upload-pack adapter that materializes a private temporary Git projection for each discovery/pack request and delegates packet-line/pack behavior to the installed `git upload-pack` (D-019). No Git pack/object format was added to the NewGit core.
+- **Protocol research:** implementation follows the official Git [smart-HTTP](https://git-scm.com/docs/gitprotocol-http), [protocol v2](https://git-scm.com/docs/gitprotocol-v2), [pack](https://git-scm.com/docs/gitprotocol-pack), and [`git upload-pack`](https://git-scm.com/docs/git-upload-pack) documentation.
+- **Live Git CLI proof:** `tests/git_remote_e2e.rs` uses real Git 2.43.0 over loopback against the NewGit server. Protocol v2 clone/`ls-remote`, protocol v0 fetch, and protocol v1 `pull` verify real refs, commits, trees, text/binary blob bytes and checked-out content. The same test rejects an oversized advertisement; a separate regression injects hostile `GIT_DIR`/`GIT_WORK_TREE`/`GIT_TEMPLATE_DIR`, reads NewGit refs, proves an unrelated bare repository stays unchanged, and verifies a malicious detached-checkout hook did not run. Bad bearer tokens are denied; Git push is refused without changing NewGit refs.
+- **Boundaries:** read-only upload-pack only; no receive-pack/push, Git SSH, GitHub/GitLab hosting, or multi-repository/path routing. Git 2.43.0/Linux is the only claimed adapter environment. Each request gets a 120-second deadline, process-group cleanup, and the configured `--max-body` cap; temporary disk and peak RAM have no independent quotas, and a consistent ref snapshot during concurrent NewGit writes is not guaranteed.
+- **Local verification:** one consolidated pass passed on Git 2.43.0/Linux and Rust 1.99.0: `cargo test --locked` and `cargo test --release --locked` each **303/303**; `cargo fmt --check`, warnings-denied Clippy, release build, SBOM drift, Git >=2.34.0/`ssh-keygen` prerequisites, and `git diff --check` all passed. The suite includes **2/2** live Git smart-HTTP and **28/28** Git import/export integration tests.
+- **Hosted verification:** after the single combined push, verify CI and CodeQL on the exact final SHA; deliver those run links in the task completion response rather than making a state-only follow-up commit.
+
+## Previous Git compatibility milestone — invalid UTF-8 commit-message loss (2026-10-04)
 
 - **Evidence gap:** documentation and importer code already said non-UTF-8 Git commit messages were converted with UTF-8 replacement text and marked by `extras.git_message_lossy=1`, but no real-Git interoperability test established the source bytes, stream behavior, marker, or exported result.
 - **Observed Git behavior:** on Git 2.43.0/Linux, `git commit -F` normalizes invalid UTF-8 input to UTF-8 (with a warning), so the regression uses Git plumbing to create a raw commit object. `git cat-file` and `git fast-export` both preserve the invalid message bytes exactly.

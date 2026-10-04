@@ -2,6 +2,28 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-019 · Git smart HTTP through a separate read-only upload-pack adapter (2026-10-04)
+**Context:** The project needs ordinary Git clone/fetch/pull interoperability
+without making NewGit's canonical SHA-256 object store depend on Git's pack
+format or treating a compatibility projection as core storage.
+**Decision:** Keep the NewGit JSON remote and object model authoritative. Add a
+separate HTTP adapter for smart-HTTP upload-pack discovery and stateless RPC;
+materialize a private temporary Git-format view from NewGit refs/objects per
+request and delegate packet-line negotiation and pack production to the
+installed `git upload-pack`. Isolate Git configuration/repository environment,
+pass an explicit empty private template directory so host hooks are not copied,
+use an OS-secure temporary directory, cap buffered bodies with `--max-body`,
+and enforce a 120-second wall-clock deadline with process-tree termination.
+Do not implement receive-pack/push, Git SSH, or GitHub/GitLab hosting behavior
+in this slice.
+**Consequences:** A real Git CLI can clone/fetch/pull/`ls-remote` from the
+single-repository server (tested on Git 2.43.0/Linux; see
+`tests/git_remote_e2e.rs`), while NewGit remains the source of truth. Full Git
+view materialization repeats for every HTTP request, temporary disk and peak
+RAM have no separate quota, concurrent-ref snapshot consistency is not
+guaranteed, and Git writes remain unsupported. `tempfile` is promoted to a
+runtime dependency solely for private temporary view allocation.
+
 ## D-010 · All ref mutations go through the transaction engine (Iteration 2)
 **Context:** Single-ref updates could bypass journaling, creating two code
 paths with different crash semantics.
@@ -86,9 +108,10 @@ sha1↔nid map file (documented).
 ## D-002 · Minimal dependency set (Iteration 1)
 **Context:** Supply-chain security + build speed on 2 CPUs.
 **Decision:** Runtime deps: `sha2`, `flate2` (pure-Rust `rust_backend`, no C),
-`serde`+`serde_json`, `thiserror`. Dev deps: `proptest`, `tempfile`. No CLI
-framework (hand-rolled parser), no HTTP framework (hand-rolled HTTP/1.1 in
-iteration 9), no async runtime.
+`serde`+`serde_json`, `thiserror`, and `tempfile` (private temporary Git views;
+added later by D-019). Dev deps: `proptest`. No CLI framework (hand-rolled
+parser), no HTTP framework (hand-rolled HTTP/1.1 in iteration 9), no async
+runtime.
 **Rationale:** Every dependency is small, boring, and justified; fewer CVE
 surfaces; reproducible builds easier.
 **Consequences:** We own more code (parser, HTTP) — mitigated by dedicated

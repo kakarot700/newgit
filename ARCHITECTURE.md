@@ -52,8 +52,10 @@ without any AI involvement.
 │ CLI (hand-rolled parser, --json, stable exit codes)    │
 │ Web UI (embedded single file, `newgit ui`)  MCP (stdio)│
 ├────────────────────────────────────────────────────────┤
-│ Remote protocol v1 (HTTP/1.1 + JSON, bearer auth,      │
+│ NewGit remote v1 (HTTP/1.1 + JSON, bearer auth,        │
 │ object negotiation/batching, refs CAS, audit log)      │
+│ Separate Git smart-HTTP adapter (read-only upload-pack)│
+│ isolated temporary Git projection; NewGit stays canonical│
 ├────────────────────────────────────────────────────────┤
 │ Ops: snapshot/status/history/diff/merge/integrate/     │
 │ rollback/workspaces/goals/changes/evidence/proposals/  │
@@ -61,18 +63,19 @@ without any AI involvement.
 ├────────────────────────────────────────────────────────┤
 │ Engine: diff (Myers), merge (3-way tree + diff3),      │
 │ workspaces+index, transactions (WAL journal), refs,    │
-│ object store (atomic, verified), git fast-export/import│
+│ object store (atomic, verified), Git import/export     │
 ├────────────────────────────────────────────────────────┤
 │ Object model: 9 canonical types + NGOB envelope,       │
 │ SHA-256 identity, strict decoders (never panic)        │
 ├────────────────────────────────────────────────────────┤
 │ util: hex, varint, fsx (atomic write/locks/path safety)│
-│ fault injection (crash-test hooks)                     │
+│ process deadlines/tree-kill; fault injection           │
 └────────────────────────────────────────────────────────┘
 ```
 
 Dependency policy: runtime deps are `sha2`, `flate2` (pure-Rust backend),
-`serde`/`serde_json`, `thiserror` — see DECISIONS.md D-002. `forbid(unsafe_code)`.
+`serde`/`serde_json`, `thiserror`, and `tempfile` for securely allocated
+per-request Git views — see DECISIONS.md D-002 and D-019. `forbid(unsafe_code)`.
 
 ## 3. Storage & durability
 
@@ -105,7 +108,10 @@ Spec: **docs/STORAGE_FORMAT.md** (normative).
 
 ## 6. Security posture (summary; full docs in SECURITY_MODEL.md / THREAT_MODEL.md)
 
-* No implicit execution of repository content (no hooks in v1 by design).
+* No implicit execution of repository content. The Git read adapter invokes
+  the system Git upload-pack/exporter on a private temporary projection with
+  system/global Git configuration and repository-redirection variables
+  isolated; Git receive-pack is not exposed.
 * All external input length/type/shape-validated before use; decoders total.
 * Path safety enforced at every filesystem boundary (walk, checkout, join).
 * Evidence honesty protocol: claimed vs deterministic results distinguished.

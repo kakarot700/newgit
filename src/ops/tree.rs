@@ -1,6 +1,7 @@
 //! Tree construction and flattening.
 
 use std::collections::{BTreeMap, HashSet};
+use std::time::Instant;
 
 use crate::error::{Error, Result};
 use crate::object::types::{EntryMode, Object, Tree, TreeEntry};
@@ -110,10 +111,21 @@ fn split_dir(d: &str) -> Option<(String, String)> {
 /// Cycle-safe: trees are content-addressed, but a hostile store could contain
 /// a self-referencing tree; we track the oid stack and error on cycles.
 pub fn flatten_tree(repo: &Repo, root: ObjectId) -> Result<Vec<(String, EntryMode, ObjectId)>> {
+    flatten_tree_with_deadline(repo, root, None)
+}
+
+/// Flatten a tree while honoring an optional absolute deadline used by the
+/// Git smart-HTTP request path.
+pub(crate) fn flatten_tree_with_deadline(
+    repo: &Repo,
+    root: ObjectId,
+    deadline: Option<Instant>,
+) -> Result<Vec<(String, EntryMode, ObjectId)>> {
     let mut out = Vec::new();
     let mut stack: Vec<(String, ObjectId, Vec<ObjectId>)> = vec![(String::new(), root, Vec::new())];
     let mut depth_guard = 0usize;
     while let Some((prefix, oid, ancestors)) = stack.pop() {
+        check_tree_deadline(deadline)?;
         depth_guard += 1;
         if depth_guard > 10_000_000 {
             return Err(Error::Limit("flatten_tree visited too many trees".into()));
@@ -134,7 +146,10 @@ pub fn flatten_tree(repo: &Repo, root: ObjectId) -> Result<Vec<(String, EntryMod
         if child_ancestors.len() > 4096 {
             return Err(Error::Limit("tree nesting too deep".into()));
         }
-        for e in tree.entries.iter().rev() {
+        for (index, e) in tree.entries.iter().rev().enumerate() {
+            if index % 1024 == 0 {
+                check_tree_deadline(deadline)?;
+            }
             let path = if prefix.is_empty() {
                 e.name.clone()
             } else {
@@ -147,8 +162,20 @@ pub fn flatten_tree(repo: &Repo, root: ObjectId) -> Result<Vec<(String, EntryMod
             }
         }
     }
+    check_tree_deadline(deadline)?;
     out.sort_by(|a, b| a.0.cmp(&b.0));
+    check_tree_deadline(deadline)?;
     Ok(out)
+}
+
+fn check_tree_deadline(deadline: Option<Instant>) -> Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(Error::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Git smart-HTTP tree traversal exceeded its operation deadline",
+        )));
+    }
+    Ok(())
 }
 
 /// Detect a tree cycle explicitly (used by verify).

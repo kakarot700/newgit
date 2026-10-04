@@ -17,6 +17,55 @@ newgit ui    [...same flags...]        # serve with --ui forced on; prints the U
 `newgit serve: listening on http://HOST:PORT (protocol v1)` on stdout —
 scripts and tests parse this line.
 
+## Git smart-HTTP compatibility
+
+This is a **separate transport adapter**, not an extension of the NewGit JSON
+protocol described below. Git clients use the ordinary smart-HTTP discovery
+request `GET /info/refs?service=git-upload-pack` and stateless
+`POST /git-upload-pack` exchanges. The adapter authenticates each request
+using the same `Authorization: Bearer <token>` roles and anonymous-read
+policy as the JSON remote, then exports the current NewGit snapshot refs and
+object history into a private, temporary Git-format projection. The installed
+`git upload-pack` produces the packet-line advertisement and pack response;
+NewGit remains canonical storage and no Git-side ref is written back.
+
+Git protocol versions 0, 1, and 2 are passed to upload-pack after validating
+the `Git-Protocol` header. HTTP advertisement framing is provided by the
+adapter for v0/v1; v2 uses Git's capability advertisement. Successful
+responses use Git's binary `application/x-git-upload-pack-advertisement` or
+`application/x-git-upload-pack-result` content types, not NewGit JSON
+envelopes or `X-NewGit-Protocol` headers. The ordinary Git CLI integration
+test exercises v2 `clone`/`ls-remote`, v0 `fetch`, and v1 `pull` against the
+local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
+bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
+platform matrix is claimed.
+
+**Read-only boundary:** `git-receive-pack` discovery and `/git-receive-pack`
+are rejected (403); Git `push` is not supported. An empty/unborn repository
+or a public ref targeting a non-snapshot may fail export, consistent with
+the snapshot-only Git conversion model. The adapter currently materializes
+the full Git view independently for every discovery and POST request. Git's
+pack negotiation can reduce transferred bytes, but it does not avoid that
+full-history export. Both inbound request bodies and outbound buffered
+pack/advertisement responses are capped by `--max-body` (64 MiB by default);
+an oversized response is rejected. A single discovery or upload-pack request
+has a 120-second wall-clock budget across projection generation and Git
+subprocess work; deadline expiry returns HTTP 504 and force-terminates the
+Git process group. Temporary disk usage and peak RAM are not separately
+quota-limited. Use Git bearer auth with an HTTP header
+(for example, Git's `http.extraHeader`) or explicitly enable anonymous reads.
+The server itself speaks plain HTTP; terminate TLS at a trusted reverse proxy
+for remote networks. See [deployment](DEPLOYMENT.md) and
+[compatibility evidence](GIT_COMPATIBILITY_MATRIX.md).
+
+Protocol behavior follows Git's specifications for
+[smart HTTP](https://git-scm.com/docs/gitprotocol-http),
+[protocol v2](https://git-scm.com/docs/gitprotocol-v2),
+[pack negotiation](https://git-scm.com/docs/gitprotocol-pack), and the
+[`git upload-pack` command](https://git-scm.com/docs/git-upload-pack). The
+implementation delegates these wire details to the installed Git executable
+rather than maintaining an independent packet-line or pack implementation.
+
 ## Envelope
 
 Every response body is JSON, identical in shape to the CLI envelope:
@@ -42,11 +91,13 @@ truth `http::status_for_error`):
 | CAS failure, lock busy, non-fast-forward | 409 |
 | batch/body over limit | 413 |
 | server busy (thread cap) | 429 |
+| Git adapter operation deadline | 504 |
 | internal/bug/io | 500 |
 | chunked transfer-encoding | 501 |
 
-Every response carries `X-NewGit-Protocol: 1`; clients send it too and
-reject servers whose `/v1/info.protocol` differs (actionable upgrade hint).
+Every NewGit JSON response carries `X-NewGit-Protocol: 1`; NewGit JSON clients
+send it too and reject servers whose `/v1/info.protocol` differs (actionable
+upgrade hint). Git smart-HTTP binary responses do not use this NewGit header.
 
 ## Authentication & roles
 
@@ -240,10 +291,14 @@ Stored in `.newgit/remotes.json` (0600; raw token — same trust model as
 URLs: `http://host[:port]` only; `https://` and URL paths are rejected with
 actionable errors (v1: TLS at the proxy, one repo per server).
 
-## Limits & abuse resistance (all tested)
+## Limits & abuse resistance
 
 - Request line ≤16 KiB; ≤128 headers / 64 KiB total; body: `Content-Length`
   required, checked against `--max-body` (default 64 MiB) BEFORE reading.
+- Git smart-HTTP pack/advertisement responses are buffered and capped by the
+  same `--max-body` value; each Git request has a separate 120-second total
+  deadline, returning 504 on expiry. The response cap and deadline are tested;
+  temporary disk/peak-memory quotas are not implemented.
 - Batch caps: `max_batch_objects` (default 4096) for have/get/put;
   `negotiate` allows up to max(batch,10 000) oid arguments.
 - Thread cap (`--max-threads`, default 32) ⇒ 429 beyond; per-connection

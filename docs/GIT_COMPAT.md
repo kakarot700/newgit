@@ -1,10 +1,12 @@
-# Git Compatibility (iteration 8)
+# Git Compatibility (conversion and read-only Git smart HTTP)
 
-NewGit interoperates with real git through the **system git's own stream
-formats** (`git fast-export` / `git fast-import`) — D-007. NewGit never
-reimplements git's object format, never invokes network git operations, and
-adds no dependencies for this. If `git` is not on PATH, `import-git` /
-`export-git` fail with a clear error; everything else works without git.
+NewGit interoperates with real Git through the system Git's own stream
+formats (`git fast-export` / `git fast-import`) for conversion, and through a
+separate read-only smart-HTTP adapter that delegates packet-line and pack
+behavior to `git upload-pack`. NewGit does not reimplement Git's object or
+wire format. If `git` is not on PATH, conversion and the live Git read adapter
+fail with a clear error; NewGit's native operations and JSON remote remain
+independent of Git.
 
 ```
 newgit import-git <git-repo-path>     # git → NewGit (into the current repo)
@@ -194,9 +196,15 @@ environment and does not claim other Git versions or operating systems.
 4. **Memory**: import caches per-commit tree states (for incremental streams
    and parent inheritance); gigantic histories are RAM-bounded
    (KNOWN_LIMITATIONS #20). Blob payloads stream and are not cached.
-5. **No incremental sync**: import/export are whole-history operations;
-   there is no fetch/pull negotiation with git remotes (that is what the
-   NewGit remote protocol — iteration 9 — is for).
+5. **No direct incremental NewGit-object/Git-remote bridge**: import/export
+   conversion remains whole-history. A separate read-only smart-HTTP adapter
+   now supports ordinary Git `clone`, `fetch`, `pull`, and `ls-remote` through
+   upload-pack (protocol v0/v1/v2 in the tested Git 2.43.0 environment), but
+   it rematerializes a complete temporary Git projection for every HTTP
+   request. The wire pack negotiation may limit bytes transferred; it does
+   not avoid the full NewGit-to-Git export. `git push`/receive-pack and Git
+   over SSH remain unsupported. See [protocol details](PROTOCOL.md#git-smart-http-compatibility)
+   and the [evidence matrix](GIT_COMPATIBILITY_MATRIX.md).
 6. Non-UTF-8 commit messages become lossy-converted and flagged; non-UTF-8 Git
    paths are rejected by NewGit's UTF-8 path model. The tested C-quoted UTF-8
    subset does not establish behavior for arbitrary path bytes, control

@@ -25,6 +25,7 @@ use crate::object::ObjectId;
 use crate::ops::verify;
 use crate::remote::audit::AuditLog;
 use crate::remote::auth::{self, Principal, Role, TokenFile};
+use crate::remote::git_http;
 use crate::remote::http::{self, Request};
 use crate::remote::negotiate;
 use crate::remote::proto::*;
@@ -45,9 +46,9 @@ pub struct ServerConfig {
     pub token_file: PathBuf,
     /// Allow unauthenticated READ endpoints (info is always anonymous).
     pub allow_anonymous_read: bool,
-    /// Hard cap on request body bytes (Content-Length checked pre-read).
+    /// Hard cap on request bodies (pre-read) and buffered Git smart-HTTP responses.
     pub max_body: u64,
-    /// Max concurrent connection threads; beyond ⇒ 503.
+    /// Max concurrent connection threads; beyond ⇒ 429.
     pub max_threads: usize,
     /// Serve the embedded Web UI at `/` (static HTML, no auth — it contains
     /// no data; every data endpoint still enforces roles).
@@ -83,8 +84,9 @@ impl ServerHandle {
     pub fn port(&self) -> u16 {
         self.addr.port()
     }
-    /// Signal the accept loop to stop and wait for it (in-flight connection
-    /// threads finish on their own; they are bounded by IO_TIMEOUT).
+    /// Signal the accept loop to stop and wait for it. Connection workers are
+    /// detached; socket I/O uses `IO_TIMEOUT`, while Git projection/pack work
+    /// is bounded by the adapter's 120-second child-process deadline.
     pub fn shutdown(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(j) = self.join.take() {
@@ -218,6 +220,11 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
                 "ui-static".to_string(),
                 None,
             )
+        } else if matches!(
+            req.path.as_str(),
+            "/info/refs" | "/git-upload-pack" | "/git-receive-pack"
+        ) {
+            route_git_http(&repo, &tokens, cfg, &req)
         } else {
             let (st, bd, who, cat) = route(&repo, &tokens, cfg, &req);
             (st, bd, "application/json", who, cat)
@@ -229,7 +236,128 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
         status,
         category.as_deref(),
     );
-    let _ = http::write_response(&mut w, status, ctype, &body);
+    if ctype.starts_with("application/x-git-") {
+        let _ = http::write_git_response(&mut w, status, ctype, &body);
+    } else {
+        let _ = http::write_response(&mut w, status, ctype, &body);
+    }
+}
+
+/// Smart-HTTP compatibility boundary. The route exposes upload-pack only;
+/// receive-pack is explicitly disabled until ref updates can be imported into
+/// NewGit with its transactional/CAS semantics.
+fn route_git_http(
+    repo: &Repo,
+    tokens: &TokenFile,
+    cfg: &ServerConfig,
+    req: &Request,
+) -> (u16, Vec<u8>, &'static str, String, Option<String>) {
+    let principal = match tokens.authenticate(req.header("authorization")) {
+        Ok(p) => p,
+        Err(e) => {
+            let status = http::status_for_error(&e);
+            return (
+                status,
+                envelope_err(status, e.category(), &e.to_string()),
+                "application/json",
+                "bad-token".into(),
+                Some(e.category().to_string()),
+            );
+        }
+    };
+    let who = principal
+        .as_ref()
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| "anonymous".into());
+    if !cfg.allow_anonymous_read && !auth::authorize(principal.as_ref(), Role::Read) {
+        let status = if principal.is_none() { 401 } else { 403 };
+        return (
+            status,
+            envelope_err(status, "auth", "Git upload-pack requires read access"),
+            "application/json",
+            who,
+            Some("auth".into()),
+        );
+    }
+
+    let response = match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/info/refs") => {
+            if req.query.len() != 1 || req.query[0].0 != "service" {
+                Err((
+                    400,
+                    "protocol",
+                    "expected exactly one service query parameter".to_string(),
+                ))
+            } else if req.query[0].1 == "git-receive-pack" {
+                Err((
+                    403,
+                    "protocol",
+                    "Git receive-pack/push is not supported".to_string(),
+                ))
+            } else if req.query[0].1 != "git-upload-pack" {
+                Err((
+                    403,
+                    "protocol",
+                    "requested Git service is not supported".to_string(),
+                ))
+            } else {
+                match git_http::validate_git_protocol(req.header("git-protocol")) {
+                    Ok(protocol) => git_http::advertise(repo, protocol, cfg.max_body)
+                        .map(|body| ("application/x-git-upload-pack-advertisement", body))
+                        .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string())),
+                    Err(e) => Err((http::status_for_error(&e), e.category(), e.to_string())),
+                }
+            }
+        }
+        ("POST", "/git-upload-pack") => {
+            let content_type = req
+                .header("content-type")
+                .and_then(|v| v.split(';').next())
+                .map(str::trim);
+            if !content_type
+                .is_some_and(|v| v.eq_ignore_ascii_case("application/x-git-upload-pack-request"))
+            {
+                Err((
+                    400,
+                    "protocol",
+                    "expected application/x-git-upload-pack-request".to_string(),
+                ))
+            } else {
+                match git_http::validate_git_protocol(req.header("git-protocol")) {
+                    Ok(protocol) => git_http::upload_pack(repo, protocol, &req.body, cfg.max_body)
+                        .map(|body| ("application/x-git-upload-pack-result", body))
+                        .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string())),
+                    Err(e) => Err((http::status_for_error(&e), e.category(), e.to_string())),
+                }
+            }
+        }
+        (_, "/git-receive-pack") => Err((
+            403,
+            "protocol",
+            "Git receive-pack/push is not supported".to_string(),
+        )),
+        ("GET", "/git-upload-pack") | ("POST", "/info/refs") => Err((
+            405,
+            "protocol",
+            "method not allowed for Git smart-HTTP endpoint".to_string(),
+        )),
+        _ => Err((
+            404,
+            "protocol",
+            "unknown Git smart-HTTP endpoint".to_string(),
+        )),
+    };
+
+    match response {
+        Ok((content_type, body)) => (200, body, content_type, who, None),
+        Err((status, category, message)) => (
+            status,
+            envelope_err(status, category, &message),
+            "application/json",
+            who,
+            Some(category.to_string()),
+        ),
+    }
 }
 
 /// Wire-spec guard (iteration 12 audit): diff specs may be ref names or

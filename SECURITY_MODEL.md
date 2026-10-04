@@ -8,7 +8,7 @@
 | Workspace files | user/agent-written files, symlinks, names | walk-time path validation; symlink policy (recorded as symlink blobs, never followed out of root); size/count limits |
 | CLI input | arguments, prefixes, names | ref/path/name grammars; limit checks; no shell evaluation anywhere |
 | Remote wire | HTTP requests, JSON bodies, object batches | size limits, strict JSON schemas, per-object digest verification, refs CAS, authn/authz before any mutation |
-| Git interop | foreign repos via fast-export | streamed parsing with limits; path/name validation identical to native; **git binary invoked with fixed argv, never through a shell** |
+| Git interop | foreign repos via fast-export; Git smart-HTTP clients via upload-pack | streamed parsing with limits; path/name validation identical to native; fixed Git argv (never a shell); remote read view is private and temporary with empty isolated Git config and cleared repository-redirection environment; receive-pack is disabled |
 | Evidence/evaluation | claims by any actor | honesty flags (`deterministic`, `ai_generated`); policy layer distinguishes them; core never upgrades claims |
 
 ## 2. Identity model
@@ -24,10 +24,14 @@
 ## 3. Non-execution principle
 
 NewGit **never executes repository content**: no hooks, no filters, no
-smudge/clean, no eval of config. The only external process spawned is the
-system `git` for import/export, with fixed argument vectors (no shell, no
-user-controlled argv beyond validated paths). Agents get no host access
-through NewGit beyond the repository directory they are pointed at.
+smudge/clean, no eval of config. The system `git` process is used for import,
+export, and read-only smart HTTP. The remote adapter runs isolated exporter
+commands and `git upload-pack` with fixed argument vectors, empty global
+config and template directories, system config disabled, and Git
+repository-redirection variables cleared; only its private temporary
+projection is served. Git receive-pack is not invoked. Agents get no host
+access through NewGit beyond the repository
+directory they are pointed at.
 
 ## 4. Input hardening rules (implemented + tested)
 

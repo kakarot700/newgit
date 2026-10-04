@@ -140,6 +140,47 @@ newgit push origin --all
 newgit pull origin
 ```
 
+### 3.1 Standard Git clients (read-only)
+
+The same single-repository server exposes Git smart HTTP at its root. If
+anonymous reads are enabled, ordinary clients can use:
+
+```bash
+git clone http://127.0.0.1:8765/ clone
+git -C clone ls-remote origin
+git -C clone fetch origin
+git -C clone pull --ff-only
+```
+
+With the default authenticated-read policy, use a reader token as an HTTP
+`Authorization: Bearer` header. For an interactive one-off session, avoid
+putting the raw token in shell history or the remote URL:
+
+```bash
+read -rsp 'NewGit reader token: ' NEWGIT_TOKEN; echo
+git_with_newgit_auth() {
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=http.extraHeader \
+  GIT_CONFIG_VALUE_0="Authorization: Bearer ${NEWGIT_TOKEN}" \
+    git "$@"
+}
+git_with_newgit_auth clone http://127.0.0.1:8765/ clone
+git_with_newgit_auth -C clone fetch origin
+git_with_newgit_auth -C clone pull --ff-only
+unset NEWGIT_TOKEN
+```
+
+Use the root URL (`/`); this server instance has no multi-repository or URL
+path routing. The built-in listener is plain HTTP; expose Git clients over
+HTTPS only through a trusted TLS-terminating reverse proxy (see §2.3).
+`git push` is intentionally unsupported and refused; this adapter only
+implements upload-pack. The server requires the system `git` executable.
+The existing `--max-body` setting caps both inbound HTTP request bodies and
+buffered Git pack/advertisement responses (default 64 MiB); increase it for
+larger packs. Each Git request has a 120-second processing deadline, but there
+is no separate temporary-disk or peak-memory quota; large histories or several
+simultaneous Git requests can still create significant resource pressure.
+
 Agents: see docs/AGENT_GUIDE.md (HTTP API with curl recipes, `newgit mcp`
 for MCP clients). MCP servers are spawned per-agent, per-repo, under that
 agent's OS user — stdio only, no ports.

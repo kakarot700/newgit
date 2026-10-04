@@ -68,6 +68,16 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Confused deputy (server acts with client privileges) | per-request auth context; no ambient credentials; audit ties actions to token role | `roles_enforced_reader_writer_admin` ✅ |
 | Replay | CAS semantics make replays no-ops or CAS failures (`exactly(old)` after a move always fails) | `push_cas_race_one_winner_clean_loser` ✅ |
 
+### E.1. Git smart-HTTP read adapter
+
+| Threat | Mitigation | Test / residual |
+|---|---|---|
+| Ambient `GIT_DIR`/work-tree redirects Git commands, or a host template supplies executable hooks | Exporter and upload-pack use fixed argv, empty isolated global config and template directory, disabled system config, and scrub repository/config/executable/tracing overrides; temp roots are OS-random private directories | `ambient_git_environment_cannot_redirect_or_run_template_hooks` exercises detached checkout under hostile `GIT_DIR`/`GIT_WORK_TREE`/`GIT_TEMPLATE_DIR`; live `ls-remote` succeeds, sentinel refs stay unchanged, and a malicious `post-checkout` marker is absent; other env overrides are not individually tested |
+| Malformed/adversarial request pins server workers in Git subprocess or pipe deadlock | Request/response bytes are capped; upload-pack stdin writing and stdout draining run concurrently; one 120-second wall-clock deadline covers projection and Git work; child process group is killed and direct child reaped | `deadline_kills_and_reaps_child_process_group` proves descendant termination; real-Git integration exercises normal stream flow and rejects an advertisement exceeding a tiny configured cap; malformed-packet fuzzing is not established |
+| Predictable temp path collision, local snooping, or leaked projection | `tempfile` creates random private directory before contents are written; RAII cleanup applies on success and setup errors | exercised by live adapter requests; local multi-user race behavior depends on the OS tempfile implementation |
+| Unauthorized read or attempted Git-side mutation | Shared reader/anonymous authorization gate; adapter implements upload-pack only and explicitly rejects receive-pack/push | `real_git_clone_fetch_pull_and_ls_remote_over_smart_http` tests token denial, successful read, failed push, and unchanged NewGit refs |
+| Expensive history export, disk/memory exhaustion, or inconsistent concurrent ref view | 120-second processing deadline and configured `--max-body` cap on buffered responses; full Git projection is still regenerated per HTTP request | Temporary-disk/peak-memory quota and consistent ref snapshot under concurrent writes remain unimplemented and untested |
+
 ### E2. Web UI + MCP surface (it10 — REALIZED)
 
 | Threat | Mitigation | Test |

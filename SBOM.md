@@ -16,33 +16,44 @@ Cargo.lock (committed; registry checksums).
 | serde | ^1 | runtime |
 | serde_json | ^1 | runtime |
 | sha2 | ^0.10 | runtime |
-| tempfile | ^3 | dev (tests only) |
+| tempfile | ^3 | runtime |
 | thiserror | ^2 | runtime |
 
-## Runtime closure (21 crates — compiled into / linked by the binary)
+## Runtime closure (32 crates — compiled into / linked by the binary)
 
 | crate | version | license | source |
 |---|---|---|---|
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| bitflags | 2.13.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | crc32fast | 1.5.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | digest | 0.10.7 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| errno | 0.3.14 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| fastrand | 2.5.0 | Apache-2.0 OR MIT | https://github.com/rust-lang/crates.io-index |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | generic-array | 0.14.7 | MIT | https://github.com/rust-lang/crates.io-index |
+| getrandom | 0.4.3 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | libc | 0.2.190 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/rust-lang/crates.io-index |
 | memchr | 2.8.3 | Unlicense OR MIT | https://github.com/rust-lang/crates.io-index |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| once_cell | 1.21.4 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | https://github.com/rust-lang/crates.io-index |
+| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/rust-lang/crates.io-index |
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | simd-adler32 | 0.3.10 | MIT | https://github.com/rust-lang/crates.io-index |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| windows-link | 0.2.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| windows-sys | 0.61.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | zmij | 1.0.23 | MIT | https://github.com/rust-lang/crates.io-index |
 
 ## Build-time closure (7 crates — proc macros, their deps, and build-script helpers; execute on the build host, NOT linked into the binary)
@@ -57,9 +68,9 @@ Cargo.lock (committed; registry checksums).
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/rust-lang/crates.io-index |
 | version_check | 0.9.5 | MIT/Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 
-## Dev-only closure (34 crates — tests/benches; never shipped)
+## Dev-only closure (23 crates — tests/benches; never shipped)
 
-autocfg 1.5.1, bit-set 0.8.0, bit-vec 0.8.0, bitflags 2.13.2, errno 0.3.14, fastrand 2.5.0, fnv 1.0.7, getrandom 0.3.4, getrandom 0.4.3, linux-raw-sys 0.12.1, num-traits 0.2.19, once_cell 1.21.4, ppv-lite86 0.2.21, proptest 1.11.0, quick-error 1.2.3, r-efi 5.3.0, r-efi 6.0.0, rand 0.9.5, rand_chacha 0.9.0, rand_core 0.9.5, rand_xorshift 0.4.0, regex-syntax 0.8.11, rustix 1.1.5, rusty-fork 0.3.1, syn 2.0.119, tempfile 3.27.0, unarray 0.1.4, wait-timeout 0.2.1, wasip2 1.0.4+wasi-0.2.12, windows-link 0.2.1, windows-sys 0.61.2, wit-bindgen 0.57.1, zerocopy 0.8.59, zerocopy-derive 0.8.59
+autocfg 1.5.1, bit-set 0.8.0, bit-vec 0.8.0, fnv 1.0.7, getrandom 0.3.4, num-traits 0.2.19, ppv-lite86 0.2.21, proptest 1.11.0, quick-error 1.2.3, r-efi 5.3.0, rand 0.9.5, rand_chacha 0.9.0, rand_core 0.9.5, rand_xorshift 0.4.0, regex-syntax 0.8.11, rusty-fork 0.3.1, syn 2.0.119, unarray 0.1.4, wait-timeout 0.2.1, wasip2 1.0.4+wasi-0.2.12, wit-bindgen 0.57.1, zerocopy 0.8.59, zerocopy-derive 0.8.59
 
 ## Policy notes
 

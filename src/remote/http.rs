@@ -244,6 +244,7 @@ pub fn status_text(code: u16) -> &'static str {
         500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
+        504 => "Gateway Timeout",
         _ => "Unknown",
     }
 }
@@ -268,10 +269,31 @@ pub fn write_response<W: Write>(
     Ok(())
 }
 
+/// Write an unwrapped Git smart-HTTP response. Git packet-line and packfile
+/// bytes are binary protocol data, not NewGit JSON envelopes.
+pub fn write_git_response<W: Write>(
+    w: &mut W,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> Result<()> {
+    let head = format!(
+        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-cache, max-age=0, must-revalidate\r\nPragma: no-cache\r\nExpires: Fri, 01 Jan 1980 00:00:00 GMT\r\nConnection: close\r\n\r\n",
+        status_text(status),
+        body.len(),
+    );
+    w.write_all(head.as_bytes())
+        .and_then(|_| w.write_all(body))
+        .and_then(|_| w.flush())
+        .map_err(Error::from)?;
+    Ok(())
+}
+
 /// Map a NewGit error to an HTTP status (single source of truth for the
 /// router AND the client's reverse mapping).
 pub fn status_for_error(e: &Error) -> u16 {
     match e {
+        Error::Io { source, .. } if source.kind() == std::io::ErrorKind::TimedOut => 504,
         Error::Auth(_) => 401,
         Error::CasFailed(_) | Error::LockBusy(_) | Error::Conflict(_) => 409,
         Error::Limit(_) => 413,
@@ -394,5 +416,15 @@ mod tests {
         assert!(s.contains("Content-Length: 12\r\n"));
         assert!(s.contains(&format!("{HDR_PROTOCOL}: 1\r\n")));
         assert!(s.ends_with("\r\n\r\n{\"ok\":false}"));
+    }
+
+    #[test]
+    fn timed_out_git_work_maps_to_gateway_timeout() {
+        let error = Error::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "operation timed out",
+        ));
+        assert_eq!(status_for_error(&error), 504);
+        assert_eq!(status_text(504), "Gateway Timeout");
     }
 }

@@ -5,5 +5,6 @@ pub mod base64;
 pub mod fault;
 pub mod fsx;
 pub mod hex;
+pub mod process;
 pub mod timefmt;
 pub mod varint;

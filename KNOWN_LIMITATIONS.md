@@ -69,13 +69,18 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     Git 2.43.0/Linux; nested annotated-tag chains and other versions/platforms
     are not separately tested. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
     (limitation 1), not silently converted.
-11. No GitHub/GitLab protocol compatibility (smart HTTP) — NewGit speaks its
-    own documented protocol (iteration 9).
+11. Git smart HTTP is **read-only upload-pack only**: actual Git CLI
+    `clone`/`fetch`/`pull`/`ls-remote` are tested against a NewGit-backed
+    server, but Git push/receive-pack, Git-over-SSH, and GitHub/GitLab hosting
+    features are not implemented. The adapter rebuilds a temporary Git view
+    from NewGit's canonical objects/refs per HTTP request; see
+    `docs/PROTOCOL.md` and `docs/GIT_COMPATIBILITY_MATRIX.md`.
 
-## Remote (arrives iteration 9)
+## Remote transports and Git smart HTTP
 12. Transport security relies on a TLS-terminating reverse proxy; the built-in
     server speaks plain HTTP/1.1 and MUST NOT be exposed to hostile networks
-    directly until TLS support or proxy setup is documented per deployment.
+    directly; TLS must be terminated by a trusted reverse proxy or traffic
+    must remain on a trusted private network. See `docs/DEPLOYMENT.md`.
 
 ## Diff
 13. Line diff uses Myers with a bounded edit distance (default 1024 per
@@ -132,9 +137,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     or faked submodule support.
 23. Export loses **sub-second timestamp precision** (git stores whole
     seconds); import is exact at git's own precision.
-24. **No incremental git sync**: import/export are whole-history one-shot
-    operations; there is no fetch/pull negotiation against git remotes.
-    NewGit-native remotes with negotiation arrive in iteration 9.
+24. **No efficient direct NewGit-object/Git-remote bridge**: import/export
+    conversion is whole-history, and the read-only smart-HTTP adapter
+    rematerializes the complete Git view for each discovery/pack request.
+    Git's ordinary upload-pack negotiation works at the wire/transfer layer,
+    but does not avoid that server-side export work.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
     (`extras.git_message_lossy`); a real Git plumbing fixture verifies the raw
     source bytes, fast-export payload, replacement text, marker, and lossy export
@@ -149,10 +156,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     violating NewGit's stricter ref grammar are skipped and reported. Export
     refuses distinct NewGit ref names that map to the same Git ref (for
     example, `main` and `refs/main`) rather than silently overwriting one.
-26. Git interop requires a **system git ≥ ~2.20** on PATH (the recorded
-    compatibility suite runs against Git 2.43.0). SHA-256 import additionally
-    requires a Git build with SHA-256 repository support. Everything else in
-    NewGit works without git installed.
+26. Git import/export requires a **system git ≥ ~2.20** on PATH. The live
+    smart-HTTP adapter also requires system Git; its recorded CLI test uses
+    Git 2.43.0/Linux, and no minimum version/platform matrix is established.
+    SHA-256 import additionally requires a Git build with SHA-256 repository
+    support. Native NewGit operations work without Git installed.
 27. Remote protocol v1 is **plain HTTP** — no TLS, no request signing.
     Deploy behind a TLS-terminating reverse proxy (documented); tokens
     travel as bearer credentials, so an unencrypted network exposes them.
@@ -166,8 +174,8 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     cost). Fine at v1 scale; binary framing is a v2 candidate. No
     keep-alive/pipelining: one request per connection.
 29. One server process serves ONE repository (the one it was started in);
-    no multi-repo routing, no URL paths. `git`-style smart-HTTP discovery
-    is out of scope — NewGit remotes are NewGit servers.
+    no multi-repo routing or URL-path routing. Git smart HTTP is exposed at
+    the server root for read-only upload-pack; receive-pack/push is refused.
 30. `push` non-fast-forward checking and negotiation walk object closures
     client-side (RAM/CPU proportional to reachable history, like verify/gc);
     every connection reopens the repo (recovery scan). Acceptable at v1
@@ -175,10 +183,10 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 31. No transfer resume: an interrupted push/pull restarts the batch stream
     (objects already stored are skipped via negotiation, so retries are
     cheap but not free).
-32. `pull` never touches HEAD or workspaces (fetch semantics by design);
-    there is no remote-side merge — integrate locally and explicitly.
-    Git remotes cannot be pushed to / pulled from incrementally (iteration
-    8's import/export are whole-history one-shots).
+32. NewGit's own `pull` never touches HEAD or workspaces (fetch semantics by
+    design); there is no remote-side merge — integrate locally and explicitly.
+    Separately, standard Git clients can read from the server over smart HTTP,
+    but cannot push, and each HTTP request rebuilds the temporary Git view.
 33. The Web UI is READ-ONLY by design (iteration 10): it explores
     goals/changes/evidence/proposals/history/diffs/audit but performs no
     mutations — writes stay in the CLI/MCP/API flow where authz and audit

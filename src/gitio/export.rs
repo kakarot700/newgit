@@ -21,17 +21,18 @@
 //! git fast-import.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::object::types::{EntryMode, Object};
 use crate::object::ObjectId;
-use crate::ops::tree::flatten_tree;
 use crate::repo::Repo;
+use crate::util::process::ManagedChild;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ExportReport {
@@ -48,6 +49,35 @@ pub struct ExportReport {
 type Flat = BTreeMap<String, (EntryMode, ObjectId)>;
 
 pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
+    export_git_impl(repo, target, None, None, None)
+}
+
+/// Export through Git with host/global configuration and templates disabled.
+/// Used by the server's untrusted-request boundary for temporary views.
+pub(crate) fn export_git_isolated(
+    repo: &Repo,
+    target: &Path,
+    empty_global_config: &Path,
+    empty_template_dir: &Path,
+    deadline: Instant,
+) -> Result<ExportReport> {
+    export_git_impl(
+        repo,
+        target,
+        Some(empty_global_config),
+        Some(empty_template_dir),
+        Some(deadline),
+    )
+}
+
+fn export_git_impl(
+    repo: &Repo,
+    target: &Path,
+    isolated_global_config: Option<&Path>,
+    isolated_template_dir: Option<&Path>,
+    deadline: Option<Instant>,
+) -> Result<ExportReport> {
+    check_deadline(deadline)?;
     // ── target must be absent or empty ──
     if target.exists() {
         let empty = std::fs::read_dir(target)
@@ -70,9 +100,11 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     // ── collect refs ──
     let mut names: Vec<String> = Vec::new();
     crate::ops::verify::collect_ref_files(&repo.ng().join("refs"), "", &mut names);
+    check_deadline(deadline)?;
     let mut tips: BTreeMap<String, ObjectId> = BTreeMap::new(); // git-name → oid
     let mut git_to_newgit: BTreeMap<String, String> = BTreeMap::new();
     for n in &names {
+        check_deadline(deadline)?;
         if n.starts_with("refs/namespaces/")
             || n.starts_with("workspaces/")
             || n.starts_with("chains/")
@@ -137,13 +169,14 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     }
 
     // ── collect commits (topological, parents before children) ──
-    let order = topo_order(repo, &tips)?;
+    let order = topo_order(repo, &tips, deadline)?;
 
     // ── blob discovery in deterministic order → marks ──
     let mut flats: HashMap<ObjectId, Flat> = HashMap::new();
     let mut blob_marks: BTreeMap<ObjectId, u64> = BTreeMap::new();
     for c in &order {
-        let flat = flat_of(repo, c, &mut flats)?;
+        check_deadline(deadline)?;
+        let flat = flat_of(repo, c, &mut flats, deadline)?;
         for (_, (_, oid)) in flat {
             if !blob_marks.contains_key(&oid) {
                 let m = blob_marks.len() as u64 + 1;
@@ -151,11 +184,11 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
             }
         }
     }
-    let commit_marks: HashMap<ObjectId, u64> = order
-        .iter()
-        .enumerate()
-        .map(|(i, o)| (*o, blob_marks.len() as u64 + 1 + i as u64))
-        .collect();
+    let mut commit_marks: HashMap<ObjectId, u64> = HashMap::new();
+    for (i, oid) in order.iter().enumerate() {
+        check_deadline(deadline)?;
+        commit_marks.insert(*oid, blob_marks.len() as u64 + 1 + i as u64);
+    }
 
     // ── ref ownership for commit lines (first ref in sorted order owns) ──
     let mut owner: HashMap<ObjectId, String> = HashMap::new();
@@ -163,6 +196,7 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
         let mut stack = vec![*tip];
         let mut seen = HashSet::new();
         while let Some(o) = stack.pop() {
+            check_deadline(deadline)?;
             if !seen.insert(o) {
                 continue;
             }
@@ -174,12 +208,25 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     }
 
     // ── run git init + fast-import ──
-    let init = Command::new("git")
-        .args(["init", "--quiet"])
-        .arg(target)
-        .stdin(Stdio::null())
-        .output()
+    let mut init_command = Command::new("git");
+    init_command.args(["init", "--quiet"]).stdin(Stdio::null());
+    if let Some(template_dir) = isolated_template_dir {
+        init_command.arg("--template").arg(template_dir);
+    }
+    init_command.arg(target);
+    isolate_git_command(
+        &mut init_command,
+        isolated_global_config,
+        isolated_template_dir,
+    );
+    let init_child = ManagedChild::spawn(&mut init_command, remaining(deadline)?)
         .map_err(|e| Error::io(target, e))?;
+    let (init, timed_out) = init_child
+        .wait_with_output()
+        .map_err(|e| Error::io(target, e))?;
+    if timed_out {
+        return Err(git_deadline_error("Git repository initialization"));
+    }
     if !init.status.success() {
         return Err(Error::Invalid(format!(
             "git init failed: {}",
@@ -187,7 +234,8 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
         )));
     }
     let marks_file = target.join(".git").join("newgit-export-marks");
-    let mut child = Command::new("git")
+    let mut import_command = Command::new("git");
+    import_command
         .arg("-C")
         .arg(target)
         .arg("fast-import")
@@ -195,10 +243,20 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
         .arg("--done")
         .arg(format!("--export-marks={}", marks_file.display()))
         .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(if isolated_global_config.is_some() {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+    isolate_git_command(
+        &mut import_command,
+        isolated_global_config,
+        isolated_template_dir,
+    );
+    let mut child = ManagedChild::spawn(&mut import_command, remaining(deadline)?)
         .map_err(|e| Error::io(target, e))?;
     let stdin = child
+        .child_mut()
         .stdin
         .take()
         .ok_or_else(|| Error::Bug("fast-import without stdin".into()))?;
@@ -207,6 +265,7 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     writeln!(w, "feature done").map_err(|e| Error::io(target, e))?;
     // blobs
     for (oid, mark) in &blob_marks {
+        check_deadline(deadline)?;
         let data = match repo.objects.get(oid)? {
             Object::Blob(b) => b,
             _ => return Err(Error::Bug(format!("{oid} is not a blob during export"))),
@@ -218,6 +277,7 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     }
     // commits in topo order
     for c in &order {
+        check_deadline(deadline)?;
         let gname = owner
             .get(c)
             .ok_or_else(|| Error::Bug(format!("commit {c} without owning ref")))?;
@@ -226,12 +286,14 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
             commit_marks: &commit_marks,
             flats: &flats,
             target,
+            deadline,
         };
         emit_commit(repo, &mut w, *c, gname, &ec)?;
         rep.commits += 1;
     }
     // final ref positions (guarantees tips even for fully-shared branches)
     for (gname, tip) in &tips {
+        check_deadline(deadline)?;
         let m = commit_marks[tip];
         writeln!(w, "reset {gname}\nfrom :{m}").map_err(|e| Error::io(target, e))?;
     }
@@ -239,10 +301,13 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     w.flush().map_err(|e| Error::io(target, e))?;
     drop(w); // close stdin → fast-import finishes
 
-    let status = child.wait().map_err(|e| Error::io(target, e))?;
+    let (status, timed_out) = child.wait().map_err(|e| Error::io(target, e))?;
+    if timed_out {
+        return Err(git_deadline_error("Git fast-import"));
+    }
     if !status.success() {
         let mut err = String::new();
-        if let Some(e) = child.stderr.take() {
+        if let Some(e) = child.child_mut().stderr.take() {
             use std::io::Read;
             let mut buf = Vec::new();
             let _ = std::io::BufReader::new(e).read_to_end(&mut buf);
@@ -254,7 +319,7 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     }
 
     // ── HEAD + working tree materialization ──
-    let marks_by_mark = read_marks_file(&marks_file)?;
+    let marks_by_mark = read_marks_file(&marks_file, deadline)?;
     let _ = std::fs::remove_file(&marks_file);
     match export_head {
         crate::repo::Head::Symbolic(name) => {
@@ -265,8 +330,20 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
                 // first exported branch so the worktree is usable.
                 tips.keys().next().cloned().unwrap_or_default()
             };
-            run_git(target, &["symbolic-ref", "HEAD", &g])?;
-            run_git(target, &["reset", "--hard", "--quiet"])?;
+            run_git(
+                target,
+                &["symbolic-ref", "HEAD", &g],
+                isolated_global_config,
+                isolated_template_dir,
+                deadline,
+            )?;
+            run_git(
+                target,
+                &["reset", "--hard", "--quiet"],
+                isolated_global_config,
+                isolated_template_dir,
+                deadline,
+            )?;
             rep.head = Some(g);
         }
         crate::repo::Head::Detached(oid) => {
@@ -277,9 +354,21 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
                 .get(&mark)
                 .cloned()
                 .ok_or_else(|| Error::Bug(format!("mark :{mark} missing from git export-marks")))?;
-            run_git(target, &["checkout", "--detach", "--quiet", &sha])?;
+            run_git(
+                target,
+                &["checkout", "--detach", "--quiet", &sha],
+                isolated_global_config,
+                isolated_template_dir,
+                deadline,
+            )?;
             if let Some(temp_ref) = &detached_export_ref {
-                run_git(target, &["update-ref", "-d", temp_ref])?;
+                run_git(
+                    target,
+                    &["update-ref", "-d", temp_ref],
+                    isolated_global_config,
+                    isolated_template_dir,
+                    deadline,
+                )?;
             }
             rep.head = Some(format!("detached:{sha}"));
         }
@@ -296,6 +385,7 @@ struct EmitCtx<'a> {
     commit_marks: &'a HashMap<ObjectId, u64>,
     flats: &'a HashMap<ObjectId, Flat>,
     target: &'a Path,
+    deadline: Option<Instant>,
 }
 
 fn emit_commit<W: Write>(
@@ -310,6 +400,7 @@ fn emit_commit<W: Write>(
         commit_marks,
         flats,
         target,
+        deadline,
     } = ec;
     let snap = match repo.objects.get(&oid)? {
         Object::Snapshot(s) => s,
@@ -381,11 +472,13 @@ fn emit_commit<W: Write>(
         None => &BTreeMap::new(),
     };
     for path in base.keys() {
+        check_deadline(*deadline)?;
         if !flat.contains_key(path) {
             writeln!(w, "D {}", quote_path(path)).map_err(|e| Error::io(target, e))?;
         }
     }
     for (path, (mode, boid)) in flat {
+        check_deadline(*deadline)?;
         let changed = match base.get(path) {
             Some((bm, bo)) => bm != mode || bo != boid,
             None => true,
@@ -406,13 +499,19 @@ fn emit_commit<W: Write>(
 }
 
 /// Topological order over all snapshots reachable from tips (parents first).
-fn topo_order(repo: &Repo, tips: &BTreeMap<String, ObjectId>) -> Result<Vec<ObjectId>> {
+fn topo_order(
+    repo: &Repo,
+    tips: &BTreeMap<String, ObjectId>,
+    deadline: Option<Instant>,
+) -> Result<Vec<ObjectId>> {
     let mut order: Vec<ObjectId> = Vec::new();
     let mut entered: HashSet<ObjectId> = HashSet::new();
     let mut done: HashSet<ObjectId> = HashSet::new();
     for tip in tips.values() {
+        check_deadline(deadline)?;
         let mut stack: Vec<(ObjectId, bool)> = vec![(*tip, false)];
         while let Some((o, post)) = stack.pop() {
+            check_deadline(deadline)?;
             if done.contains(&o) {
                 continue;
             }
@@ -442,16 +541,27 @@ fn topo_order(repo: &Repo, tips: &BTreeMap<String, ObjectId>) -> Result<Vec<Obje
     Ok(order)
 }
 
-fn flat_of(repo: &Repo, oid: &ObjectId, cache: &mut HashMap<ObjectId, Flat>) -> Result<Flat> {
+fn flat_of(
+    repo: &Repo,
+    oid: &ObjectId,
+    cache: &mut HashMap<ObjectId, Flat>,
+    deadline: Option<Instant>,
+) -> Result<Flat> {
+    check_deadline(deadline)?;
     if let Some(f) = cache.get(oid) {
-        return Ok(f.clone());
+        let flat = f.clone();
+        check_deadline(deadline)?;
+        return Ok(flat);
     }
     let snap = match repo.objects.get(oid)? {
         Object::Snapshot(s) => s,
         _ => return Err(Error::Bug(format!("{oid} not a snapshot"))),
     };
     let mut flat = Flat::new();
-    for (path, mode, boid) in flatten_tree(repo, snap.root)? {
+    for (path, mode, boid) in
+        crate::ops::tree::flatten_tree_with_deadline(repo, snap.root, deadline)?
+    {
+        check_deadline(deadline)?;
         flat.insert(path, (mode, boid));
     }
     cache.insert(*oid, flat.clone());
@@ -541,14 +651,16 @@ fn ref_names_conflict(a: &str, b: &str) -> bool {
 }
 
 /// Parse git's `--export-marks` output: `:<mark> <git-sha>` per line.
-fn read_marks_file(path: &Path) -> Result<HashMap<u64, String>> {
+fn read_marks_file(path: &Path, deadline: Option<Instant>) -> Result<HashMap<u64, String>> {
     let mut out = HashMap::new();
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(Error::io(path, e)),
     };
-    for line in text.lines() {
+    for line in std::io::BufReader::new(file).lines() {
+        check_deadline(deadline)?;
+        let line = line.map_err(|e| Error::io(path, e))?;
         let Some(rest) = line.strip_prefix(':') else {
             continue;
         };
@@ -562,14 +674,22 @@ fn read_marks_file(path: &Path) -> Result<HashMap<u64, String>> {
     Ok(out)
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| Error::io(dir, e))?;
+fn run_git(
+    dir: &Path,
+    args: &[&str],
+    isolated_global_config: Option<&Path>,
+    isolated_template_dir: Option<&Path>,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir).args(args).stdin(Stdio::null());
+    isolate_git_command(&mut command, isolated_global_config, isolated_template_dir);
+    let child =
+        ManagedChild::spawn(&mut command, remaining(deadline)?).map_err(|e| Error::io(dir, e))?;
+    let (out, timed_out) = child.wait_with_output().map_err(|e| Error::io(dir, e))?;
+    if timed_out {
+        return Err(git_deadline_error("Git export command"));
+    }
     if !out.status.success() {
         return Err(Error::Invalid(format!(
             "git {} failed: {}",
@@ -578,4 +698,63 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn remaining(deadline: Option<Instant>) -> Result<Option<Duration>> {
+    match deadline {
+        Some(deadline) => deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .map(Some)
+            .ok_or_else(|| git_deadline_error("Git export")),
+        None => Ok(None),
+    }
+}
+
+fn check_deadline(deadline: Option<Instant>) -> Result<()> {
+    remaining(deadline).map(|_| ())
+}
+
+fn git_deadline_error(operation: &str) -> Error {
+    Error::from(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("{operation} exceeded the Git remote operation deadline"),
+    ))
+}
+
+fn isolate_git_command(
+    command: &mut Command,
+    isolated_global_config: Option<&Path>,
+    isolated_template_dir: Option<&Path>,
+) {
+    if let Some(global_config) = isolated_global_config {
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", global_config)
+            .env("GIT_CONFIG_COUNT", "0");
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_PROTOCOL",
+            "GIT_TEMPLATE_DIR",
+            "GIT_EXEC_PATH",
+            "GIT_TRACE",
+            "GIT_TRACE_PACKET",
+            "GIT_TRACE_SETUP",
+        ] {
+            command.env_remove(key);
+        }
+        if let Some(template_dir) = isolated_template_dir {
+            // Explicitly override Git's compiled-in system template path; an
+            // empty directory prevents host hooks/config from entering view.
+            command.env("GIT_TEMPLATE_DIR", template_dir);
+        }
+    }
 }
