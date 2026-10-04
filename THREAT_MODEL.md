@@ -64,16 +64,27 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Token/secret leakage | raw tokens printed once at creation; never listed, logged, or put in error messages; audit records ids only; token file 0600 | cli_e2e token/remote list assertions, `audit_log_records_who_what_result` ✅ |
 | Internal-state exfiltration/injection via refs | `workspaces/*` + `chains/*` invisible in listings (user ref grammar) AND explicitly refused by remote refs/update | `internal_namespaces_never_cross_the_wire` ✅ |
 | Interrupted transfer corruption | objects idempotent + refs atomic (one txn) on BOTH ends; crash between phases leaves orphans (gc fodder), zero visible change | `crash_mid_push_leaves_server_clean_and_retry_succeeds` ✅ |
-| SSRF (remote URLs) | client connects only to operator-provided host:port; no redirects followed | pending(it9) |
-| Confused deputy (server acts with client privileges) | per-request auth context; no ambient credentials; audit ties actions to token role | pending(it9) |
-| Replay | CAS semantics make replays no-ops or CAS failures | pending(it9) |
+| SSRF (remote URLs) | client issues exactly ONE request per call to the operator-provided host:port; the HTTP client never follows redirects (no Location handling in src/remote/client.rs) | by construction ✅ |
+| Confused deputy (server acts with client privileges) | per-request auth context; no ambient credentials; audit ties actions to token role | `roles_enforced_reader_writer_admin` ✅ |
+| Replay | CAS semantics make replays no-ops or CAS failures (`exactly(old)` after a move always fails) | `push_cas_race_one_winner_clean_loser` ✅ |
+
+### E2. Web UI + MCP surface (it10 — REALIZED)
+
+| Threat | Mitigation | Test |
+|---|---|---|
+| XSS via hostile repo content (commit messages, filenames, evidence output) | UI renders ALL dynamic content with `textContent`/`createTextNode` (`el()` helper); `innerHTML`/`document.write`/`eval` never appear in the file; served HTML contains zero repository data | `ui_is_self_contained_and_xss_disciplined`, `ui_is_served_only_when_enabled_and_carries_no_data` ✅ |
+| Token theft from browser | bearer token in `sessionStorage` only (cleared on tab close; never localStorage/cookies); no external resources can read it (nothing external is loaded) | static assertions above ✅ |
+| CSRF | auth is an `Authorization` header set by JS, never a cookie ⇒ browsers cannot ambient-authorize requests; UI performs no mutations at all | by construction ✅ |
+| Data-free shell exposure | `/` requires no auth but serves ONLY the static HTML; every data endpoint stays role-gated (`/v1/object` etc. refuse anonymous when anon-read is off) | `ui_is_served_only_when_enabled_and_carries_no_data` ✅ |
+| MCP command execution | `evidence record` executes ONLY an explicit caller-provided argv (same as CLI); never repository content; server has exactly the privileges of its spawning user and listens on stdio only (no port) | `mcp_speaks_jsonrpc_over_stdio`, SECURITY_MODEL §3 ✅ |
+| MCP protocol abuse | total JSON-RPC handling: parse errors -32700, batches refused, unknown tools/methods are errors not crashes; tool failures never kill the server | `protocol_errors_are_proper_jsonrpc`, `mcp_speaks_jsonrpc_over_stdio` (malformed line, then ping still answers) ✅ |
 
 ## F. Agent/AI-specific
 
 | Threat | Mitigation | Test |
 |---|---|---|
-| Fabricated "tests passed" evidence | `deterministic` flag; runner-produced evidence vs claims; policy can require deterministic | (it6) pending |
-| AI opinion presented as fact | `ai_generated` on evaluations; UI renders distinctly | (it6/10) pending |
+| Fabricated "tests passed" evidence | `deterministic` flag; `evidence record` captures REAL command/exit/output; change `tested` gate requires attached evidence; proposal gate requires tested/proposed | `change_lifecycle_honesty_gates`, `evidence_record_limits_and_signals`, `object_diff_and_workflow_endpoints` (proposal refused pre-`tested`) ✅ |
+| AI opinion presented as fact | `ai_generated` on evaluations is permanent; aggregation labels opinions as opinions; Web UI renders evaluations with an "AI OPINION" badge + explicit "never a fact" notice (src/ui/index.html) | `evaluation_targets_and_ai_flag` ✅ (UI badge: static asset, asserted data-free) |
 | Malicious agent identity spoofing (display name "human:alice") | identity ≠ authority; remote authz decides; pubkey signatures roadmap | documented; sigs (roadmap) |
 | Agent resource abuse (fork bombs of workspaces/objects) | configurable limits on workspace count/objects per txn; GC | (it7) pending |
 | Prompt-injected agent instructed to exfiltrate | out of scope for VCS core; NewGit gives no host access beyond repo dir; documented in AGENT_GUIDE | documented |

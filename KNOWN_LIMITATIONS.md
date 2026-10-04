@@ -119,3 +119,21 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     there is no remote-side merge — integrate locally and explicitly.
     Git remotes cannot be pushed to / pulled from incrementally (iteration
     8's import/export are whole-history one-shots).
+33. The Web UI is READ-ONLY by design (iteration 10): it explores
+    goals/changes/evidence/proposals/history/diffs/audit but performs no
+    mutations — writes stay in the CLI/MCP/API flow where authz and audit
+    are uniform. Rationale: a browser write path would need its own
+    CSRF/session story for zero gain (agents already have first-class
+    APIs). A write-capable UI is a post-1.0 candidate.
+34. The UI is one hand-written HTML file (~60 KB, no framework, no build
+    step). That is deliberate (supply chain: zero JS dependencies; works
+    offline) but it means no component ecosystem, no virtualized lists —
+    history/object views cap at 200 rows client-side.
+35. `/v1/diff` unified content is capped at 100 modified non-binary files
+    per response (`UNIFIED_CAP`); the machine-readable `diff.files[]` list
+    is never capped — clients needing more unified text diff pairwise.
+36. The MCP server has no authentication of its own: whoever can write to
+    its stdin has the privileges of the spawning process (same trust model
+    as the CLI). Run one `newgit mcp` per agent under that agent's OS user.
+    No MCP resources/prompts primitives (tools only); protocol version
+    2024-11-05; batches unsupported.

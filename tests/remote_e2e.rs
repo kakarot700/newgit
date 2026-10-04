@@ -1032,3 +1032,324 @@ fn url_validation_rejects_https_and_paths() {
     assert!(client::validate_url("ftp://h").is_err());
     assert!(client::validate_url("http://").is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 10: UI serving + object/diff/workflow read endpoints
+// ---------------------------------------------------------------------------
+
+fn raw_http(addr: std::net::SocketAddr, method: &str, path: &str) -> (u16, String, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).unwrap();
+    let status: u16 = buf.split(' ').nth(1).unwrap().parse().unwrap();
+    let ctype = buf
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+        .map(|l| l.split_once(':').unwrap().1.trim().to_string())
+        .unwrap_or_default();
+    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (status, ctype, body)
+}
+
+#[test]
+fn ui_is_served_only_when_enabled_and_carries_no_data() {
+    let (_sd, sdir) = tmp("ui");
+    let repo_path = sdir.join("srv");
+    let srv_repo = init_repo(&repo_path);
+    commit(&srv_repo, "refs/main", "s1", &[("a", b"1")], vec![]);
+
+    // ui disabled (default): / is unknown
+    let srv = spawn(&repo_path, &[], true, |_| {});
+    let (status, _, body) = raw_http(srv.handle.addr(), "GET", "/");
+    assert_eq!(status, 404, "{body}");
+    let info_v = srv.client(None).call("GET", "/v1/info", None).unwrap();
+    let caps = info_v["capabilities"].as_array().unwrap();
+    assert!(!caps.iter().any(|c| c == "ui"), "{caps:?}");
+    srv.handle.shutdown();
+
+    // ui enabled: static HTML, no auth needed, no repo data inside
+    let srv = spawn(&repo_path, &[], true, |c| c.ui = true);
+    let (status, ctype, body) = raw_http(srv.handle.addr(), "GET", "/");
+    assert_eq!(status, 200);
+    assert!(ctype.starts_with("text/html"), "{ctype}");
+    assert!(body.starts_with("<!DOCTYPE html>"));
+    assert!(body.contains("sessionStorage") && body.contains("/v1/info"));
+    // the served HTML must not embed repository data or secrets
+    assert!(
+        !body.contains("refs/main"),
+        "UI must be data-free static shell"
+    );
+    let (status2, _, _) = raw_http(srv.handle.addr(), "GET", "/index.html");
+    assert_eq!(status2, 200);
+    let info_v = srv.client(None).call("GET", "/v1/info", None).unwrap();
+    let caps = info_v["capabilities"].as_array().unwrap();
+    assert!(caps.iter().any(|c| c == "ui"), "{caps:?}");
+    for cap in ["object", "diff", "goals", "changes", "proposals"] {
+        assert!(
+            caps.iter().any(|c| c == cap),
+            "missing capability {cap}: {caps:?}"
+        );
+    }
+    // data endpoints still require their roles even with the UI on
+    let anon = srv.client(None);
+    let e = anon
+        .call("POST", "/v1/object", Some(&json!({"oid": "0".repeat(64)})))
+        .unwrap_err();
+    // anonymous read IS allowed on this server (anon_read=true) — unknown oid ⇒ 404
+    assert!(
+        matches!(e, Error::RefNotFound(_) | Error::NotFound(_)),
+        "{e:?}"
+    );
+    srv.handle.shutdown();
+
+    // without anon read the object endpoint gates
+    let srv2 = spawn(&repo_path, &[], false, |c| c.ui = true);
+    let e = srv2
+        .client(None)
+        .call("POST", "/v1/object", Some(&json!({"oid": "0".repeat(64)})))
+        .unwrap_err();
+    assert!(matches!(e, Error::Auth(_)), "{e:?}");
+    srv2.handle.shutdown();
+}
+
+#[test]
+fn object_diff_and_workflow_endpoints() {
+    use newgit::cli::call_json;
+    let (_sd, sdir) = tmp("objdiff");
+    let repo_path = sdir.join("srv");
+    let srv_repo = init_repo(&repo_path);
+    // two snapshots: modify a.txt, add new.txt, rename via delete+add of mv.txt
+    let s1 = commit(
+        &srv_repo,
+        "refs/main",
+        "s1",
+        &[("a.txt", b"old line\nkeep\n"), ("mv.txt", b"moving\n")],
+        vec![],
+    );
+    let s2 = commit(
+        &srv_repo,
+        "refs/main",
+        "s2",
+        &[
+            ("a.txt", b"new line\nkeep\n"),
+            ("new.txt", b"fresh\n"),
+            ("mv.txt", b"moving\n"),
+        ],
+        vec![s1],
+    );
+
+    // workflow fixtures through the SAME code path the CLI uses (call_json)
+    call_json(
+        Some(&repo_path),
+        &[
+            "actor",
+            "set-default",
+            "--id",
+            "agent:ui",
+            "--name",
+            "UI Agent",
+        ],
+    )
+    .unwrap();
+    let goal = call_json(
+        Some(&repo_path),
+        &["goal", "create", "Ship the UI", "--description", "d"],
+    )
+    .unwrap();
+    let goal_id = goal["goal"].as_str().unwrap().to_string();
+    let change = call_json(
+        Some(&repo_path),
+        &[
+            "change",
+            "create",
+            "UI change",
+            "--base",
+            &s1.to_hex(),
+            "--result",
+            &s2.to_hex(),
+            "--goal",
+            &goal_id,
+        ],
+    )
+    .unwrap();
+    let change_id = change["change"].as_str().unwrap().to_string();
+    let ev = call_json(
+        Some(&repo_path),
+        &[
+            "evidence",
+            "add",
+            "--kind",
+            "unit_test",
+            "--verdict",
+            "pass",
+            "--deterministic",
+            "--target",
+            &change_id,
+        ],
+    )
+    .unwrap();
+    let ev_id = ev["evidence"].as_str().unwrap().to_string();
+    call_json(
+        Some(&repo_path),
+        &["change", "attach-evidence", &change_id, &ev_id],
+    )
+    .unwrap();
+    // honesty gate: proposal requires the change to be `tested` first
+    call_json(
+        Some(&repo_path),
+        &["change", "set-status", &change_id, "tested"],
+    )
+    .unwrap();
+    let prop = call_json(
+        Some(&repo_path),
+        &["proposal", "create", "Ship it", "--change", &change_id],
+    )
+    .unwrap();
+    let prop_id = prop["proposal"].as_str().unwrap().to_string();
+
+    let srv = spawn(&repo_path, &[("r", "tok-r", Role::Read)], false, |c| {
+        c.ui = true
+    });
+    let rc = srv.client(Some("tok-r"));
+
+    // /v1/object — snapshot
+    let v = rc
+        .call("POST", "/v1/object", Some(&json!({"oid": s2.to_hex()})))
+        .unwrap();
+    let o: ObjectData = serde_json::from_value(v).unwrap();
+    assert_eq!(o.kind, "snapshot");
+    assert_eq!(o.data.as_ref().unwrap()["message"], "s2");
+    assert!(
+        o.links.iter().any(|l| *l == s1.to_hex()),
+        "parents in links"
+    );
+    assert!(o.data_b64.is_none() && o.size.is_none());
+    // tree → blob walk with exact bytes
+    let root = o.data.as_ref().unwrap()["root"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let v = rc
+        .call("POST", "/v1/object", Some(&json!({"oid": root})))
+        .unwrap();
+    let t: ObjectData = serde_json::from_value(v).unwrap();
+    assert_eq!(t.kind, "tree");
+    let entries = t.data.as_ref().unwrap()["entries"].as_array().unwrap();
+    let e = entries.iter().find(|e| e["name"] == "new.txt").unwrap();
+    let v = rc
+        .call(
+            "POST",
+            "/v1/object",
+            Some(&json!({"oid": e["oid"].as_str().unwrap()})),
+        )
+        .unwrap();
+    let bo: ObjectData = serde_json::from_value(v).unwrap();
+    assert_eq!(bo.kind, "blob");
+    assert_eq!(bo.size, Some(6));
+    assert_eq!(
+        base64::decode(bo.data_b64.as_deref().unwrap()).unwrap(),
+        b"fresh\n"
+    );
+    assert!(bo.data.is_none());
+    // workflow objects by oid
+    for (oid, kind, title) in [
+        (goal_id.as_str(), "goal", "Ship the UI"),
+        (change_id.as_str(), "change", "UI change"),
+        (prop_id.as_str(), "proposal", "Ship it"),
+    ] {
+        let v = rc
+            .call("POST", "/v1/object", Some(&json!({"oid": oid})))
+            .unwrap();
+        let wo: ObjectData = serde_json::from_value(v).unwrap();
+        assert_eq!(wo.kind, kind);
+        assert_eq!(wo.data.as_ref().unwrap()["title"], title);
+    }
+    // evidence keeps its honesty flag on the wire
+    let v = rc
+        .call("POST", "/v1/object", Some(&json!({"oid": ev_id})))
+        .unwrap();
+    let eo: ObjectData = serde_json::from_value(v).unwrap();
+    assert_eq!(eo.kind, "evidence");
+    assert_eq!(eo.data.as_ref().unwrap()["deterministic"], true);
+    // unknown oid → not found; bad hex → malformed
+    let e = rc
+        .call("POST", "/v1/object", Some(&json!({"oid": "3".repeat(64)})))
+        .unwrap_err();
+    assert!(
+        matches!(e, Error::NotFound(_) | Error::RefNotFound(_)),
+        "{e:?}"
+    );
+    let e = rc
+        .call("POST", "/v1/object", Some(&json!({"oid": "xyz"})))
+        .unwrap_err();
+    assert!(
+        matches!(e, Error::Malformed(_) | Error::Protocol(_)),
+        "{e:?}"
+    );
+
+    // /v1/diff — file list + unified content
+    let v = rc
+        .call(
+            "POST",
+            "/v1/diff",
+            Some(&json!({"a": s1.to_hex(), "b": s2.to_hex(), "content": true})),
+        )
+        .unwrap();
+    let d: DiffData = serde_json::from_value(v).unwrap();
+    assert_eq!(d.a_root.len(), 64);
+    let files = d.diff["files"].as_array().unwrap();
+    let kinds: std::collections::BTreeSet<String> = files
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(kinds.contains("added"), "{kinds:?}");
+    assert!(kinds.contains("modified"), "{kinds:?}");
+    let uni = d
+        .unified
+        .iter()
+        .find(|u| u.path == "a.txt")
+        .expect("a.txt unified");
+    assert!(uni.unified.contains("-old line"), "{}", uni.unified);
+    assert!(uni.unified.contains("+new line"), "{}", uni.unified);
+    // ref names work as specs; content omitted unless asked
+    let v = rc
+        .call(
+            "POST",
+            "/v1/diff",
+            Some(&json!({"a": s1.to_hex(), "b": "refs/main"})),
+        )
+        .unwrap();
+    let d2: DiffData = serde_json::from_value(v).unwrap();
+    assert_eq!(d2.b_root, d.b_root);
+    assert!(d2.unified.is_empty(), "content=false ⇒ no unified");
+
+    // workflow listings + goal filter
+    let v = rc.call("GET", "/v1/goals", None).unwrap();
+    let l: ListData = serde_json::from_value(v).unwrap();
+    assert_eq!(l.entities.len(), 1);
+    assert_eq!(l.entities[0].data["data"]["title"], "Ship the UI");
+    let v = rc
+        .call("GET", &format!("/v1/changes?goal={goal_id}"), None)
+        .unwrap();
+    let l: ListData = serde_json::from_value(v).unwrap();
+    assert_eq!(l.entities.len(), 1);
+    // filter that matches nothing → empty list (not an error)
+    let v = rc
+        .call("GET", &format!("/v1/changes?goal={}", "4".repeat(64)), None)
+        .unwrap();
+    let l: ListData = serde_json::from_value(v).unwrap();
+    assert!(l.entities.is_empty());
+    let v = rc.call("GET", "/v1/proposals", None).unwrap();
+    let l: ListData = serde_json::from_value(v).unwrap();
+    assert_eq!(l.entities.len(), 1);
+    assert_eq!(l.entities[0].data["data"]["title"], "Ship it");
+    srv.handle.shutdown();
+}

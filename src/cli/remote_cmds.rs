@@ -42,6 +42,7 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         "max-body",
         "max-threads",
         "allow-anonymous-read",
+        "ui",
     ])?;
     let repo = open_repo(ctx)?;
     let bind = a.opt("bind").unwrap_or(DEFAULT_BIND).to_string();
@@ -69,9 +70,11 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         allow_anonymous_read: a.flag("allow-anonymous-read"),
         max_body,
         max_threads,
+        ui: a.flag("ui"),
     };
     // Fail fast on an unusable token file BEFORE binding.
     auth::load(&cfg.token_file)?;
+    let ui = cfg.ui;
     let handle = server::spawn(cfg)?;
     let line = server::listening_line(handle.addr());
     obs::event(
@@ -86,11 +89,16 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
                 "data": {
                     "listening": handle.addr().to_string(),
                     "protocol": crate::remote::proto::PROTOCOL_VERSION,
+                    "ui": ui,
+                    "ui_url": if ui { Some(format!("http://{}/", handle.addr())) } else { None },
                 }
             })
         );
     } else {
         println!("{line}");
+        if ui {
+            println!("web UI:      http://{}/  (read-only explorer; log in with a token, or browse anonymously if allowed)", handle.addr());
+        }
     }
     use std::io::Write;
     let _ = std::io::stdout().flush();
@@ -99,6 +107,15 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }
+}
+
+/// `newgit ui` — serve with the embedded Web UI enabled and print the URL.
+pub(crate) fn cmd_ui(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let mut args = tail.to_vec();
+    if !args.iter().any(|a| a == "--ui") {
+        args.push("--ui".to_string());
+    }
+    cmd_serve(ctx, &args)
 }
 
 // ---------------------------------------------------------------------------

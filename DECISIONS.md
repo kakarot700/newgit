@@ -339,3 +339,40 @@ Realizes D-007. Chosen after implementing and testing both directions:
   git interop via files); libp2p/custom TCP protocol (debuggability, proxy
   compatibility); async runtime (concurrency needs are modest: thread-per-
   connection with a bounded pool passed the concurrent-push tests).
+
+## D-018 · Web UI = embedded data-free static shell; MCP = thin stdio wrapper over CLI dispatch; agent read endpoints on protocol v1 (Iteration 10)
+
+- **Single-file UI, `include_str!`, zero JS dependencies.** No React, no
+  build step, no CDN: the supply-chain surface stays exactly what D-002
+  allows (nothing new), the binary ships the UI, and it works offline in
+  sandboxed browsers. The file is hand-written vanilla JS (~60 KB) with a
+  strict rendering discipline: `textContent` only, `innerHTML` never —
+  asserted by a unit test against the shipped bytes, so XSS-safety is a
+  CI-enforced invariant, not a convention.
+- **UI is read-only by design (KL #33).** Serving `/` without auth is safe
+  ONLY because the HTML carries zero repository data; every byte of data
+  flows through the role-gated `/v1/*` API with the user's own bearer
+  token. A browser write path would require a second authz/CSRF story for
+  no gain — agents already have CLI/MCP/HTTP write paths. Bearer-header
+  auth (never cookies) makes CSRF structurally impossible.
+- **New read endpoints (`/v1/object`, `/v1/diff`, `/v1/goals|changes|
+  proposals`) instead of client-side assembly.** Agents/UIs shouldn't have
+  to know oid→shape mapping or walk trees by hand: `object` returns kind +
+  links + data (blobs as b64+size — serde's `Vec<u8>` would be a giant
+  number array); `diff` reuses `resolve_tree` + the CLI's OWN rendering
+  (`render::file_header`/`render_content`) so wire unified text and CLI
+  output cannot drift; listings reuse `workflow::list_entities` with a
+  server-side `?goal=` filter. All additive to v1 (no version bump).
+- **MCP = 13 thin tools over `cli::call_json`, NOT a parallel
+  implementation.** One dispatch code path ⇒ identical validation, limits,
+  honesty gates, and error categories everywhere; the MCP layer cannot
+  drift from the CLI. JSON-RPC 2.0 on stdio, newline-delimited, std-only
+  (serde_json already in budget): initialize/ping/tools list/call; tool
+  errors are `isError:true` content carrying the standard envelope;
+  protocol errors use proper -327xx/-326xx codes. No auth beyond process
+  privileges (same trust model as the CLI, KL #36) — one server per agent
+  user.
+- Rejected: WASM/SPA framework UI (dependency sprawl, build complexity,
+  supply chain); GraphQL/gRPC agent API (new deps, new surface — JSON/HTTP
+  v1 already normative); MCP over HTTP+SSE (port exposure, auth story —
+  stdio is the safe default); UI write operations (see above).

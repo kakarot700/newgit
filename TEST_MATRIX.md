@@ -26,6 +26,7 @@ cargo test --release                # same suites, optimized (chaos uses this)
 | Crash/failure injection | `tests/txn_recovery.rs` + `newgit-faultlab` | child-process aborts at 5 txn fault points; forward-recovery, partial-apply completion, reflog dedup, quarantine | ✅ iter 2 (ostore crash points: iter 3) |
 | Chaos | `tests/chaos.rs` | 6 fixed xorshift64* seeds × 14–25 random ops (snapshot/ws-create/integrate/put-blob/txn-set) killed at random fault points; after EVERY step: auto-recovery, deep verify zero errors, refs resolve, status computes; end-of-seed gc + history walk | ✅ iter 7 (6 suites) |
 | Fuzz-like | `tests/fuzz_parsers.rs` | 150k seeded prefix-anchored garbage inputs vs envelope/canonical/index/journal/config/hex/base64/ref-grammar/fast-export + **HTTP request framing, percent-decoding and all remote wire structs** (no panics, no OOM) | ✅ iter 7–9 (8 suites) |
+| E2E (UI/MCP) | lib (`ui::tests`, `cli::mcp::tests`) + `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | UI self-containment & XSS discipline (asserted against shipped bytes); UI served only with `--ui`, data-free shell, no-auth static vs role-gated data; `/v1/object` shapes (snapshot/tree/blob-b64/goal/change/evidence/proposal) + not-found/malformed; `/v1/diff` vs CLI rendering + spec forms + content cap; goals/changes(?goal)/proposals listings; MCP handshake/catalog(13)/ping, JSON-RPC error codes (-32700/-32600/-32601/-32602), argv mapping table, isError envelope, real child processes (`newgit ui` announcement + HTML over TCP; `newgit mcp` full session incl. snapshot-through-MCP and clean EOF exit) | ✅ iter 10 (4 lib + 2 remote + 2 cli suites) |
 | E2E (remote) | `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | REAL in-process server + REAL TCP client (no mocks): info/healthz anonymous, refs gating, role matrix (read/write/admin ⇒ 401/403 boundaries), bad token never downgrades, push→pull oid + object-universe equality, incremental push (0 objects on re-push), non-fast-forward refusal + wire CAS (one winner), dependency-order + corrupt-envelope rejection on put, batch/body limits, internal namespaces never cross, audit content + ordering, concurrent pushes to different refs, crash-mid-push leaves server clean and retry reuses orphans, negotiate superset + post-order, protocol-version and URL validation. CLI: `serve` port-0 announcement line, `token add/list` (no leaks), `remote add/list/remove`, `push`/`pull`/`audit` `--json` envelopes, exit codes 2/3/5/7, bind-conflict and not-a-repo errors | ✅ iter 9 (14 + 2 suites) |
 | Compatibility | `tests/git_compat.rs` | REAL system-git repos (branches, merges, annotated+light tags, binary, symlink, exec bit, unicode, renames, empty commits, distinct author/committer, remotes+notes refs): import equality vs `ls-tree`/`cat-file`/`log`, import determinism, export round-trip (byte-identical blob SHAs + identity multiset + clean worktree), submodule refusal atomicity, empty repo, ref-move atomicity, export refusals, reimport stability | ✅ iter 8 (9 suites) |
 | Performance | `src/bin/newgit-bench.rs` + docs/BENCHMARKS.md | put_blob / snapshot 1k+5k cold+warm / status cached+uncached / diff / history / integrate / verify / gc — real recorded numbers + regression policy | ✅ iter 7 (release re-check: iter 11) |
@@ -61,10 +62,10 @@ cargo test --release                # same suites, optimized (chaos uses this)
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (iteration 9)
-- `cargo test`: **269 passed; 0 failed** (123 lib unit, 6 chaos, 14 cli_e2e,
+- Date: 2026-10-04 (iteration 10)
+- `cargo test`: **278 passed; 0 failed** (128 lib unit, 6 chaos, 16 cli_e2e,
   4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers, 9 git_compat,
-  18 merge_integrate, 13 ops_snapshot, 12 property_core, 14 remote_e2e,
+  18 merge_integrate, 13 ops_snapshot, 12 property_core, 16 remote_e2e,
   10 txn_recovery, 20 verify_gc, 1 version, 9 workflow)
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo fmt --check`: clean

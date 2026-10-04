@@ -1225,3 +1225,172 @@ fn remote_cli_refuses_to_serve_outside_a_repo_and_reports_bind_errors() {
     let r = ng(&srv, &["serve", "--max-body", "lots"]);
     assert_eq!(r.code, 2, "{}", r.err);
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 10: `newgit ui` + `newgit mcp` as real processes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ui_command_serves_browser_shell() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("proj");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "x.txt", b"hello\n");
+    ok(&proj, &["snapshot", "-m", "s1"]);
+
+    let mut child = Command::new(newgit_bin())
+        .args([
+            "--repo",
+            proj.to_str().unwrap(),
+            "ui",
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn ui");
+    use std::io::BufRead;
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = std::io::BufReader::new(stdout).lines();
+    let line = lines.next().expect("ui must announce its address").unwrap();
+    let hi = line.find("http://").expect("announcement contains a URL");
+    let addr = line[hi + "http://".len()..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let a: std::net::SocketAddr = addr
+        .parse()
+        .unwrap_or_else(|e| panic!("listening addr {addr:?}: {e}"));
+    // second line: the web UI hint
+    let hint = lines.next().expect("ui hint line").unwrap();
+    assert!(hint.contains("web UI") && hint.contains('/'), "{hint}");
+    drop(lines);
+
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(a).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(s, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).unwrap();
+    let first = buf.lines().next().unwrap_or("").to_string();
+    assert!(buf.starts_with("HTTP/1.1 200"), "status line: {first}");
+    assert!(buf.contains("<!DOCTYPE html>"), "html body");
+    assert!(buf.contains("Content-Type: text/html"), "content type");
+    // repository data must NOT be embedded in the shell
+    assert!(!buf.contains("refs/main"), "static shell only");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_speaks_jsonrpc_over_stdio() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("proj");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "f.txt", b"mcp\n");
+    ok(&proj, &["snapshot", "-m", "s0"]);
+
+    let mut child = Command::new(newgit_bin())
+        .args(["--repo", proj.to_str().unwrap(), "mcp"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn mcp");
+    use std::io::{BufRead, Write};
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = std::io::BufReader::new(stdout).lines();
+
+    const NOTIF: &str = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+
+    fn rpc(
+        stdin: &mut std::process::ChildStdin,
+        reader: &mut std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
+        msg: &str,
+    ) -> serde_json::Value {
+        writeln!(stdin, "{msg}").unwrap();
+        stdin.flush().unwrap();
+        let line = reader.next().expect("mcp response").unwrap();
+        serde_json::from_str(&line).expect("json response")
+    }
+
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#,
+    );
+    assert_eq!(r["result"]["serverInfo"]["name"], "newgit", "{r}");
+    writeln!(stdin, "{NOTIF}").unwrap();
+    stdin.flush().unwrap();
+
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+    );
+    let tools = r["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 13, "tool catalog");
+
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"newgit_history","arguments":{"limit":5}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("s0"));
+
+    // snapshot through MCP, then see it in history
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"newgit_snapshot","arguments":{"message":"mcp-snap"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"newgit_history","arguments":{}}}"#,
+    );
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("mcp-snap"));
+
+    // error path: tool failure is isError content with a category, not a crash
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"newgit_cat","arguments":{"oid":"zz"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true);
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("category"), "{text}");
+
+    // server survives malformed input, then answers ping
+    let r = rpc(&mut stdin, &mut reader, "{oops");
+    assert_eq!(r["error"]["code"], -32700);
+    let r = rpc(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#,
+    );
+    assert_eq!(r["result"], serde_json::json!({}));
+
+    drop(stdin); // EOF ⇒ clean exit
+    let status = child.wait().unwrap();
+    assert!(status.success(), "mcp exits 0 on EOF: {status}");
+}

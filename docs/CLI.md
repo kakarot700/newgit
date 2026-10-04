@@ -323,9 +323,41 @@ token material is ever recorded. `--json` ⇒ `{entries:[…], count:N}`.
 | 6 | limit exceeded (batch/body) |
 | 7 | authentication or authorization failure |
 
+## ui / mcp (iteration 10)
+
+### `newgit ui [--bind host:port] [--token-file P] [--allow-anonymous-read]`
+
+`serve` with the embedded Web UI enabled. Prints the listening line plus
+`web UI: http://HOST:PORT/`; with `--json` the envelope carries
+`{"listening","protocol","ui":true,"ui_url"}`. The UI is a single
+self-contained HTML page (no external resources): dashboard, history,
+universal object inspector, goals/changes/evidence/proposal views, diff
+compare, audit log — READ-ONLY by design. Login = bearer token in
+`sessionStorage` (never cookies/localStorage).
+
+### `newgit serve ... --ui`
+
+Same as `ui` but explicit; the flag is off by default so plain API servers
+do not expose the static route.
+
+### `newgit mcp [--repo R]`
+
+MCP (Model Context Protocol) server on stdio: newline-delimited JSON-RPC
+2.0 (`initialize` → `notifications/initialized` → `tools/list` /
+`tools/call`; `ping` supported; batches rejected -32600; unknown methods
+-32601; parse errors -32670). 13 tools mirror the CLI 1:1 (status, history,
+cat, diff, snapshot, verify, integrate, workspace, goal, change, evidence,
+evaluation, proposal) via the identical dispatch code path (`cli::call_json`)
+— same validation, same error categories. Tool failures return
+`isError:true` with the standard `{ok:false,error:{category,message}}`
+envelope as text content. Blocks until stdin EOF (exit 0) or process kill.
+See docs/AGENT_GUIDE.md §3.
+
 ## Coming in later iterations
 
-`ui` (it10).
+No new commands planned before 1.0 — iterations 11–12 are release
+engineering (dist/checksums/SBOM/CI hardening) and the final audit. See
+ROADMAP.md.
 
 ## Agent usage notes
 

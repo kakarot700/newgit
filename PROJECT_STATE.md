@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 9 COMPLETE — remote protocol v1: `src/remote/` (std-only HTTP/1.1 server + client, bearer-token auth w/ roles, audit log, negotiated push/pull), `newgit serve/remote/push/pull/token/audit`, docs/PROTOCOL.md, D-017, 14 remote_e2e suites over real TCP (on top of iteration 8: git import/export; iteration 7: verify/gc/chaos/fuzz/benchmarks).
-- **Classification:** NOT PRODUCTION READY (no web UI, release engineering, or CI yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **269/269** ✓ (123 unit + 6 chaos + 14 cli-e2e + 4 concurrency + 8 diff + 8 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 14 remote-e2e + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release).
+- **Phase:** Iteration 10 COMPLETE — Web UI + agent API/MCP: `src/ui/` (embedded single-file UI, `newgit ui` / `serve --ui`), agent read endpoints (`/v1/object`, `/v1/diff`, `/v1/goals|changes|proposals`), `newgit mcp` (stdio JSON-RPC 2.0, 13 tools over `cli::call_json`), docs/AGENT_GUIDE.md, D-018 (on top of iteration 9: remote protocol v1 server/client/push/pull/auth/audit).
+- **Classification:** NOT PRODUCTION READY (release engineering, CI-on-runner, and final audit remain — iterations 11–12; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **278/278** ✓ (128 unit + 6 chaos + 16 cli-e2e + 4 concurrency + 8 diff + 8 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 16 remote-e2e + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release; re-run due it11).
 
 ## Environment / how to resume
 
@@ -55,15 +55,17 @@ src/
   ops/verify.rs                  # fsck: coded Issues, deep link walk, reachable() for gc
   ops/gc.rs                      # non-destructive mark&sweep (D-014), grace window
   gitio/{fastexport,import,export}.rs  # git interop: total parser, atomic import, deterministic export (D-016)
-  remote/{proto,http,auth,audit,negotiate,server,client}.rs  # protocol v1: wire types, HTTP, tokens/roles, audit, negotiation, server, push/pull (D-017)
+  remote/{proto,http,auth,audit,negotiate,server,client}.rs  # protocol v1: wire types, HTTP, tokens/roles, audit, negotiation, server, push/pull, agent read endpoints (D-017/D-018)
+  ui/{mod.rs,index.html}         # embedded Web UI: data-free static shell, XSS-safe by construction (D-018)
   cli/workflow_cmds.rs           # workflow CLI command families
-  cli/remote_cmds.rs             # serve/remote/push/pull/token/audit commands
-  cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
+  cli/remote_cmds.rs             # serve/ui/remote/push/pull/token/audit commands
+  cli/mcp.rs                     # MCP stdio JSON-RPC 2.0 server: 13 tools → cli::call_json (D-018)
+  cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes, pub call_json
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
   bin/newgit-bench.rs              # benchmark harness (no bench deps)
 tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e,verify_gc,chaos,fuzz_parsers,git_compat,remote_e2e}.rs
-docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,BENCHMARKS,GIT_COMPAT,PROTOCOL}.md
+docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,AGENT_GUIDE,BENCHMARKS,GIT_COMPAT,PROTOCOL}.md
 .github/workflows/ci.yml           # GitHub Actions fmt/clippy/test (exists since it3; cannot execute in sandbox — no GitHub remote; it11 extends: audit, SBOM, release builds)
 ```
 
@@ -386,61 +388,97 @@ None.
 - Fuzz: `fuzz_fastexport_parser_never_panics` added (20k prefix-anchored
   inputs, 4 real-framing prefixes, bounded drain).
 
+## Iteration 10 outcome (facts for resume)
+
+- **UI** (`src/ui/index.html`, `include_str!` via `src/ui/mod.rs`, `pub mod ui`):
+  single file, zero external resources (CI-asserted: no http(s)://, innerHTML,
+  eval, document.write, <link>, url()); dark theme; hash router `#/`,
+  `#/history?ref=`, `#/object/<oid>`, `#/goals`, `#/proposals`,
+  `#/compare?a=&b=`, `#/audit`; login = bearer token → sessionStorage
+  `ng_token` (+ anonymous checkbox); model-flow strip
+  GOAL→CHANGE→EVIDENCE→PROPOSAL→INTEGRATION; evidence shows
+  DETERMINISTIC/NON-DETERMINISTIC badges; evaluations show purple "AI OPINION"
+  badge + "opinion never fact" notice; blob preview ≤64 KiB (text/hex);
+  history caps 200 rows client-side. READ-ONLY (KL #33).
+- **Server** (`src/remote/server.rs`): `ServerConfig.ui` flag; static route
+  `GET /`+`/index.html` (no auth, principal "ui-static", text/html) only when
+  ui=true; new endpoints `POST /v1/object`, `POST /v1/diff`,
+  `GET /v1/goals|changes|proposals` (read role; `changes?goal=<hex>`
+  server-side filter, non-matching ⇒ empty list); capabilities +=
+  object/diff/goals/changes/proposals (+`ui` conditional). Object endpoint:
+  non-blobs `{oid,kind,links,data}` (links via `verify::object_links`), blobs
+  `{oid,kind:"blob",data_b64,size,links:[]}`. Diff endpoint: specs via
+  `diff::resolve_tree`; `content:true` ⇒ `unified:[{path,unified}]` rendered
+  by the CLI's own `render::file_header`+`render_content`, UNIFIED_CAP=100
+  modified non-binary files (KL #35). Wire types in `src/remote/proto.rs`:
+  ObjectReq/ObjectData, DiffReq/DiffData/UnifiedFile, EntityEntry/ListData.
+- **CLI**: `serve --ui` (default OFF); `newgit ui` = serve with --ui forced,
+  prints second line `web UI: http://HOST:PORT/ ...`; `serve --json` data now
+  `{listening,protocol,ui,ui_url}`. `cli::call_json(repo,args)` = PUBLIC
+  programmatic dispatch returning the JSON data payload (Text→json string,
+  Raw→b64) — MCP and tests share it.
+- **MCP** (`src/cli/mcp.rs`): newline-delimited JSON-RPC 2.0 on stdio;
+  protocolVersion echoes client (default 2024-11-05); initialize/ping/
+  tools-list/tools-call; notifications silent; batches -32600, parse -32700,
+  unknown method -32601, non-object arguments -32602; unknown tool ⇒
+  isError tool result with category "invalid" (NOT a protocol error); NewGit
+  failures ⇒ `{content:[{type:"text",text:<envelope>}],isError:true}`;
+  13 tools newgit_{status,history,cat,diff,snapshot,verify,integrate,
+  workspace,goal,change,evidence,evaluation,proposal} — `build_argv` maps to
+  exact CLI syntax (unit-tested mapping table); EOF ⇒ exit 0.
+- **Tests 269→278**: lib +5 (`ui_is_self_contained_and_xss_disciplined`,
+  `jsonrpc_handshake_and_catalog`, `protocol_errors_are_proper_jsonrpc`,
+  `argv_building_matches_cli_syntax`, `tool_call_end_to_end_on_a_real_repo`);
+  remote_e2e +2 (`ui_is_served_only_when_enabled_and_carries_no_data`,
+  `object_diff_and_workflow_endpoints` — fixtures built via `call_json`,
+  honesty gate caught proposal-before-tested during writing); cli_e2e +2
+  (`ui_command_serves_browser_shell`, `mcp_speaks_jsonrpc_over_stdio` — real
+  child processes; parse the `http://ADDR` token from the announcement, the
+  LAST whitespace token is `v1)`).
+- **Docs**: docs/AGENT_GUIDE.md NEW (3 interfaces table, curl recipes, MCP
+  quickstart, category contract, two-agent example); PROTOCOL.md (read
+  endpoints + static route + serve --ui + capabilities); CLI.md (ui/mcp
+  sections); SECURITY_MODEL §8; THREAT_MODEL §E2 (+3 it9 pending rows
+  resolved honestly); KNOWN_LIMITATIONS #33–36; DECISIONS D-018; CHANGELOG;
+  ROADMAP [x]10; RELEASE_READINESS updated.
+- Gotchas learned: `writeln!(w, r#"{...}"#)` needs `"{}",` (format-string
+  lint); `Vec<String> += [..]` doesn't compile (use extend); `tail.clone()`
+  on `&[String]` clones the REFERENCE (use to_vec); cmd_init takes the dir
+  as a POSITIONAL (ignores --repo for creation).
+
 ## Current task (next iteration)
 
-**Iteration 10: Web UI + agent API/MCP (served by the remote server).**
+**Iteration 11: Release engineering + benchmark re-run + docs completion.**
 Completion condition:
-1. `src/ui/` module: single embedded HTML file (no build step, no npm, no
-   external CDN — inline CSS/JS, works offline in a sandboxed iframe with
-   `sandbox="allow-scripts"`): talks to the SAME protocol-v1 endpoints via
-   fetch() with a session token; NO new server endpoints beyond one static
-   `GET /` (ui) + reuse of /v1/* (auth applies: UI asks for token once,
-   stores in memory/sessionStorage only).
-2. Views (communicating the NewGit model, NOT a GitHub clone):
-   - Dashboard: HEAD, ref list, repo info/limits, audit tail (admin).
-   - History: snapshot graph (first-parent list + parent links), message,
-     author, timestamp; click → snapshot detail.
-   - Snapshot detail: tree browser (lazy per-tree fetch via objects/get),
-     blob viewer (text + hex for binary), parents/links.
-   - Goals/Changes: goal list + status, changes per goal with base/result
-     snapshots, evidence items with honesty flags (deterministic/ai_generated
-     visually distinct), evaluations, proposals + approvals; chain view.
-   - Compare: pick two snapshots → unified diff (client-side via existing
-     diff data from /v1 objects OR a read-only diff endpoint decision — see
-     step 3); renames/modes shown.
-   - Workspaces: list + positions (read-only view of internal refs requires
-     an admin/read exception decision — default: hidden like the wire).
-3. Diff over the wire: objects/get is enough (client fetches both trees +
-   blobs and renders) BUT for large trees add `POST /v1/diff {a,b}` returning
-   the existing diff engine's JSON (read role) — decide by measurement;
-   prefer reusing ops::diff (no new logic).
-4. `newgit ui [--bind] [--token]` convenience: starts serve with UI enabled
-   and prints the URL; OR serve always exposes `/` when `--ui` flag given
-   (default off for headless servers? decide: default ON is friendlier,
-   auth still gates data endpoints; `/` itself serves static HTML without
-   auth — it contains no data).
-5. MCP/agent API: `newgit mcp` stdio JSON-RPC 2.0 server exposing tools:
-   status, history, cat, diff, snapshot, goal/change/evidence/proposal
-   workflow calls — thin wrappers over the SAME CLI dispatch (no logic
-   duplication); protocol version handshake; errors as JSON-RPC errors with
-   our categories. Document in docs/AGENT_GUIDE.md (new) incl. curl recipes
-   for the HTTP API as the "agent API".
-6. Tests: tests/ui_e2e.rs — fetch `/` (static, no auth), assert inline
-   assets (no external URLs in the HTML), assert UI JS bundle references
-   only /v1/ endpoints; mcp: spawn `newgit mcp` child, drive JSON-RPC over
-   stdio (initialize, tools/list, tools/call status/snapshot/history,
-   error contract); /v1/diff endpoint test if added.
-7. Docs: docs/AGENT_GUIDE.md, README UI bullet, ARCHITECTURE UI/MCP boxes
-   become real, TEST_MATRIX rows, CHANGELOG, ROADMAP [x], PROJECT_STATE.
-8. Gates + commit.
+1. `scripts/dist.sh` (or Rust xtask-free plain shell): release build →
+   `dist/newgit-<version>-<target>/` with binary + README + LICENSE + docs/,
+   sha256sums file; run it in-sandbox and RECORD real outputs.
+2. SBOM: `cargo metadata`-derived inventory (name/version/source/license per
+   dep) committed as `SBOM.md` (or .json) + dependency count check against
+   D-002 budget (5 runtime deps).
+3. Supply-chain: `cargo audit` if the advisory DB is reachable from the
+   sandbox (crates.io index IS reachable — try); if not installable,
+   document honestly in RELEASE_READINESS (CI-only gate) — NO fake claim.
+4. Reproducibility: two clean release builds → compare sha256 of the binary;
+   record result honestly (likely differs via debug-info/paths — document
+   what WAS achieved, e.g. same source+toolchain ⇒ same hash or not).
+5. CI hardening (.github/workflows/ci.yml): add release profile build,
+   `cargo audit` (continue-on-error=false where possible), dist+checksum job
+   artifacts; cannot RUN on a hosted runner from sandbox — keep the
+   "defined, not executed" honesty note.
+6. Benchmarks: re-run `newgit-bench` in release with the it10 code; update
+   docs/BENCHMARKS.md numbers (never reuse stale figures).
+7. Deployment docs: docs/DEPLOYMENT.md — reverse-proxy TLS (nginx/caddy
+   config snippets), systemd unit, token bootstrap, backups (= copy .newgit
+   or push to a second server), resource-limit tuning.
+8. README doc index + RELEASE_READINESS/TEST_MATRIX/CHANGELOG/ROADMAP/[x]11
+   + PROJECT_STATE; gates; commit.
 
 ## Next tasks (ordered)
 
-10. Web UI + agent API/MCP. ← CURRENT
-10. Web UI served by remote server; MCP/agent-API docs.
-11. Release engineering (dist script, checksums, reproducible build);
-    benchmark re-run + full docs set; dependency audit/SBOM.
-12. Final forensic audit; production-readiness gate decision.
+11. Release engineering, SBOM/audit, benchmark re-run, DEPLOYMENT.md. ← CURRENT
+12. Final forensic audit; hostile review passes; production-readiness gate
+    decision (PRODUCTION READY / CANDIDATE / NOT READY with reasons).
 
 ## Important decisions (full log in DECISIONS.md)
 

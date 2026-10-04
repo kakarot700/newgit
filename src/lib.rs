@@ -21,6 +21,7 @@ pub mod obs;
 pub mod ops;
 pub mod remote;
 pub mod repo;
+pub mod ui;
 pub mod util;
 
 pub use error::{Error, Result};

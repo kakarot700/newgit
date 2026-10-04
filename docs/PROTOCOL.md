@@ -9,7 +9,8 @@ encryption; the protocol is proxy-friendly plain HTTP.
 
 ```
 newgit serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
-             [--max-body BYTES] [--max-threads N]
+             [--max-body BYTES] [--max-threads N] [--ui]
+newgit ui    [...same flags...]        # serve with --ui forced on; prints the UI URL
 ```
 
 `--bind` accepts port `0` (ephemeral); the server then prints
@@ -78,7 +79,8 @@ as obs events under `--debug`.
 
 ```json
 {"product":"newgit","version":"0.1.0","protocol":1,"head":"ref: refs/main",
- "capabilities":["have","negotiate","objects-get","objects-put","refs-update","audit"],
+ "capabilities":["have","negotiate","objects-get","objects-put","refs-update","audit",
+                "object","diff","goals","changes","proposals"],   // +"ui" when --ui
  "limits":{"max_batch_objects":4096,"max_request_bytes":67108864}}
 ```
 
@@ -142,6 +144,52 @@ identical engine as local ref writes). Per update:
   (null = must not exist). Any CAS failure ⇒ 409 `cas_failed`, nothing moves.
 - `new` — hex oid (must already be stored, else 400) or `null` (delete).
 - Reflog: each move records `remote update by <principal>[: message]`.
+
+### Read endpoints (iteration 10) — object / diff / workflow listings
+
+All read-role gated (or anonymous when `--allow-anonymous-read`). They exist
+so agents and the embedded UI never need to guess oid→shape mapping:
+
+#### `POST /v1/object` `{oid:hex}` → `{oid,kind,links,data?|data_b64?+size?}`
+
+- `kind` ∈ `blob|tree|snapshot|actor|goal|change|evidence|evaluation|proposal`.
+- Non-blobs: `data` = the decoded object struct (same serde shape as
+  `newgit cat --json`, minus the envelope); `links` = every oid the object
+  references (`verify::object_links`, the single source of link truth).
+- Blobs: `data_b64` (raw bytes, base64) + `size` — never a JSON number array.
+  UI previews cap at 64 KiB client-side; the endpoint itself has no cap
+  beyond `max_request_bytes` on the response path.
+- Unknown oid ⇒ 404 `not_found`; bad hex ⇒ 400 `malformed`.
+
+#### `POST /v1/diff` `{a,b,content?,context?,no_renames?}` → `{a_root,b_root,diff,unified}`
+
+- `a`/`b` accept any spec `diff::resolve_tree` accepts: ref name, oid,
+  `ws:<name>`. Unknown ⇒ 404.
+- `diff` = the full `TreeDiff` JSON (identical to `newgit diff --json`:
+  files[] with kind/path/old_path/modes/oids/binary/similarity + rename
+  detection unless `no_renames`).
+- `content:true` additionally returns `unified:[{path,unified}]` — the SAME
+  rendering code as the CLI (`render::file_header` + `render::render_content`),
+  capped at 100 modified non-binary files per response (`UNIFIED_CAP`) to
+  bound payload size. `content` omitted/false ⇒ `unified:[]`.
+
+#### `GET /v1/goals` · `GET /v1/changes[?goal=<hex>]` · `GET /v1/proposals`
+
+→ `{entities:[{oid,data}],count}` — `data` is the wrapped object in
+`{"type","data"}` form. `changes?goal=` filters server-side (invalid hex ⇒
+400; matching-nothing ⇒ empty list, NOT 404). Same enumeration as
+`goal list`/`change list --goal`/`proposal list`.
+
+### Static UI route (iteration 10)
+
+When the server is started with `--ui` (`newgit ui`), `GET /` and
+`GET /index.html` return the embedded single-file Web UI
+(`text/html; charset=utf-8`, no auth required — the file contains ZERO
+repository data; all data flows through the role-gated `/v1/*` endpoints
+with the user's own bearer token). `/v1/info` gains capability `"ui"`.
+Without `--ui`, `/` is a normal 404. The UI never mutates (read-only by
+design, KNOWN_LIMITATIONS #33); bearer-header auth (no cookies) makes CSRF
+structurally impossible.
 
 ## Client operations
 

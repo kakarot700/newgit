@@ -4,6 +4,38 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 10 — 2026-10-04)
+- **Web UI — embedded, single-file, read-only explorer (`newgit ui`,
+  `serve --ui`)**: dashboard (info/limits/capabilities/refs), first-parent
+  history with goal/change/workspace badges, universal object inspector
+  (snapshots, lazy tree browser, blob text/hex preview ≤64 KiB, actors,
+  goals, changes, evidence with DETERMINISTIC/NON-DETERMINISTIC badges,
+  evaluations with a permanent **AI OPINION** badge, proposals), goals &
+  proposals boards, side-by-side compare with colored unified diffs, audit
+  log viewer. Zero external resources (no CDN/fonts/build step); token
+  login kept in `sessionStorage`; ALL dynamic text via `textContent`
+  (`innerHTML`/`eval`/`document.write` are CI-asserted absent — XSS-safe by
+  construction); the served shell contains ZERO repository data.
+- **Agent read endpoints on protocol v1** (docs/PROTOCOL.md):
+  `POST /v1/object` (kind + links + data; blobs as `data_b64`+`size`),
+  `POST /v1/diff` (specs a/b incl. refs and `ws:`; CLI-identical unified
+  rendering, capped at 100 files), `GET /v1/goals`, `GET /v1/changes?goal=`,
+  `GET /v1/proposals`; `/v1/info` capabilities extended (+`ui` when served).
+- **`newgit mcp` — Model Context Protocol server over stdio** (JSON-RPC
+  2.0, protocol 2024-11-05, zero new dependencies): 13 tools mirroring the
+  CLI 1:1 through the SAME dispatch path (`cli::call_json`); tool failures
+  return `isError:true` with the standard `{category,message}` envelope;
+  malformed input never kills the server. `newgit ui` prints the UI URL;
+  `serve --json` now reports `ui`/`ui_url`.
+- **docs/AGENT_GUIDE.md** — the three interfaces (CLI `--json` / HTTP v1 /
+  MCP), curl recipes, error-category contract, honesty rules, two-agent
+  example. SECURITY_MODEL §8, THREAT_MODEL §E2 (UI/MCP surface), D-018,
+  KNOWN_LIMITATIONS #33–36.
+- Tests: 269 → **278** (UI self-containment + XSS discipline, UI serving &
+  data-free shell vs real server, object/diff/listing endpoint shapes and
+  gates, MCP handshake/catalog/error contract/argv mapping, `newgit ui` and
+  `newgit mcp` as real child processes).
+
 ### Added (iteration 9 — 2026-10-04)
 - **Remote protocol v1 + server + client (docs/PROTOCOL.md, D-017)** — new
   `src/remote/` layer, std-only, zero new dependencies:

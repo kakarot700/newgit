@@ -148,6 +148,80 @@ pub struct AuditData {
     pub entries: Vec<serde_json::Value>,
 }
 
+/// `POST /v1/object` — one object as typed JSON (the UI/agent view).
+/// Blobs are special-cased: `data_b64` + `size` instead of a byte array.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObjectReq {
+    pub oid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObjectData {
+    pub oid: String,
+    /// "blob" | "tree" | "snapshot" | "actor" | "goal" | "change" |
+    /// "evidence" | "evaluation" | "proposal"
+    pub kind: String,
+    /// Every oid this object links to (dependency order NOT implied).
+    pub links: Vec<String>,
+    /// Typed payload (`Object` serde form minus blobs); null for blobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    /// Blob payload only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_b64: Option<String>,
+    /// Blob raw size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
+
+/// `POST /v1/diff` — tree diff between two snapshots/trees/refs (specs are
+/// resolved exactly like `newgit diff <a> <b>`), optionally with unified
+/// content diffs for modified text files.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiffReq {
+    pub a: String,
+    pub b: String,
+    #[serde(default)]
+    pub content: bool,
+    #[serde(default)]
+    pub context: Option<usize>,
+    #[serde(default)]
+    pub no_renames: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UnifiedFile {
+    pub path: String,
+    pub unified: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiffData {
+    pub a_root: String,
+    pub b_root: String,
+    /// `TreeDiff` serde form: {files:[{kind,path,old_path,old_mode,new_mode,
+    /// old_oid,new_oid,binary,similarity}], rename_detection}.
+    pub diff: serde_json::Value,
+    /// Present only when `content` was requested: unified text per modified
+    /// text file (capped server-side).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unified: Vec<UnifiedFile>,
+}
+
+/// `GET /v1/goals|changes|proposals` — workflow entity listings (same data
+/// the CLI `goal list`/`change list`/`proposal list` commands show).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EntityEntry {
+    pub oid: String,
+    /// Typed object JSON (`Object` serde form).
+    pub data: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ListData {
+    pub entities: Vec<EntityEntry>,
+}
+
 /// Client-side report for `newgit push`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PushReport {

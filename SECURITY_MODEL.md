@@ -59,3 +59,21 @@ Defaults chosen for laptops; servers should tighten `max_request_bytes`.
   verify, signed objects roadmap).
 * zlib decompression cost bounded by `max_raw` but CPU cost of inflating
   ~limit bytes remains (DoS vector for anonymous servers ⇒ require auth).
+
+## 8. Agent interfaces: Web UI + MCP (iteration 10)
+
+* **UI = data-free static shell.** `/` serves one embedded HTML file with no
+  auth; it contains zero repository data (asserted in tests). All data flows
+  through role-gated `/v1/*` endpoints with the user's own bearer token.
+* **XSS-safe by construction.** The UI never uses `innerHTML`,
+  `document.write`, or `eval`; every dynamic node is built with
+  `textContent` (unit-tested against the shipped file). Hostile commit
+  messages/filenames/evidence output are inert text.
+* **Token hygiene in the browser.** `sessionStorage` only (dies with the
+  tab); no cookies ⇒ no ambient authority ⇒ CSRF is structurally
+  impossible; the UI issues no mutations anyway.
+* **MCP = thin wrapper, same code path.** `newgit mcp` dispatches through
+  `cli::call_json` — the exact CLI validation, limits, and error categories;
+  the MCP layer adds no privileges and no bypasses. It inherits the spawning
+  user's privileges (documented, KL #36) and binds stdio only.
+* **No new dependencies** for either surface (D-002 budget unchanged).

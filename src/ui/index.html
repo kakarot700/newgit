@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NewGit</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+  --fg:#dfe3ea; --dim:#8b93a3; --acc:#5aa7ff; --ok:#4caf7d; --warn:#d9a13b;
+  --bad:#e05c5c; --ai:#b48ce8; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header .logo{font-weight:700;font-size:16px;letter-spacing:.3px}
+header .logo b{color:var(--acc)}
+header .chip{font:12px var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:10px;padding:1px 8px}
+header .spacer{flex:1}
+button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#0b0e13;font-weight:600}
+input,select{background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
+input:focus,select:focus{outline:1px solid var(--acc)}
+nav{display:flex;gap:2px;padding:8px 16px 0;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+nav a{padding:6px 12px;border-radius:6px 6px 0 0;color:var(--dim);border:1px solid transparent;border-bottom:none}
+nav a.active{color:var(--fg);background:var(--bg);border-color:var(--line)}
+main{padding:16px;max-width:1200px;margin:0 auto}
+h1{font-size:18px;margin:4px 0 12px} h2{font-size:15px;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px}
+table{border-collapse:collapse;width:100%}
+th{color:var(--dim);text-align:left;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.mono,.mono{font-family:var(--mono);font-size:12.5px}
+.badge{display:inline-block;font:11px var(--mono);padding:1px 7px;border-radius:9px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:var(--ok)} .badge.bad{color:var(--bad);border-color:var(--bad)}
+.badge.warn{color:var(--warn);border-color:var(--warn)} .badge.ai{color:var(--ai);border-color:var(--ai)}
+.badge.acc{color:var(--acc);border-color:var(--acc)}
+pre{background:#0b0e13;border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;font:12.5px/1.45 var(--mono);margin:6px 0}
+pre .add{color:var(--ok)} pre .del{color:var(--bad)} pre .hdr{color:var(--acc)} pre .meta{color:var(--dim)}
+.err{border:1px solid var(--bad);color:var(--bad);background:rgba(224,92,92,.08);border-radius:8px;padding:10px 12px;margin:10px 0;font:13px var(--mono)}
+.dim{color:var(--dim)} .small{font-size:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.kv{display:grid;grid-template-columns:170px 1fr;gap:2px 10px}
+.kv .k{color:var(--dim);font-size:12.5px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.card h3{margin:0 0 6px;font-size:14px}
+#login{max-width:420px;margin:80px auto}
+.flow{display:flex;gap:6px;align-items:stretch;flex-wrap:wrap;margin:8px 0}
+.flow .step{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:12px var(--mono);color:var(--dim)}
+.flow .step b{color:var(--fg);display:block;font-size:12.5px}
+.tree-row td:first-child{white-space:nowrap}
+.hist-msg{max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+footer{color:var(--dim);font-size:12px;text-align:center;padding:20px}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">new<b>git</b></span>
+  <span class="chip" id="chip-repo">not connected</span>
+  <span class="chip" id="chip-head"></span>
+  <span class="spacer"></span>
+  <span class="chip" id="chip-user"></span>
+  <button id="btn-logout" style="display:none">disconnect</button>
+</header>
+<nav id="nav" style="display:none">
+  <a href="#/">dashboard</a>
+  <a href="#/history">history</a>
+  <a href="#/goals">goals &amp; changes</a>
+  <a href="#/proposals">proposals</a>
+  <a href="#/compare">compare</a>
+  <a href="#/audit">audit</a>
+</nav>
+<main id="main"></main>
+<footer>NewGit web UI · protocol v1 · read-only explorer — mutations stay in the CLI/agent flow by design</footer>
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// NewGit Web UI — single file, zero external resources, XSS-safe (all dynamic
+// content goes through textContent / createTextNode; never HTML strings).
+// Talks ONLY to same-origin /v1/* endpoints with a bearer token held in
+// sessionStorage (never localStorage, never cookies).
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const state = { token: sessionStorage.getItem("ng_token") || "", info: null, refs: [], actors: {} };
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) n.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(9)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    n.appendChild(typeof kid === "string" ? document.createTextNode(kid) : kid);
+  }
+  return n;
+}
+const short = (oid) => (oid || "").slice(0, 12);
+const oidLink = (oid, label) => el("a", { href: "#/object/" + oid, class: "mono", title: oid }, label || short(oid));
+function fmtTs(ms, tzMin) {
+  if (ms === null || ms === undefined) return "—";
+  const d = new Date(ms);
+  const pad = (x) => String(x).padStart(2, "0");
+  let s = d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()) +
+          " " + pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "Z";
+  if (tzMin) {
+    const sign = tzMin < 0 ? "-" : "+";
+    const a = Math.abs(tzMin);
+    s += " (" + sign + pad(Math.floor(a / 60)) + ":" + pad(a % 60) + " local)";
+  }
+  return s;
+}
+function badge(text, cls) { return el("span", { class: "badge " + (cls || ""), text }); }
+function verdictBadge(v) {
+  const cls = v === "pass" ? "ok" : v === "fail" ? "bad" : v === "inconclusive" ? "warn" : "";
+  return badge(String(v || "?"), cls);
+}
+function errBox(e) {
+  const msg = e && e.message ? e.message : String(e);
+  const cat = e && e.category ? "[" + e.category + "] " : "";
+  return el("div", { class: "err", text: cat + msg });
+}
+function kvTable(pairs) {
+  const box = el("div", { class: "kv" });
+  for (const [k, v] of pairs) {
+    if (v === null || v === undefined || v === "") continue;
+    box.appendChild(el("div", { class: "k", text: k }));
+    box.appendChild(typeof v === "string" ? el("div", { text: v }) : el("div", {}, v));
+  }
+  return box;
+}
+function table(headers, rows) {
+  const t = el("table");
+  if (headers && headers.length) t.appendChild(el("thead", {}, el("tr", {}, headers.map((h) => el("th", { text: h })))));
+  const tb = el("tbody");
+  for (const r of rows) tb.appendChild(el("tr", {}, r.map((c) => el("td", {}, c))));
+  t.appendChild(tb);
+  return t;
+}
+
+// --- API -------------------------------------------------------------------
+async function api(path, body, method) {
+  const headers = { "X-NewGit-Protocol": "1" };
+  if (state.token) headers["Authorization"] = "Bearer " + state.token;
+  const opt = { method: method || (body ? "POST" : "GET"), headers };
+  if (body) { headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const res = await fetch(path, opt);
+  let env = null;
+  try { env = await res.json(); } catch (_) { /* non-JSON */ }
+  if (!res.ok || !env || env.ok !== true) {
+    const e = new Error((env && env.error && env.error.message) || ("HTTP " + res.status));
+    e.category = env && env.error && env.error.category;
+    e.status = res.status;
+    if (res.status === 401) { logout(); e.message += " — token missing/invalid; reconnect below."; }
+    throw e;
+  }
+  return env.data;
+}
+async function getObject(oid) { return api("/v1/object", { oid }); }
+async function actorName(oid) {
+  if (!oid) return "—";
+  if (state.actors[oid]) return state.actors[oid];
+  try {
+    const o = await getObject(oid);
+    const a = o.data || {};
+    const s = (a.display_name || "?") + " (" + (a.id || "?") + ")";
+    state.actors[oid] = s;
+    return s;
+  } catch (_) { return short(oid); }
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64 || "");
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function looksBinary(bytes) {
+  const n = Math.min(bytes.length, 4096);
+  for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+  return false;
+}
+function hexDump(bytes, max) {
+  const lines = [];
+  const n = Math.min(bytes.length, max || 4096);
+  for (let off = 0; off < n; off += 16) {
+    const slice = bytes.subarray(off, Math.min(off + 16, n));
+    let hex = "", asc = "";
+    for (const b of slice) {
+      hex += b.toString(16).padStart(2, "0") + " ";
+      asc += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+    }
+    lines.push(off.toString(16).padStart(8, "0") + "  " + hex.padEnd(49) + " " + asc);
+  }
+  if (bytes.length > n) lines.push("… truncated (" + bytes.length + " bytes total)");
+  return lines.join("\n");
+}
+
+// --- views -----------------------------------------------------------------
+const main = () => $("main");
+function setMain(...nodes) { main().replaceChildren(...nodes.flat(9)); }
+function setActiveNav(view) {
+  for (const a of $("nav").children) a.className = a.getAttribute("href") === "#/" + view || (view === "" && a.getAttribute("href") === "#/") ? "active" : "";
+}
+
+async function refreshHeader() {
+  try {
+    state.info = await api("/v1/info");
+    state.refs = (await api("/v1/refs")).refs;
+    $("chip-repo").textContent = "newgit " + state.info.version + " · protocol v" + state.info.protocol;
+    $("chip-head").textContent = state.info.head;
+    $("chip-user").textContent = state.token ? "token: connected" : "anonymous";
+    $("btn-logout").style.display = state.token ? "" : "none";
+  } catch (e) {
+    $("chip-repo").textContent = "connection failed";
+    throw e;
+  }
+}
+
+function loginView(message) {
+  $("nav").style.display = "none";
+  const tok = el("input", { type: "password", id: "tok", placeholder: "bearer token", style: "flex:1;min-width:220px" });
+  const anon = el("input", { type: "checkbox", id: "anon" });
+  const btn = el("button", { class: "primary", text: "connect", onclick: async () => {
+    state.token = $("anon").checked ? "" : $("tok").value.trim();
+    sessionStorage.setItem("ng_token", state.token);
+    try { await refreshHeader(); route(); }
+    catch (e) { loginView(e.message); }
+  }});
+  tok.addEventListener("keydown", (ev) => { if (ev.key === "Enter") btn.click(); });
+  setMain(
+    el("div", { id: "login" },
+      el("div", { class: "panel" },
+        el("h1", {}, "Connect to NewGit"),
+        message ? el("div", { class: "err", text: message }) : null,
+        el("p", { class: "dim small" }, "The UI is a read-only explorer of the repository served at this origin. Tokens are created on the server host with ", el("code", { class: "mono", text: "newgit token add <id> --role read|write|admin" }), " and are kept in sessionStorage only."),
+        el("div", { class: "row", style: "margin-top:10px" }, tok, btn),
+        el("label", { class: "row small dim", style: "margin-top:10px" }, anon, "try anonymous (only works if the server allows anonymous reads)"),
+        el("div", { style: "margin-top:16px" },
+          el("h2", {}, "the NewGit model"),
+          el("div", { class: "flow" },
+            el("div", { class: "step" }, el("b", {}, "GOAL"), "what we want"),
+            el("div", { class: "step" }, el("b", {}, "CHANGE"), "base → result snapshots"),
+            el("div", { class: "step" }, el("b", {}, "EVIDENCE"), "what actually ran"),
+            el("div", { class: "step" }, el("b", {}, "PROPOSAL"), "decision to integrate"),
+            el("div", { class: "step" }, el("b", {}, "INTEGRATION"), "atomic, journaled"))))));
+}
+function logout() {
+  state.token = "";
+  sessionStorage.removeItem("ng_token");
+}
+
+async function viewDashboard() {
+  const caps = (state.info.capabilities || []).map((c) => badge(c));
+  const refRows = [];
+  for (const r of state.refs) refRows.push([el("a", { href: "#/history?ref=" + encodeURIComponent(r.name), class: "mono", text: r.name }), oidLink(r.oid)]);
+  setMain(
+    el("h1", {}, "Dashboard"),
+    el("div", { class: "panel" }, kvTable([
+      ["product", state.info.product + " " + state.info.version],
+      ["protocol", "v" + state.info.protocol],
+      ["HEAD", state.info.head],
+      ["max batch objects", String(state.info.limits.max_batch_objects)],
+      ["max request bytes", String(state.info.limits.max_request_bytes)],
+      ["capabilities", el("div", { class: "row" }, caps)],
+    ])),
+    el("h2", {}, "Refs (" + state.refs.length + ")"),
+    el("div", { class: "panel" }, state.refs.length ? table(["name", "target"], refRows) : el("div", { class: "dim", text: "no refs yet — unborn repository" })),
+    el("h2", {}, "Quick actions"),
+    el("div", { class: "panel row" },
+      el("a", { href: "#/history" }, el("button", { text: "browse history" })),
+      el("a", { href: "#/goals" }, el("button", { text: "goals & changes" })),
+      el("a", { href: "#/compare" }, el("button", { text: "compare snapshots" })),
+      el("a", { href: "#/audit" }, el("button", { text: "audit log (admin)" }))));
+}
+
+async function viewHistory(params) {
+  const refNames = state.refs.map((r) => r.name);
+  let sel = params.get("ref") || (state.info.head.startsWith("ref: ") ? state.info.head.slice(5) : refNames[0]);
+  if (sel && !refNames.includes(sel) && refNames.length) sel = refNames.includes(sel) ? sel : (params.get("ref") || refNames[0]);
+  const select = el("select", { onchange: () => { location.hash = "#/history?ref=" + encodeURIComponent(select.value); } },
+    refNames.map((n) => el("option", { value: n, ...(n === sel ? { selected: "selected" } : {}) }, n)));
+  const rowsBox = el("div", { class: "panel" });
+  setMain(el("h1", {}, "History"), el("div", { class: "row panel" }, el("span", { class: "dim", text: "ref:" }), select), rowsBox);
+  if (!sel) { rowsBox.appendChild(el("div", { class: "dim", text: "no refs to walk" })); return; }
+  const tip = (state.refs.find((r) => r.name === sel) || {}).oid;
+  if (!tip) { rowsBox.appendChild(el("div", { class: "dim", text: "ref not found" })); return; }
+  // first-parent walk (all parents shown per row), capped
+  const rows = [];
+  let cur = tip, guard = 0;
+  while (cur && guard++ < 200) {
+    const o = await getObject(cur);
+    if (o.kind !== "snapshot") { rows.push([oidLink(cur), badge(o.kind), el("span", { class: "dim", text: "(ref does not point at a snapshot)" })]); break; }
+    const s = o.data;
+    const author = await actorName(s.author);
+    const parents = (s.parents || []).map((p, i) => i ? el("span", {}, " ", oidLink(p)) : oidLink(p));
+    rows.push([
+      oidLink(o.oid),
+      el("span", { class: "hist-msg", title: s.message, text: s.message.split("\n")[0] || "(no message)" }),
+      el("span", { class: "small", text: author }),
+      el("span", { class: "small mono dim", text: fmtTs(s.timestamp_ms, s.tz_offset_min) }),
+      el("div", { class: "row small" },
+        parents.length ? parents : el("span", { class: "dim", text: "root" }),
+        s.goal ? badge("goal") : null, s.change ? badge("change") : null,
+        s.workspace ? badge("ws:" + s.workspace) : null,
+        (s.extras && s.extras.git_sha1) ? badge("git:" + short(s.extras.git_sha1), "acc") : null),
+    ]);
+    cur = (s.parents && s.parents[0]) || null;
+  }
+  rowsBox.replaceChildren(table(["commit", "message", "author", "when", "parents / tags"], rows),
+    guard >= 200 ? el("div", { class: "dim small", style: "margin-top:6px", text: "truncated at 200 entries (first-parent walk)" }) : null);
+}
+
+function treeBrowser(rootOid) {
+  const box = el("div", { class: "panel" });
+  async function loadTree(oid, prefix) {
+    const o = await getObject(oid);
+    const rows = [];
+    for (const e of (o.data && o.data.entries) || []) {
+      const path = prefix ? prefix + "/" + e.name : e.name;
+      const isDir = e.mode === "tree";
+      rows.push(el("tr", { class: "tree-row" },
+        el("td", {}, badge(e.mode, isDir ? "acc" : "")),
+        el("td", {}, isDir
+          ? el("a", { href: "#", class: "mono", onclick: (ev) => { ev.preventDefault(); loadTree(e.oid, path).catch(showErr); }, text: e.name + "/" })
+          : el("a", { href: "#/object/" + e.oid, class: "mono", text: e.name })),
+        el("td", {}, oidLink(e.oid))));
+    }
+    box.replaceChildren(
+      el("div", { class: "small dim", style: "margin-bottom:6px" }, prefix ? "path: /" + prefix : "repository root"),
+      el("table", {}, rows));
+  }
+  loadTree(rootOid, "").catch(showErr);
+  return box;
+}
+
+async function viewObject(oid) {
+  const o = await getObject(oid);
+  const panel = el("div", { class: "panel" });
+  const head = el("div", {}, el("h1", {}, badge(o.kind, "acc"), " ", el("span", { class: "mono", style: "font-size:13px", text: o.oid })));
+  let body = null;
+  const d = o.data || {};
+  switch (o.kind) {
+    case "snapshot": {
+      const author = await actorName(d.author);
+      body = el("div", {},
+        el("div", { class: "panel" },
+          el("pre", { style: "white-space:pre-wrap", text: d.message || "(no message)" }),
+          kvTable([
+            ["author", author],
+            ["timestamp", fmtTs(d.timestamp_ms, d.tz_offset_min)],
+            ["workspace", d.workspace],
+            ["parents", el("div", { class: "row" }, (d.parents || []).map((p) => oidLink(p)))],
+            ["goal", d.goal ? oidLink(d.goal) : null],
+            ["change", d.change ? oidLink(d.change) : null],
+          ])),
+        Object.keys(d.extras || {}).length ? el("div", { class: "panel" }, el("h2", {}, "extras (provenance)"), kvTable(Object.entries(d.extras).map(([k, v]) => [k, el("span", { class: "mono small", text: v })]))) : null,
+        el("h2", {}, "tree"),
+        treeBrowser(d.root));
+      break;
+    }
+    case "tree":
+      body = treeBrowser(oid);
+      break;
+    case "blob": {
+      const bytes = b64ToBytes(o.data_b64);
+      const bin = looksBinary(bytes);
+      body = el("div", { class: "panel" },
+        kvTable([["size", bytes.length + " bytes"], ["encoding", bin ? "binary (hex dump)" : "text (utf-8, lossy preview)"]]),
+        el("pre", { text: bin ? hexDump(bytes) : new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 65536)) + (bytes.length > 65536 ? "\n… truncated preview" : "") }));
+      break;
+    }
+    case "actor":
+      body = el("div", { class: "panel" }, kvTable([
+        ["actor id", el("span", { class: "mono", text: d.id })],
+        ["kind", badge(d.kind)],
+        ["display name", d.display_name],
+        ["tool", d.tool ? d.tool + (d.tool_version ? " " + d.tool_version : "") : null],
+        ["pubkey", d.pubkey ? el("span", { class: "mono small", text: d.pubkey }) : el("span", { class: "dim small", text: "none (metadata-only identity)" })],
+      ]), Object.keys(d.extras || {}).length ? kvTable(Object.entries(d.extras).map(([k, v]) => [k, el("span", { class: "mono small", text: v })])) : null);
+      break;
+    case "goal": {
+      body = el("div", {},
+        el("div", { class: "panel" },
+          el("h3", {}, d.title), el("div", { class: "dim small", style: "white-space:pre-wrap", text: d.description }),
+          kvTable([["status", badge(d.status, d.status === "achieved" ? "ok" : d.status === "abandoned" ? "bad" : "warn")],
+                   ["creator", oidLink(d.creator)],
+                   ["created", fmtTs(d.created_ms)], ["updated", fmtTs(d.updated_ms)]])),
+        el("h2", {}, "changes for this goal"), await changesTable("/v1/changes?goal=" + oid));
+      break;
+    }
+    case "change":
+      body = el("div", { class: "panel" },
+        el("h3", {}, d.title), el("div", { class: "dim small", style: "white-space:pre-wrap", text: d.description }),
+        kvTable([
+          ["status", badge(d.status, d.status === "integrated" ? "ok" : "")],
+          ["goal", d.goal ? oidLink(d.goal) : null],
+          ["author", oidLink(d.author)],
+          ["base", oidLink(d.base)], ["result", oidLink(d.result)],
+          ["diff", el("a", { href: "#/compare?a=" + d.base + "&b=" + d.result }, el("button", { text: "compare base → result" }))],
+          ["created", fmtTs(d.created_ms)], ["updated", fmtTs(d.updated_ms)],
+        ]),
+        el("h2", {}, "evidence (" + (d.evidence || []).length + ")"),
+        await evidenceList(d.evidence || []));
+      break;
+    case "evidence":
+      body = el("div", { class: "panel" },
+        el("div", { class: "row", style: "margin-bottom:8px" },
+          badge(d.deterministic ? "DETERMINISTIC" : "NON-DETERMINISTIC", d.deterministic ? "ok" : "warn"),
+          verdictBadge(d.verdict), badge(d.kind)),
+        kvTable([
+          ["producer", oidLink(d.producer)],
+          ["target", d.target ? oidLink(d.target) : null],
+          ["tool", (d.tool || "—") + (d.tool_version ? " " + d.tool_version : "")],
+          ["command", d.command ? el("span", { class: "mono small", text: d.command }) : null],
+          ["raw output", d.output ? oidLink(d.output) : null],
+          ["created", fmtTs(d.created_ms)],
+        ]),
+        Object.keys(d.metrics || {}).length ? el("div", {}, el("h2", {}, "metrics"), kvTable(Object.entries(d.metrics).map(([k, v]) => [k, el("span", { class: "mono small", text: v })]))) : null,
+        el("p", { class: "dim small" }, d.deterministic
+          ? "Machine-verified evidence: produced by running a recorded command."
+          : "Non-deterministic evidence: treat as a claim, not a fact."));
+      break;
+    case "evaluation":
+      body = el("div", { class: "panel" },
+        el("div", { class: "row", style: "margin-bottom:8px" },
+          d.ai_generated ? badge("AI OPINION", "ai") : badge("HUMAN/TOOL", "ok"),
+          verdictBadge(d.verdict)),
+        d.ai_generated ? el("div", { class: "err", style: "border-color:var(--ai);color:var(--ai)", text: "AI-generated evaluation — an opinion, never a hard fact. NewGit keeps this flag on the object forever." }) : null,
+        kvTable([["target", oidLink(d.target)], ["evaluator", oidLink(d.evaluator)], ["created", fmtTs(d.created_ms)]]),
+        (d.dimensions || []).length ? table(["dimension", "verdict", "note"], d.dimensions.map((dim) => [el("span", { class: "mono", text: dim[0] }), verdictBadge(dim[1]), el("span", { class: "small", text: dim[2] })])) : null);
+      break;
+    case "proposal":
+      body = el("div", { class: "panel" },
+        el("h3", {}, d.title), el("div", { class: "dim small", style: "white-space:pre-wrap", text: d.rationale }),
+        kvTable([
+          ["state", badge(d.state, d.state === "integrated" ? "ok" : d.state === "rejected" ? "bad" : "")],
+          ["change", oidLink(d.change)],
+          ["base", oidLink(d.base)],
+          ["author", oidLink(d.author)],
+          ["evidence", el("div", { class: "row" }, (d.evidence || []).map((e2) => oidLink(e2)))],
+          ["depends on", el("div", { class: "row" }, (d.depends_on || []).map((x) => oidLink(x)))],
+          ["approvals", el("div", {}, (d.approvals || []).map((ap) => el("div", { class: "small" }, oidLink(ap[0]), " ", el("span", { class: "dim mono", text: fmtTs(ap[1]) }))))],
+          ["created", fmtTs(d.created_ms)], ["updated", fmtTs(d.updated_ms)],
+        ]));
+      break;
+    default:
+      body = el("pre", { text: JSON.stringify(d, null, 2) });
+  }
+  if ((o.links || []).length && o.kind !== "snapshot") {
+    panel.appendChild(el("h2", {}, "links"));
+    panel.appendChild(el("div", { class: "row" }, o.links.map((l) => oidLink(l))));
+  }
+  setMain(head, body, panel.children.length ? panel : null);
+}
+
+async function evidenceList(oids) {
+  if (!oids.length) return el("div", { class: "dim small", text: "no evidence recorded" });
+  const rows = [];
+  for (const oid of oids) {
+    try {
+      const o = await getObject(oid);
+      const d = o.data || {};
+      rows.push([oidLink(oid), badge(d.kind), verdictBadge(d.verdict),
+        badge(d.deterministic ? "deterministic" : "non-deterministic", d.deterministic ? "ok" : "warn"),
+        el("span", { class: "small dim", text: (d.tool || "") + (d.command ? " · " + d.command : "") })]);
+    } catch (e) { rows.push([oidLink(oid), el("span", { class: "dim", text: "unreadable: " + e.message })]); }
+  }
+  return table(["evidence", "kind", "verdict", "honesty", "producer"], rows);
+}
+async function changesTable(url) {
+  const data = await api(url);
+  const rows = [];
+  for (const ent of data.entities) {
+    const d = (ent.data && ent.data.data) || {};
+    rows.push([oidLink(ent.oid), el("span", { text: d.title || "?" }),
+      badge(d.status || "?", d.status === "integrated" ? "ok" : ""),
+      d.goal ? oidLink(d.goal) : el("span", { class: "dim", text: "—" }),
+      el("div", { class: "row small" }, oidLink(d.base, "base"), "→", oidLink(d.result, "result"),
+        el("a", { href: "#/compare?a=" + d.base + "&b=" + d.result }, badge("diff"))),
+      el("span", { class: "small dim", text: (d.evidence || []).length + " evidence" })]);
+  }
+  return el("div", { class: "panel" }, rows.length ? table(["change", "title", "status", "goal", "base → result", "evidence"], rows) : el("div", { class: "dim", text: "none" }));
+}
+
+async function viewGoals() {
+  const data = await api("/v1/goals");
+  const cards = [];
+  for (const ent of data.entities) {
+    const d = (ent.data && ent.data.data) || {};
+    cards.push(el("div", { class: "card" },
+      el("h3", {}, oidLink(ent.oid, d.title || ent.oid)),
+      el("div", { class: "row", style: "margin-bottom:6px" }, badge(d.status || "?", d.status === "achieved" ? "ok" : d.status === "abandoned" ? "bad" : "warn"), el("span", { class: "dim small", text: fmtTs(d.created_ms) })),
+      el("div", { class: "dim small", text: (d.description || "").slice(0, 200) })));
+  }
+  setMain(el("h1", {}, "Goals"),
+    el("div", { class: "flow panel" },
+      el("div", { class: "step" }, el("b", {}, "GOAL"), "intent"),
+      el("div", { class: "step" }, el("b", {}, "CHANGE"), "base→result"),
+      el("div", { class: "step" }, el("b", {}, "EVIDENCE"), "what ran"),
+      el("div", { class: "step" }, el("b", {}, "PROPOSAL"), "decision"),
+      el("div", { class: "step" }, el("b", {}, "INTEGRATION"), "atomic")),
+    cards.length ? el("div", { class: "grid" }, cards) : el("div", { class: "panel dim", text: "no goals yet" }),
+    el("h2", {}, "all changes"), await changesTable("/v1/changes"));
+}
+
+async function viewProposals() {
+  const data = await api("/v1/proposals");
+  const rows = [];
+  for (const ent of data.entities) {
+    const d = (ent.data && ent.data.data) || {};
+    rows.push([oidLink(ent.oid), el("span", { text: d.title || "?" }),
+      badge(d.state || "?", d.state === "integrated" ? "ok" : d.state === "rejected" ? "bad" : ""),
+      oidLink(d.change), el("span", { class: "small dim", text: (d.approvals || []).length + " approval(s)" }),
+      el("span", { class: "small dim", text: fmtTs(d.updated_ms) })]);
+  }
+  setMain(el("h1", {}, "Proposals"),
+    el("div", { class: "panel" }, rows.length ? table(["proposal", "title", "state", "change", "approvals", "updated"], rows) : el("div", { class: "dim", text: "none" })));
+}
+
+async function viewCompare(params) {
+  const a = el("input", { placeholder: "a: ref or oid", style: "flex:1;min-width:200px", value: params.get("a") || "" });
+  const b = el("input", { placeholder: "b: ref or oid", style: "flex:1;min-width:200px", value: params.get("b") || "" });
+  const out = el("div", {});
+  const btn = el("button", { class: "primary", text: "diff", onclick: async () => {
+    out.replaceChildren(el("div", { class: "dim", text: "diffing…" }));
+    try {
+      const d = await api("/v1/diff", { a: a.value.trim(), b: b.value.trim(), content: true });
+      const files = (d.diff && d.diff.files) || [];
+      const rows = files.map((f) => [
+        badge(f.kind, f.kind === "added" ? "ok" : f.kind === "deleted" ? "bad" : f.kind === "renamed" ? "acc" : "warn"),
+        el("span", { class: "mono", text: f.old_path && f.old_path !== f.path ? f.old_path + " → " + f.path : f.path }),
+        f.similarity !== null && f.similarity !== undefined ? badge(f.similarity + "% similar") : null,
+        f.binary ? badge("binary") : null,
+        (f.old_mode || "") + (f.old_mode && f.new_mode && f.old_mode !== f.new_mode ? " → " + f.new_mode : (f.new_mode && !f.old_mode ? f.new_mode : "")),
+      ]);
+      const unified = (d.unified || []).map((u) => el("div", { class: "panel" },
+        el("div", { class: "mono small dim", text: u.path }),
+        unifiedPre(u.unified)));
+      out.replaceChildren(
+        el("div", { class: "panel" },
+          el("div", { class: "small dim", style: "margin-bottom:6px" }, "roots: ", oidLink(d.a_root), " → ", oidLink(d.b_root), " · rename detection: ", d.diff.rename_detection),
+          files.length ? table(["", "path", "rename", "", "mode"], rows) : el("div", { class: "dim", text: "no differences" })),
+        unified);
+    } catch (e) { out.replaceChildren(errBox(e)); }
+  }});
+  function unifiedPre(text) {
+    const pre = el("pre");
+    for (const line of text.split("\n")) {
+      const cls = line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ")
+        ? "hdr" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith(" ") ? "" : "meta";
+      pre.appendChild(el("span", { class: cls, text: line + "\n" }));
+    }
+    return pre;
+  }
+  setMain(el("h1", {}, "Compare"), el("div", { class: "panel row" }, a, el("span", { class: "dim", text: "→" }), b, btn), out);
+  if (params.get("a") && params.get("b")) btn.click();
+}
+
+async function viewAudit() {
+  const data = await api("/v1/audit?limit=200");
+  const rows = (data.entries || []).slice().reverse().map((e) => [
+    el("span", { class: "mono small dim", text: fmtTs(e.ts_ms) }),
+    el("span", { class: "mono", text: e.principal }),
+    el("span", { class: "mono small", text: (e.method || "") + " " + (e.path || "") }),
+    badge(String(e.status), e.status >= 500 ? "bad" : e.status >= 400 ? "warn" : "ok"),
+    e.error ? badge(e.error, "bad") : null,
+  ]);
+  setMain(el("h1", {}, "Audit log"),
+    el("div", { class: "panel" }, rows.length ? table(["when", "principal", "request", "status", "error"], rows) : el("div", { class: "dim", text: "empty (no server activity yet, or log not readable with this role — admin only)" })));
+}
+
+// --- router ----------------------------------------------------------------
+function showErr(e) { setMain(errBox(e)); }
+async function route() {
+  const hash = location.hash || "#/";
+  const [path, qs] = hash.slice(2).split("?");
+  const params = new URLSearchParams(qs || "");
+  const parts = path.split("/").filter(Boolean);
+  if (!state.info) {
+    try { await refreshHeader(); } catch (e) { loginView(e.message); return; }
+  }
+  $("nav").style.display = "";
+  setActiveNav(parts[0] || "");
+  try {
+    if (!parts.length) await viewDashboard();
+    else if (parts[0] === "history") await viewHistory(params);
+    else if (parts[0] === "object" && parts[1]) await viewObject(parts[1]);
+    else if (parts[0] === "goals") await viewGoals();
+    else if (parts[0] === "proposals") await viewProposals();
+    else if (parts[0] === "compare") await viewCompare(params);
+    else if (parts[0] === "audit") await viewAudit();
+    else setMain(errBox(new Error("unknown view: " + path)));
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { state.info = null; loginView(e.message); return; }
+    showErr(e);
+  }
+}
+$("btn-logout").addEventListener("click", () => { logout(); state.info = null; loginView("disconnected"); });
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

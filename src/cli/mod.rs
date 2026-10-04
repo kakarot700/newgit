@@ -9,6 +9,7 @@
 //!   are handled in iteration 9 with the same rule).
 
 pub mod args;
+pub mod mcp;
 mod remote_cmds;
 pub mod workflow_cmds;
 
@@ -143,6 +144,8 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "serve" | "remote" | "push" | "pull" | "fetch" | "token" | "audit" => {
             remote_cmds::dispatch(ctx, cmd, tail)
         }
+        "ui" => remote_cmds::cmd_ui(ctx, tail),
+        "mcp" => mcp::cmd_mcp(ctx, tail),
         "verify" | "fsck" => cmd_verify(ctx, tail),
         "gc" => cmd_gc(ctx, tail),
         "recover" => cmd_recover(ctx, tail),
@@ -152,6 +155,22 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         other => Err(Error::Invalid(format!(
             "unknown command {other:?}; try `newgit help`"
         ))),
+    }
+}
+
+/// Run a CLI command programmatically and return the JSON `data` payload.
+/// Single code path shared with the real CLI (no duplicated logic) — used by
+/// the MCP server and by tests. `repo` overrides discovery (like `--repo`).
+pub fn call_json(repo: Option<&std::path::Path>, args: &[&str]) -> Result<Value> {
+    let ctx = Ctx {
+        json: true,
+        repo: repo.map(|p| p.to_path_buf()),
+    };
+    let argv: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    match dispatch(&ctx, &argv)? {
+        Output::Json(v) => Ok(v),
+        Output::Text(t) => Ok(json!(t)),
+        Output::Raw(b) => Ok(json!(crate::util::base64::encode(&b))),
     }
 }
 
@@ -242,6 +261,12 @@ Remote (HTTP/1.1 + JSON protocol v1; docs/PROTOCOL.md):
   token add <id> --role read|write|admin [--token-file P] [--token RAW]
   token list | remove <id>     server credential management (raw token shown once)
   audit [-n N]                 show the server audit log (who/what/status/when)
+  ui [--bind host:port]        serve with the embedded Web UI enabled at /
+                               (read-only explorer; same auth as the API)
+
+Agent API (MCP):
+  mcp [--repo R]               stdio JSON-RPC 2.0 MCP server exposing newgit
+                               operations as tools (docs/AGENT_GUIDE.md)
 
 Maintenance:
   verify [--deep]              integrity check (fsck); exit 3 on errors

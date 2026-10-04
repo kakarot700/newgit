@@ -51,8 +51,16 @@ confused (`deterministic`, `ai_generated`).
   rest, roles, append-only audit log, negotiated incremental push/pull with
   non-fast-forward protection and CAS ref transactions. Zero-rupee: run it
   on any box; TLS via your reverse proxy.
+- **Agent-native interfaces** — everything speaks JSON: `--json` CLI, a
+  documented HTTP API (docs/PROTOCOL.md) with agent read endpoints
+  (`/v1/object`, `/v1/diff`, goal/change/proposal listings), an MCP stdio
+  server (`newgit mcp`, 13 tools, same dispatch path as the CLI), and an
+  embedded zero-dependency Web UI (`newgit ui`) that renders the
+  goal → change → evidence → proposal → integration flow — read-only,
+  XSS-safe by construction, AI opinions badged as opinions forever.
+  See docs/AGENT_GUIDE.md.
 - **Zero-rupee, self-hostable** — 5 small runtime dependencies, no cloud,
-  no paid services, single static binary + built-in server (web UI: iteration 10).
+  no paid services, single static binary + built-in server + built-in UI.
 
 ## Quickstart (real, working syntax — full transcript in docs/AGENT_WORKFLOW.md)
 

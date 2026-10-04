@@ -49,6 +49,9 @@ pub struct ServerConfig {
     pub max_body: u64,
     /// Max concurrent connection threads; beyond ⇒ 503.
     pub max_threads: usize,
+    /// Serve the embedded Web UI at `/` (static HTML, no auth — it contains
+    /// no data; every data endpoint still enforces roles).
+    pub ui: bool,
 }
 
 impl Default for ServerConfig {
@@ -60,6 +63,7 @@ impl Default for ServerConfig {
             allow_anonymous_read: false,
             max_body: 64 * 1024 * 1024,
             max_threads: 32,
+            ui: false,
         }
     }
 }
@@ -203,7 +207,21 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
         ],
     );
 
-    let (status, body, principal_id, category) = route(&repo, &tokens, cfg, &req);
+    // Static UI first (no auth: the HTML contains zero data; every data
+    // endpoint behind it enforces roles with the user's own token).
+    let (status, body, ctype, principal_id, category) =
+        if cfg.ui && matches!(req.path.as_str(), "/" | "/index.html") && req.method == "GET" {
+            (
+                200,
+                crate::ui::INDEX_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8",
+                "ui-static".to_string(),
+                None,
+            )
+        } else {
+            let (st, bd, who, cat) = route(&repo, &tokens, cfg, &req);
+            (st, bd, "application/json", who, cat)
+        };
     audit.append(
         &principal_id,
         &req.method,
@@ -211,7 +229,7 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
         status,
         category.as_deref(),
     );
-    let _ = http::write_response(&mut w, status, "application/json", &body);
+    let _ = http::write_response(&mut w, status, ctype, &body);
 }
 
 /// Route one request. Returns (status, body, principal-id, error-category).
@@ -250,6 +268,11 @@ fn route(
         "/v1/objects/put",
         "/v1/refs/update",
         "/v1/audit",
+        "/v1/object",
+        "/v1/diff",
+        "/v1/goals",
+        "/v1/changes",
+        "/v1/proposals",
     ];
     if !known_paths.contains(&req.path.as_str()) {
         return (
@@ -265,6 +288,8 @@ fn route(
         "/healthz" => ("GET", Role::Read), // anonymous allowed below
         "/v1/info" => ("GET", Role::Read), // anonymous allowed below
         "/v1/refs" | "/v1/have" | "/v1/negotiate" | "/v1/objects/get" => ("", Role::Read),
+        "/v1/goals" | "/v1/changes" | "/v1/proposals" => ("GET", Role::Read),
+        "/v1/object" | "/v1/diff" => ("POST", Role::Read),
         "/v1/objects/put" | "/v1/refs/update" => ("POST", Role::Write),
         "/v1/audit" => ("GET", Role::Admin),
         _ => unreachable!("known_paths checked above"),
@@ -332,14 +357,25 @@ fn dispatch(
                 version: crate::VERSION.into(),
                 protocol: PROTOCOL_VERSION,
                 head,
-                capabilities: vec![
-                    "have".into(),
-                    "negotiate".into(),
-                    "objects-get".into(),
-                    "objects-put".into(),
-                    "refs-update".into(),
-                    "audit".into(),
-                ],
+                capabilities: {
+                    let mut caps = vec![
+                        "have".into(),
+                        "negotiate".into(),
+                        "objects-get".into(),
+                        "objects-put".into(),
+                        "refs-update".into(),
+                        "audit".into(),
+                        "object".into(),
+                        "diff".into(),
+                        "goals".into(),
+                        "changes".into(),
+                        "proposals".into(),
+                    ];
+                    if cfg.ui {
+                        caps.push("ui".into());
+                    }
+                    caps
+                },
                 limits: LimitsInfo {
                     max_batch_objects: limits.max_batch_objects,
                     max_request_bytes: cfg.max_body.min(limits.max_request_bytes),
@@ -517,6 +553,104 @@ fn dispatch(
                 txn_id: report.txn_id,
             })
             .map_err(|e| Error::Bug(e.to_string()))?)
+        }
+        ("POST", "/v1/object") => {
+            let r: ObjectReq = body_json(req)?;
+            let oid =
+                ObjectId::from_hex(&r.oid).map_err(|e| Error::Malformed(format!("oid: {e}")))?;
+            let obj = repo.objects.get(&oid)?;
+            let kind = obj.type_tag().name().to_string();
+            let links: Vec<String> = verify::object_links(&obj)
+                .into_iter()
+                .map(|o| o.to_hex())
+                .collect();
+            let mut data = ObjectData {
+                oid: oid.to_hex(),
+                kind,
+                links,
+                data: None,
+                data_b64: None,
+                size: None,
+            };
+            match &obj {
+                Object::Blob(bytes) => {
+                    data.size = Some(bytes.len() as u64);
+                    data.data_b64 = Some(crate::util::base64::encode(bytes));
+                }
+                other => {
+                    // Object serializes as {"type":..,"data":..}; the UI wants
+                    // the payload without the wrapper (kind is already a field).
+                    let v = serde_json::to_value(other).map_err(|e| Error::Bug(e.to_string()))?;
+                    data.data = Some(v.get("data").cloned().unwrap_or(v));
+                }
+            }
+            Ok(serde_json::to_value(data).map_err(|e| Error::Bug(e.to_string()))?)
+        }
+        ("POST", "/v1/diff") => {
+            let r: DiffReq = body_json(req)?;
+            let mut opts = crate::diff::DiffOpts::default();
+            if r.no_renames {
+                opts.detect_renames = false;
+            }
+            if let Some(c) = r.context {
+                opts.context = c.min(100);
+            }
+            let a_root = crate::diff::resolve_tree(repo, &r.a)?;
+            let b_root = crate::diff::resolve_tree(repo, &r.b)?;
+            let td = crate::diff::diff_trees(repo, a_root, b_root, &opts)?;
+            let mut unified = Vec::new();
+            if r.content {
+                const UNIFIED_CAP: usize = 100;
+                for f in td
+                    .files
+                    .iter()
+                    .filter(|f| f.kind == crate::diff::FileDiffKind::Modified && !f.binary)
+                    .take(UNIFIED_CAP)
+                {
+                    let cd = crate::diff::diff_blob_content(repo, f.old_oid, f.new_oid, &opts)?;
+                    let mut text = crate::diff::render::file_header(f);
+                    text.push_str(&crate::diff::render::render_content(f, &cd, opts.context));
+                    unified.push(UnifiedFile {
+                        path: f.path.clone(),
+                        unified: text,
+                    });
+                }
+            }
+            let diff_v = serde_json::to_value(&td).map_err(|e| Error::Bug(e.to_string()))?;
+            Ok(serde_json::to_value(DiffData {
+                a_root: a_root.to_hex(),
+                b_root: b_root.to_hex(),
+                diff: diff_v,
+                unified,
+            })
+            .map_err(|e| Error::Bug(e.to_string()))?)
+        }
+        ("GET", "/v1/goals") | ("GET", "/v1/changes") | ("GET", "/v1/proposals") => {
+            let tag = match req.path.as_str() {
+                "/v1/goals" => crate::object::types::ObjectType::Goal,
+                "/v1/changes" => crate::object::types::ObjectType::Change,
+                _ => crate::object::types::ObjectType::Proposal,
+            };
+            let goal_filter = req
+                .query_get("goal")
+                .map(ObjectId::from_hex)
+                .transpose()
+                .map_err(|e| Error::Malformed(format!("goal filter: {e}")))?;
+            let mut entities = Vec::new();
+            for (oid, obj) in crate::ops::workflow::list_entities(repo, tag)? {
+                if let (Some(g), Object::Change(c)) = (goal_filter, &obj) {
+                    if c.goal != Some(g) {
+                        continue;
+                    }
+                }
+                let v = serde_json::to_value(&obj).map_err(|e| Error::Bug(e.to_string()))?;
+                entities.push(EntityEntry {
+                    oid: oid.to_hex(),
+                    data: v,
+                });
+            }
+            Ok(serde_json::to_value(ListData { entities })
+                .map_err(|e| Error::Bug(e.to_string()))?)
         }
         ("GET", "/v1/audit") => {
             let limit: usize = req

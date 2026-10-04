@@ -100,10 +100,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - DONE: 14 remote_e2e suites (real TCP) + 2 CLI suites + HTTP/wire fuzz
   sweep; THREAT_MODEL §E fully realized with test names; D-017.
 
-## Iteration 10 — Web UI + agent API + MCP  [ ]
-- Embedded single-file UI: dashboard, history, changes, goals, proposals, evidence,
-  comparison, verification; communicates GOAL→CHANGE→EVIDENCE→PROPOSAL→INTEGRATION.
-- Agent integration guide; `newgit mcp` stdio JSON-RPC server (stretch).
+## Iteration 10 — Web UI + agent API + MCP  [x] ✅ 2026-10-04
+- DONE: embedded single-file UI (`src/ui/index.html`, `include_str!`, zero external
+  resources, XSS-safe by construction — textContent only, CI-asserted): dashboard,
+  first-parent history with goal/change/workspace badges, universal object inspector
+  (snapshot/tree browser/blob preview + all 5 workflow types), goals & proposals
+  views, side-by-side compare with unified diffs, audit log; login via bearer token
+  in sessionStorage; model-flow strip GOAL→CHANGE→EVIDENCE→PROPOSAL→INTEGRATION;
+  AI evaluations render with a permanent "AI OPINION" badge. Read-only by design (KL #33).
+- DONE: agent read endpoints on protocol v1 — `POST /v1/object` (kind+links+data,
+  blobs b64), `POST /v1/diff` (CLI-identical unified rendering, UNIFIED_CAP=100),
+  `GET /v1/goals|changes(?goal=)|proposals`; capabilities extended; served under
+  `--ui`/`newgit ui` (static `/` route, data-free shell, no auth on the shell only).
+- DONE: `newgit mcp` — stdio JSON-RPC 2.0 MCP server (protocol 2024-11-05):
+  13 tools mirroring the CLI 1:1 through the identical dispatch path
+  (`cli::call_json`); tool errors carry NewGit categories; zero new deps.
+- DONE: docs/AGENT_GUIDE.md (curl recipes, MCP quickstart, two-agent example);
+  PROTOCOL.md/CLI.md/SECURITY_MODEL §8/THREAT_MODEL §E2 updated; D-018.
+- DONE: +9 tests (278 total): UI static-shell + XSS-discipline assertions,
+  endpoint shapes/gates/filters vs real servers, MCP handshake/catalog/argv
+  mapping/error contract, `newgit ui` + `newgit mcp` as real child processes.
 
 ## Iteration 11 — Performance, release engineering, docs completion  [ ]
 - Benchmark harness + docs/BENCHMARKS.md (init/snapshot/status/diff/verify/gc/import).

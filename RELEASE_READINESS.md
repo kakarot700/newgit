@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 9 of 12 complete — Git compatibility and remote protocol/auth landed; no web UI, release engineering, or CI yet).
+**Current classification: NOT PRODUCTION READY** (iteration 10 of 12 complete — Git compatibility, remote protocol/auth, Web UI and agent APIs (HTTP read endpoints + MCP) landed; release engineering, CI-on-a-hosted-runner and the final audit remain — iterations 11–12).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -18,6 +18,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
 - [x] verification (fsck) — iteration 7 ✅ (`newgit verify [--deep]`, 20 verify_gc suites + chaos per-step)
 - [x] Git compatibility path — iteration 8 ✅ (`import-git`/`export-git` via system git fast-export/fast-import; byte-identical blob round-trip + determinism + atomic refusal tested against real git; honest documented limits in docs/GIT_COMPAT.md — annotated tags lossy, no submodules)
+- [x] Web UI + agent API — iteration 10 ✅ (`newgit ui` embedded single-file read-only explorer: dashboard/history/object inspector/goals/changes/evidence/proposals/compare/audit; agent HTTP read endpoints `/v1/object`, `/v1/diff`, `/v1/goals|changes|proposals`; `newgit mcp` stdio JSON-RPC 2.0 with 13 tools sharing the CLI dispatch path; docs/AGENT_GUIDE.md; zero new dependencies; UI mutations deliberately out of scope — KL #33)
 
 ## RELIABILITY
 - [x] crash-safe object writes (tmp→fsync→rename→dir fsync) + fault hooks — iteration 1
@@ -29,25 +30,25 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] safe gc — iteration 7 ✅ (non-destructive mark-sweep, D-014; `gc_*` suites + chaos end-of-seed)
 
 ## SECURITY
-- [x] threat model — THREAT_MODEL.md (surfaces A–G; pending tests tracked)
+- [x] threat model — THREAT_MODEL.md (surfaces A–G + §E2 UI/MCP; it9 pending rows resolved it10)
 - [x] path safety + parser hardening tests — iteration 1
 - [ ] dependency review + SBOM + cargo-audit/deny — iteration 11
 - [x] no unsafe code (`#![forbid(unsafe_code)]`), no implicit execution — DESIGN + iteration 1
 - [x] access control (remote authn/authz) tested — iteration 9 ✅ (bearer tokens hashed at rest, roles read<write<admin, invalid-token-never-anonymous, authz before every mutation, audit log of every request incl. failures; tested in remote_e2e + cli_e2e exit-code contracts)
 
 ## QUALITY
-- [x] unit tests (123) + integration/e2e (89, incl. 14 remote + 9 git-compat) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (8) + misc (11) — iterations 1–9 (269 total)
+- [x] unit tests (128) + integration/e2e (95, incl. 16 remote + 9 git-compat + 4 UI/MCP e2e) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (8) + misc (9) — iterations 1–10 (278 total)
 - [x] integration/E2E/property/fuzz/chaos suites ✅ it2–7; regression discipline active (chaos seeds grow per bug found)
 
 ## PERFORMANCE
 - [x] representative benchmarks — iteration 7 ✅ (src/bin/newgit-bench.rs + docs/BENCHMARKS.md real numbers; release re-check due it11)
 
 ## OPERABILITY
-- [ ] structured diagnostics/logs, health checks, deployment docs — iterations 9–11
+- [x→partial] structured diagnostics/logs (obs JSONL stderr, `--debug`), health checks (`/healthz`, `verify`) ✅ it1–9; audit log + `/v1/audit` ✅ it9; deployment docs — iteration 11
 
 ## DOCUMENTATION
 - [x] README, ARCHITECTURE, STORAGE_FORMAT, SECURITY_MODEL, THREAT_MODEL — iteration 1
-- [x→partial] CLI reference ✅ it3 (remote sections it9); protocol reference ✅ it9 (docs/PROTOCOL.md); git compat/migration ✅ it8 (docs/GIT_COMPAT.md); agent guide ✅ (docs/AGENT_WORKFLOW.md); contributor/testing/troubleshooting/deployment — iterations 10–11
+- [x→partial] CLI reference ✅ it3 (remote it9, ui/mcp it10); protocol reference ✅ it9 (+read endpoints/UI route it10, docs/PROTOCOL.md); git compat/migration ✅ it8 (docs/GIT_COMPAT.md); agent guide ✅ it10 (docs/AGENT_GUIDE.md — API/MCP/recipes; docs/AGENT_WORKFLOW.md — narrated two-agent example); contributor/testing/troubleshooting/deployment — iteration 11
 
 ## RELEASE
 - [ ] clean reproducible build + artifacts + checksums — iteration 11

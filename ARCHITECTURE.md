@@ -50,7 +50,7 @@ without any AI involvement.
 ```
 ┌────────────────────────────────────────────────────────┐
 │ CLI (hand-rolled parser, --json, stable exit codes)    │
-│ Web UI (embedded, served by remote server)  MCP (opt.) │
+│ Web UI (embedded single file, `newgit ui`)  MCP (stdio)│
 ├────────────────────────────────────────────────────────┤
 │ Remote protocol v1 (HTTP/1.1 + JSON, bearer auth,      │
 │ object negotiation/batching, refs CAS, audit log)      │
