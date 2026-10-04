@@ -11,6 +11,72 @@ dependency** (D-002): it times each workload with `Instant` over N
 iterations and reports min/median/mean/max. Every run prints the
 environment block first; results are only meaningful together with it.
 
+## Git smart-HTTP transfer benchmark (2026-10-05)
+
+Reproduce the real-client benchmark with:
+
+```sh
+cargo test --release --locked --lib --no-run
+time -p cargo test --release --locked --lib \
+  remote::git_http::benchmark::live_git_transfer_baseline -- \
+  --ignored --nocapture
+```
+
+The ignored test builds a deterministic NewGit fixture (80 commits, 40 paths
+per commit, 12 KiB per blob version), starts the live smart-HTTP server, and
+uses installed Git over loopback through a byte-counting HTTP proxy. It reports
+end-to-end wall time for full clone, `--depth=1`, `--filter=blob:none
+--no-checkout`, one-file lazy hydration, and three unchanged fetches. Response
+bytes are the exact HTTP response-body `Content-Length` totals for each client
+operation. Three fresh temporary projections are also timed directly through
+the same builder called by the server; their on-disk size is measured
+recursively. `time -p` adds aggregate user/system CPU for the test command and
+its child processes; the harness does not report per-operation CPU or peak RSS.
+The crate forbids unsafe code, and no portable safe process-tree sampler is
+available in the benchmark. Do not compare aggregate CPU when the command also
+compiles the project; the `--no-run` command above warms that build first.
+
+### Measured result
+
+One before/after run on Git 2.43.0, Linux, loopback, the 2026-10-05 shared
+computer. The fixture and client commands were identical; only the temporary
+projection builder changed. Wall-time values for individual workflows are
+single observations; unchanged-fetch and projection rows are medians of three
+observations. Environment: Intel Xeon @ 2.50 GHz, 8 online logical CPUs,
+24,788,980 kB total memory, Linux 6.18.38+; the machine is shared, so these
+latencies are observations rather than capacity claims. The warm optimized run
+reported aggregate `time -p` values of 4.10 s real, 2.55 s user, and 1.00 s
+system. The baseline command included a release compilation, so its aggregate
+CPU is not comparable; peak RSS was not measured.
+
+| Measurement | Before: checkout materialized | After: upload-pack skips checkout |
+|---|---:|---:|
+| Projection build, median of 3 | 129.60 ms | 122.89 ms |
+| Total temporary projection bytes | 1,992,727 | 1,497,394 |
+| Git object-store bytes | 1,496,958 | 1,496,958 |
+| Full clone: wall time / response-body bytes | 542.30 ms / 1,486,989 | 601.47 ms / 1,486,989 |
+| Shallow clone (`--depth=1`): wall time / response-body bytes | 480.45 ms / 494,064 | 530.60 ms / 494,064 |
+| Blobless clone (`--no-checkout`): wall time / response-body bytes | 488.26 ms / 22,156 | 492.98 ms / 22,156 |
+| Lazy hydration of one selected file: wall time / response-body bytes | 344.56 ms / 12,515 | 355.82 ms / 12,515 |
+| Unchanged fetch, median of 3: wall time / response-body bytes | 348.08 ms / 219 | 344.76 ms / 219 |
+
+**Interpretation:** the safe, deterministic result is a 495,333-byte (24.9%)
+reduction in temporary projection storage for this fixture, with the Git object
+store unchanged. The upload-pack exporter now preserves symbolic or detached
+`HEAD` without writing a checkout into the temporary repository; receive-pack
+retains its existing worktree behavior. Measured projection median was 6.71 ms
+(5.18%) lower. End-to-end clone timings moved in both directions, and the
+unchanged-fetch median difference was only 3.32 ms (0.95%), so no general
+latency or throughput improvement is claimed. All measured response-body totals
+matched between the two runs. The benchmark does not measure concurrent load,
+peak RSS, or a large-repository scaling curve. It measures an adapter cost and
+temporary-storage reduction on this fixture only.
+
+The projection change does not cache refs or Git objects, so it adds no cache
+invalidation window: each request still exports the current repository state
+using the existing request deadline. Ordinary `export-git` continues to
+materialize its checkout.
+
 ## Environment (as measured)
 
 ```

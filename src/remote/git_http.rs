@@ -98,12 +98,27 @@ pub(crate) struct TempGitView {
 
 impl TempGitView {
     fn from_newgit(repo: &Repo, deadline: Instant) -> Result<Self> {
-        Self::from_newgit_with_export(repo, deadline).map(|(view, _)| view)
+        Self::from_newgit_for_upload_pack_with_export(repo, deadline).map(|(view, _)| view)
     }
 
     pub(crate) fn from_newgit_with_export(
         repo: &Repo,
         deadline: Instant,
+    ) -> Result<(Self, crate::gitio::export::ExportReport)> {
+        Self::build(repo, deadline, true)
+    }
+
+    pub(crate) fn from_newgit_for_upload_pack_with_export(
+        repo: &Repo,
+        deadline: Instant,
+    ) -> Result<(Self, crate::gitio::export::ExportReport)> {
+        Self::build(repo, deadline, false)
+    }
+
+    fn build(
+        repo: &Repo,
+        deadline: Instant,
+        materialize_worktree: bool,
     ) -> Result<(Self, crate::gitio::export::ExportReport)> {
         let directory = tempfile::Builder::new()
             .prefix("newgit-git-http-")
@@ -126,13 +141,23 @@ impl TempGitView {
         std::fs::create_dir(&view.template_dir).map_err(|e| Error::io(&view.template_dir, e))?;
         // The existing exporter handles ref mapping, object construction,
         // merges, tree content, and symbolic HEAD.
-        let export = crate::gitio::export::export_git_isolated(
-            repo,
-            &view.path,
-            &view.global_config,
-            &view.template_dir,
-            deadline,
-        );
+        let export = if materialize_worktree {
+            crate::gitio::export::export_git_isolated(
+                repo,
+                &view.path,
+                &view.global_config,
+                &view.template_dir,
+                deadline,
+            )
+        } else {
+            crate::gitio::export::export_git_isolated_for_upload_pack(
+                repo,
+                &view.path,
+                &view.global_config,
+                &view.template_dir,
+                deadline,
+            )
+        };
         let export = match export {
             Ok(report) => report,
             Err(Error::Invalid(message)) if message.starts_with("nothing to export:") => {
@@ -367,3 +392,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "git_http_bench.rs"]
+mod benchmark;

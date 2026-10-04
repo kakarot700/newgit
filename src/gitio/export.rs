@@ -53,11 +53,11 @@ pub struct ExportReport {
 type Flat = BTreeMap<String, (EntryMode, ObjectId)>;
 
 pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
-    export_git_impl(repo, target, None, None, None)
+    export_git_impl(repo, target, None, None, None, true)
 }
 
 /// Export through Git with host/global configuration and templates disabled.
-/// Used by the server's untrusted-request boundary for temporary views.
+/// Used by the server's isolated receive-pack projection.
 pub(crate) fn export_git_isolated(
     repo: &Repo,
     target: &Path,
@@ -71,6 +71,28 @@ pub(crate) fn export_git_isolated(
         Some(empty_global_config),
         Some(empty_template_dir),
         Some(deadline),
+        true,
+    )
+}
+
+/// Build an isolated Git repository suitable for read-only upload-pack.
+/// Unlike normal `export_git`, this does not materialize a checkout: upload-pack
+/// reads refs and Git objects only, so writing every blob into a temporary
+/// worktree is redundant. Symbolic or detached `HEAD` is still preserved.
+pub(crate) fn export_git_isolated_for_upload_pack(
+    repo: &Repo,
+    target: &Path,
+    empty_global_config: &Path,
+    empty_template_dir: &Path,
+    deadline: Instant,
+) -> Result<ExportReport> {
+    export_git_impl(
+        repo,
+        target,
+        Some(empty_global_config),
+        Some(empty_template_dir),
+        Some(deadline),
+        false,
     )
 }
 
@@ -80,6 +102,7 @@ fn export_git_impl(
     isolated_global_config: Option<&Path>,
     isolated_template_dir: Option<&Path>,
     deadline: Option<Instant>,
+    materialize_worktree: bool,
 ) -> Result<ExportReport> {
     check_deadline(deadline)?;
     // ── target must be absent or empty ──
@@ -322,7 +345,7 @@ fn export_git_impl(
         )));
     }
 
-    // ── HEAD + working tree materialization ──
+    // ── preserve HEAD; optionally materialize a user-facing working tree ──
     let marks_by_mark = read_marks_file(&marks_file, deadline)?;
     for (newgit_oid, mark) in &commit_marks {
         if let Some(git_oid) = marks_by_mark.get(mark) {
@@ -346,13 +369,15 @@ fn export_git_impl(
                 isolated_template_dir,
                 deadline,
             )?;
-            run_git(
-                target,
-                &["reset", "--hard", "--quiet"],
-                isolated_global_config,
-                isolated_template_dir,
-                deadline,
-            )?;
+            if materialize_worktree {
+                run_git(
+                    target,
+                    &["reset", "--hard", "--quiet"],
+                    isolated_global_config,
+                    isolated_template_dir,
+                    deadline,
+                )?;
+            }
             rep.head = Some(g);
         }
         crate::repo::Head::Detached(oid) => {
@@ -363,13 +388,23 @@ fn export_git_impl(
                 .get(&mark)
                 .cloned()
                 .ok_or_else(|| Error::Bug(format!("mark :{mark} missing from git export-marks")))?;
-            run_git(
-                target,
-                &["checkout", "--detach", "--quiet", &sha],
-                isolated_global_config,
-                isolated_template_dir,
-                deadline,
-            )?;
+            if materialize_worktree {
+                run_git(
+                    target,
+                    &["checkout", "--detach", "--quiet", &sha],
+                    isolated_global_config,
+                    isolated_template_dir,
+                    deadline,
+                )?;
+            } else {
+                run_git(
+                    target,
+                    &["update-ref", "--no-deref", "HEAD", &sha],
+                    isolated_global_config,
+                    isolated_template_dir,
+                    deadline,
+                )?;
+            }
             if let Some(temp_ref) = &detached_export_ref {
                 run_git(
                     target,
