@@ -493,21 +493,21 @@ fn tz_string(min: i16) -> String {
 /// C-quote only when git would (control chars, quote, backslash).
 fn quote_path(p: &str) -> String {
     let needs = p
-        .bytes()
-        .any(|b| b == b'"' || b == b'\\' || b < 0x20 || b == 0x7f);
+        .chars()
+        .any(|c| c == '"' || c == '\\' || c.is_ascii_control());
     if !needs {
         return p.to_string();
     }
     let mut out = String::with_capacity(p.len() + 2);
     out.push('"');
-    for b in p.bytes() {
-        match b {
-            b'"' => out.push_str("\\\""),
-            b'\\' => out.push_str("\\\\"),
-            b'\n' => out.push_str("\\n"),
-            b'\t' => out.push_str("\\t"),
-            0x00..=0x1f | 0x7f => out.push_str(&format!("\\{:03o}", b)),
-            c => out.push(c as char),
+    for c in p.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => out.push_str(&format!("\\{:03o}", c as u8)),
+            c => out.push(c),
         }
     }
     out.push('"');

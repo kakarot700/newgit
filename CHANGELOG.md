@@ -13,6 +13,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   with successive temporary-ref candidates. Export also refuses distinct
   NewGit refs that map to one Git ref rather than silently dropping one; a
   redundant-ancestor merge-parent round-trip pins parent ordering.
+- `export-git` now preserves non-ASCII UTF-8 bytes when a pathname also needs
+  Git C-quoting for quotes or backslashes. A real-Git import/export regression
+  covers both sides of a rename and compares path names, modes, and blob IDs at
+  every commit; it caught the previous `é` → `Ã©` pathname corruption.
 
 ### Added
 - A real-Git regression compares raw commit-object message payloads before and

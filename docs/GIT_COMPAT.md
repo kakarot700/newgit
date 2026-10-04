@@ -25,6 +25,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | original commit sha | `extras.git_sha1` (via `--show-original-ids`) | exact |
 | first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact (restored on export) |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
+| Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping; tested with Unicode plus quotes/backslashes and a rename through import/export |
 | `refs/heads/*`, `refs/tags/*` | same ref names | exact |
 | other `refs/*` | same ref names (if the ref grammar accepts them) | exact |
 | lightweight tag | ref → target snapshot | exact |
@@ -83,7 +84,10 @@ final LF, and an empty message. The companion
 `git_control_character_commit_message_is_refused_atomically` case proves the
 tested U+0001 message is rejected with no ref updates. These tests do not
 establish lossless handling of non-UTF-8 messages, which are converted lossily
-and flagged. Re-importing the
+and flagged. `quoted_utf8_git_paths_roundtrip_without_changing_names` compares
+Git tree path names, modes, and blob IDs for each commit across a rename whose
+names contain non-ASCII UTF-8, quotes, and backslashes; the exported worktree
+is clean. Re-importing the
 exported repo produces identical tested trees and messages
 (`reimport_after_export_is_stable`); snapshot oids differ because
 `git_sha1`/committer metadata necessarily reference the new git objects.
@@ -117,9 +121,11 @@ parent is already an ancestor of its first.
 5. **No incremental sync**: import/export are whole-history operations;
    there is no fetch/pull negotiation with git remotes (that is what the
    NewGit remote protocol — iteration 9 — is for).
-6. Non-UTF-8 commit messages become lossy-converted and flagged; git refs
-   whose names violate NewGit's stricter ref grammar are skipped and
-   reported.
+6. Non-UTF-8 commit messages become lossy-converted and flagged; non-UTF-8 Git
+   paths are rejected by NewGit's UTF-8 path model. The tested C-quoted UTF-8
+   subset does not establish behavior for arbitrary path bytes, control
+   characters, or every platform. Git refs whose names violate NewGit's
+   stricter ref grammar are skipped and reported.
 7. `git` binary must be available and modern enough for `fast-export
    --full-tree --show-original-ids` (git ≥ 2.20; this suite runs against Git
    2.43.0 in the recorded environment).

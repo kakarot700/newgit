@@ -509,6 +509,83 @@ fn export_roundtrip_matches_git() {
 }
 
 #[test]
+fn quoted_utf8_git_paths_roundtrip_without_changing_names() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    let first_path = "café \"quoted\"\\name.txt";
+    write(&gdir, first_path, b"first content\n");
+    commit(&gdir, "quoted UTF-8 path root");
+
+    let second_path = "quoted \"résumé\"\\file.txt";
+    git(&gdir, &["mv", first_path, second_path]);
+    write(&gdir, second_path, b"renamed content\n");
+    commit(&gdir, "rename quoted UTF-8 path");
+
+    let fast_export = git(
+        &gdir,
+        &["fast-export", "--all", "--full-tree", "--show-original-ids"],
+    )
+    .stdout;
+    let fast_export = String::from_utf8(fast_export).expect("fast-export is textual");
+    assert!(
+        fast_export.contains("\\303\\251"),
+        "UTF-8 path was not C-quoted"
+    );
+    assert!(fast_export.contains("\\\""), "quote was not C-escaped");
+    assert!(fast_export.contains("\\\\"), "backslash was not C-escaped");
+
+    let (_nd, repo) = temp_repo();
+    let imported = import_git(&repo, &gdir).unwrap();
+    assert_eq!(imported.commits, 2);
+    let outdir = d.path().join("out");
+    let exported = export_git(&repo, &outdir).unwrap();
+    assert_eq!(exported.commits, 2);
+
+    let source_revs: Vec<String> =
+        git_out(&gdir, &["rev-list", "--reverse", "--first-parent", "HEAD"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+    let output_revs: Vec<String> = git_out(
+        &outdir,
+        &["rev-list", "--reverse", "--first-parent", "HEAD"],
+    )
+    .lines()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(source_revs.len(), 2);
+    assert_eq!(output_revs.len(), source_revs.len());
+    let imported_by_sha = snapshots_by_git_sha(&repo);
+    for (source, output) in source_revs.iter().zip(&output_revs) {
+        let snapshot_oid = imported_by_sha
+            .get(source)
+            .unwrap_or_else(|| panic!("source commit {source} missing after import"));
+        let imported_tree = ng_tree(&repo, *snapshot_oid);
+        let source_tree = git_tree(&gdir, source);
+        assert_eq!(imported_tree.len(), source_tree.len());
+        for (path, (mode, sha)) in &source_tree {
+            let (imported_mode, imported_bytes) = imported_tree
+                .get(path)
+                .unwrap_or_else(|| panic!("imported path {path:?} missing at {source}"));
+            assert_eq!(imported_mode, mode, "imported mode changed for {path:?}");
+            assert_eq!(
+                git_blob(&gdir, sha),
+                *imported_bytes,
+                "imported content changed for {path:?}"
+            );
+        }
+        assert_eq!(
+            source_tree,
+            git_tree(&outdir, output),
+            "quoted UTF-8 path, mode, or blob id changed for {source}"
+        );
+    }
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
+
+#[test]
 fn commit_message_roundtrip_preserves_exact_utf8_bytes() {
     let d = tempfile::tempdir().unwrap();
     let gdir = d.path().join("g");

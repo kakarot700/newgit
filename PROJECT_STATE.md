@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: exact tested UTF-8 commit-message payloads plus explicit refusal of messages outside NewGit's text model (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: preserve valid UTF-8 Git pathnames when export must C-quote quotes or backslashes (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -22,7 +22,7 @@
 - **Regression evidence:** real-Git tests cover detached-only history, a detached tip ahead of a branch, two successive nested temporary-ref candidates, and a valid redundant-ancestor merge whose ordered parents survive export. The mapped-ref alias test asserts the two mappings, validates the destination with `git check-ref-format`, and checks that export refuses before creating partial output. The suspected topological-sort failure was not reproduced; no sorter change was made.
 - **Local verification:** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, full `cargo test --locked` (283 passed), `cargo build --release --locked`, full `cargo test --release --locked` (283 passed), SBOM drift check, and `git diff --check` all pass. The focused `tests/git_compat.rs` suite contains 14 passing tests. The exact implementation SHA, push state, and hosted conclusions are recorded above.
 
-## Current Git compatibility milestone — exact tested UTF-8 messages and control-byte refusal (2026-10-04)
+## Previous Git compatibility milestone — exact tested UTF-8 messages and control-byte refusal (2026-10-04)
 
 - **Evidence gap and attack:** the previous interoperability fixture compared
   messages with `trim_end()`, so it did not prove byte-exact preservation of
@@ -48,6 +48,35 @@
   SBOM drift check, and `git diff --check` all pass. Hosted CI and CodeQL checks
   both passed on implementation SHA `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2`
   (runs are linked in Current status above).
+
+## Current Git compatibility milestone — C-quoted UTF-8 pathnames (2026-10-04)
+
+- **Defect and reproduction:** a real Git 2.43.0 repository with a filename
+  containing both non-ASCII UTF-8 and Git-quoted punctuation imported correctly,
+  but `export-git` changed `café` to `cafÃ©` whenever `quote_path` entered its
+  byte-at-a-time escaping branch. Blob identity stayed the same while the path
+  changed, so a tree comparison exposed the data-loss bug.
+- **Fix:** `src/gitio/export.rs::quote_path` now escapes the Git C-quote syntax
+  while iterating Unicode scalar values, preserving valid UTF-8 rather than
+  reinterpreting individual UTF-8 bytes as Unicode code points.
+- **Regression evidence:** `tests/git_compat.rs::quoted_utf8_git_paths_roundtrip_without_changing_names`
+  creates real Git commits for `café "quoted"\\name.txt` and a rename to
+  `quoted "résumé"\\file.txt`. It confirms fast-export's octal UTF-8, quote,
+  and backslash escapes, then compares Git `ls-tree -z` paths, modes, and blob
+  IDs at each commit after NewGit import/export. The new test failed before the
+  fix (`café` vs `cafÃ©`) and passes after; it also checks a clean exported
+  worktree and deep NewGit verification.
+- **Adversarial review and boundary:** an independent review found no material
+  issue in the character-based encoder or fixture. This evidence covers tested
+  valid UTF-8 names only; NewGit's non-UTF-8 path limitation remains, and the
+  fixture does not claim broad control-character or cross-platform pathname
+  compatibility.
+- **Local verification:** Git 2.43.0, Rust 1.99.0; all 17 Git interoperability
+  tests passed as part of both complete suites (286 debug and 286 release).
+  `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+  `cargo build --release --locked`, SBOM drift check, and `git diff --check`
+  all passed. Hosted checks are pending for the new branch head and are not
+  claimed until GitHub reports them.
 
 ## Local development setup
 

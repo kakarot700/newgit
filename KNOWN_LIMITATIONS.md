@@ -4,8 +4,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 
 ## Core model
 1. **UTF-8 paths only.** Non-UTF-8 filenames (legal in git/unix) are rejected
-   with an explicit error, including during git import. No surrogate-escape
-   mapping yet.
+   with an explicit error, including during git import. Git import/export
+   round-trips the tested C-quoted UTF-8 subset (Unicode combined with quotes
+   and backslashes; `tests/git_compat.rs::quoted_utf8_git_paths_roundtrip_without_changing_names`),
+   but this does not establish behavior for arbitrary path bytes, control
+   characters, or every operating system. No surrogate-escape mapping yet.
 2. **No staging area.** Snapshots capture whole workspaces (DECISIONS D-006).
 3. **Symlinks are stored, never followed.** A symlink is a blob containing its
    target string; checkout recreates the link (unix). No submodule/subrepo
@@ -28,8 +31,10 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 
 ## Interop
 10. Git interop requires the **system git binary** (fast-export/fast-import).
-    Tag signatures, git notes, LFS pointers, and non-UTF-8 paths are not
-    carried across; import records what it skipped in `extras`.
+    Annotated/signed-tag metadata and Git notes are not preserved; skipped refs
+    and reported tag-metadata loss are surfaced by the import report. Git LFS
+    service semantics are not implemented. Non-UTF-8 paths are rejected by
+    NewGit's UTF-8 path model (limitation 1), not silently converted.
 11. No GitHub/GitLab protocol compatibility (smart HTTP) — NewGit speaks its
     own documented protocol (iteration 9).
 

@@ -41,7 +41,7 @@ environment, not a claim that every operating system or deployment is verified.
 | E2E (CLI) | `tests/cli_e2e.rs` | spawns the REAL built binary; asserts stdout/stderr/exit codes/disk state |
 | E2E (remote) | `tests/remote_e2e.rs` | REAL in-process server + REAL TCP client — no mocks anywhere |
 | E2E (UI/MCP) | lib tests + `tests/cli_e2e.rs` | UI shell served over TCP; MCP driven as a child process over stdio |
-| Compatibility | `tests/git_compat.rs` | REAL system `git` (fast-export/fast-import round-trips) |
+| Compatibility | `tests/git_compat.rs` | REAL system `git` (fast-export/fast-import round-trips, including C-quoted UTF-8 pathnames) |
 | Concurrency | `tests/concurrency_refs.rs`, races inside merge/remote suites | threads + CAS assertions (exactly one winner) |
 | Crash/fault injection | `tests/txn_recovery.rs` + `src/bin/newgit-faultlab.rs` | child processes killed at injected fault points |
 | Chaos | `tests/chaos.rs` | 6 FIXED seeds × random op sequences × random kills; per-step `verify --deep` invariant |
