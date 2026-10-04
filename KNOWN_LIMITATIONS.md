@@ -70,7 +70,12 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     are not separately tested. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
     (limitation 1), not silently converted.
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
-    real Git CLI tests cover write-authenticated branch creates, fast-forward
+    a real Git 2.43.0/Linux loopback test covers `clone --depth=1`,
+    `fetch --deepen=1`, `fetch --unshallow`, then ordinary fetch and pull.
+    Shallow negotiation changes only the transfer boundary: each request still
+    materializes the complete temporary Git projection, and this does not
+    establish support on other Git versions or platforms. Separate real Git CLI
+    tests cover write-authenticated branch creates, fast-forward
     and forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions per request,
     including an initial branch push to an empty repository. Existing tags cannot
     be retargeted (even with `--force`). Annotated pushes are refused before

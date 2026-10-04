@@ -152,6 +152,12 @@ git -C clone fetch origin
 git -C clone pull --ff-only
 ```
 
+Git 2.43.0/Linux is also tested with `git clone --depth=1`,
+`git -C clone fetch --deepen=1 origin`, and `git -C clone fetch --unshallow
+origin`, followed by ordinary fetch and pull. This verifies client-side shallow
+history boundaries over HTTP; the server still rebuilds the complete temporary
+Git projection for each request.
+
 With the default authenticated-read policy, use a reader token as an HTTP
 `Authorization: Bearer` header. For an interactive one-off session, avoid
 putting the raw token in shell history or the remote URL:

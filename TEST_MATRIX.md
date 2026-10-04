@@ -27,7 +27,7 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | Fuzz-like | `tests/fuzz_parsers.rs` | 150k seeded prefix-anchored garbage inputs vs envelope/canonical/index/journal/config/hex/base64/ref-grammar/fast-export + **HTTP request framing, percent-decoding and all remote wire structs** (no panics, no OOM) | ✅ iter 7–9 (8 suites) |
 | E2E (UI/MCP) | lib (`ui::tests`, `cli::mcp::tests`) + `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | UI self-containment & XSS discipline (asserted against shipped bytes); UI served only with `--ui`, data-free shell, no-auth static vs role-gated data; `/v1/object` shapes (snapshot/tree/blob-b64/goal/change/evidence/proposal) + not-found/malformed; `/v1/diff` vs CLI rendering + spec forms + content cap; goals/changes(?goal)/proposals listings; MCP handshake/catalog(13)/ping, JSON-RPC error codes (-32700/-32600/-32601/-32602), argv mapping table, isError envelope, real child processes (`newgit ui` announcement + HTML over TCP; `newgit mcp` full session incl. snapshot-through-MCP and clean EOF exit) | ✅ iter 10 (4 lib + 2 remote + 2 cli suites) |
 | E2E (remote) | `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | REAL in-process server + REAL TCP client (no mocks): info/healthz anonymous, refs gating, role matrix (read/write/admin ⇒ 401/403 boundaries), bad token never downgrades, push→pull oid + object-universe equality, incremental push (0 objects on re-push), non-fast-forward refusal + wire CAS (one winner), dependency-order + corrupt-envelope rejection on put, batch/body limits, internal namespaces never cross, audit content + ordering, concurrent pushes to different refs, crash-mid-push leaves server clean and retry reuses orphans, negotiate superset + post-order, protocol-version and URL validation. CLI: `serve` port-0 announcement line, `token add/list` (no leaks), `remote add/list/remove`, `push`/`pull`/`audit` `--json` envelopes, exit codes 2/3/5/7, bind-conflict and not-a-repo errors | ✅ iter 9 (14 + 2 suites) |
-| E2E (Git smart HTTP) | `tests/git_remote_e2e.rs` plus `remote::git_http::tests` | Ordinary Git 2.43.0 CLI over loopback against the live NewGit server: protocol v2 clone/ls-remote, v0 fetch, v1 pull, a protocol-v1 atomic push with its version advertisement, and a `protocol.version=2` atomic push via v0 fallback plus a raw `version=2` advertisement fallback check; validates branch/tag refs, commit/tree, text and binary blob bytes; verifies authenticated branch pushes/deletions, lightweight-tag create/delete, atomic branch-plus-tag creation, empty-repo creation, post-push clone/fetch, post-delete fetch --prune and fresh clone. Unauthorized tag creation, an atomic annotated-tag-plus-branch advance, forced tag retarget, and mixed branch projection rejection all leave canonical refs/object inventory unchanged. Malformed packets, forced non-fast-forward branch refusal, response caps, hostile Git env/template-hook isolation, and unsupported protocol-header checks remain covered. | ✅ targeted suites: 4/4 |
+| E2E (Git smart HTTP) | `tests/git_remote_e2e.rs` plus `remote::git_http::tests` | Ordinary Git 2.43.0 CLI over loopback against the live NewGit server: protocol v2 clone/ls-remote, v0 fetch, v1 pull, a protocol-v1 atomic push with its version advertisement, and a `protocol.version=2` atomic push via v0 fallback plus a raw `version=2` advertisement fallback check; validates branch/tag refs, commit/tree, text and binary blob bytes; verifies authenticated branch pushes/deletions, lightweight-tag create/delete, atomic branch-plus-tag creation, empty-repo creation, post-push clone/fetch, post-delete fetch --prune and fresh clone. Unauthorized tag creation, an atomic annotated-tag-plus-branch advance, forced tag retarget, and mixed branch projection rejection all leave canonical refs/object inventory unchanged. A real-Git shallow-history regression verifies `clone --depth=1`, `fetch --deepen=1`, `fetch --unshallow`, and subsequent ordinary fetch/pull. Malformed packets, forced non-fast-forward branch refusal, response caps, hostile Git env/template-hook isolation, and unsupported protocol-header checks remain covered. | ✅ live Git CLI E2E tests: 6/6 |
 | Annotated-tag push boundary | `src/remote/git_receive.rs`, `tests/git_remote_e2e.rs` | Unit test asserts the exact fail-closed diagnostic that NewGit has no Git tag-object/per-ref metadata representation. Real Git 2.43.0 attempts an annotated-tag push over smart HTTP and the regression verifies canonical refs plus object inventory are unchanged; the companion atomic-push case verifies no partial branch/tag/deletion updates. Lightweight tags directly targeting commits remain supported. | ✅ targeted in full suite |
 | Process deadline | `src/util/process.rs`, `src/remote/http.rs` | A process-group timeout test proves the direct process and descendant are terminated/reaped; HTTP regression maps timed-out work to 504. Git smart-HTTP projection and upload-pack share a 120-second absolute deadline. | ✅ focused unit regressions |
 | Compatibility | `tests/git_compat.rs` | REAL system-Git repos (branches, ordinary and four-parent octopus merges, annotated+light tags, binary, symlink, exec bit, Unicode, C-quoted UTF-8 names with quotes/backslashes, renames, empty commits and empty trees, distinct author/committer, remotes+notes refs, non-HEAD symbolic-ref omission, replace refs, Git-verified SSH-signed commit and tag, remote/notes blob refs omitted by fast-export, raw invalid-UTF-8 commit-message conversion, and a SHA-256 repository): import equality vs `ls-tree`/`cat-file`/`log`, import determinism, export round-trip (byte-identical blob SHAs + identity multiset + clean worktree), exact tested UTF-8 commit-message payloads via raw commit objects, U+0001 message refusal with zero refs moved + deep verify, symbolic-ref skip report, replace-ref skip with stored branch message/tree preserved despite replacement overlay, atomic non-commit-ref refusal for real lightweight/annotated blob/tree tags including orphan and tag-only sources, signed-commit signature-loss report by source SHA (fast-export and exported commit are unsigned; human/JSON CLI checked), SSH signed-tag source verification + stripped report + lightweight export/tree comparison, SHA-256 source-ID metadata plus semantic import/export fidelity, submodule refusal atomicity, empty repo, ref-move atomicity, export refusals, reimport stability; octopus test checks ordered parents, semantic merge tree, Git fsck, and deep NewGit integrity through Git→NewGit→Git→NewGit; empty-tree fixture compares tree ids, parent mapping, and path/mode/blob fidelity across both conversion legs | ✅ latest full debug/release validation: 317/317 tests; all 28 Git conversion/interoperability tests passed |
@@ -84,28 +84,20 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 
 ## Latest recorded run
 
-- Date: 2026-10-05 (authenticated smart-HTTP lightweight-tag creation/deletion; Git 2.43.0/Linux,
-  Rust 1.99.0)
-- `cargo test --locked` (debug): **314 passed; 0 failed** (137 lib unit,
+- Date: 2026-10-05 (shallow clone/deepen/unshallow over smart HTTP; Git 2.43.0/Linux, Rust 1.99.0)
+- `cargo test --locked` (debug): **318 passed; 0 failed** (139 lib unit,
   6 chaos, 16 cli_e2e, 4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers,
-  28 git_compat, 4 git_remote_e2e, 18 merge_integrate, 13 ops_snapshot,
+  28 git_compat, 6 git_remote_e2e, 18 merge_integrate, 13 ops_snapshot,
   12 property_core, 16 remote_e2e, 14 txn_recovery, 20 verify_gc, 1 version,
-  9 workflow)
-- `cargo test --release --locked`: **314 passed; 0 failed** (same suites)
-- Both full runs include **28/28** Git import/export tests, **4/4** live Git
-  smart-HTTP tests, and **14/14** transaction/recovery tests. Real Git CLI
-  coverage includes lightweight-tag creation/deletion, atomic branch-plus-tag
-  creation, post-push clone/fetch, and unauthorized/invalid-tag/forced-retarget
-  rejection without canonical mutation. Branch deletion/pruning and ordinary/
-  atomic rejection of forced non-fast-forward updates remain covered. The
-  transaction suite proves a same-ref delete-versus-update race has one CAS winner.
-- `cargo fmt --all -- --check`, warnings-denied `cargo clippy --all-targets
-  --locked`, `cargo build --release --locked`, SBOM drift, Git 2.43.0 /
-  `ssh-keygen` prerequisites, and `git diff --check`: clean.
-- The Ubuntu 24.04 CI job requires Git >=2.34.0 and `ssh-keygen` before tests,
-  so its SSH-signature fixtures cannot silently skip on missing tools.
-- Exact-SHA GitHub CI and CodeQL links are delivered with task completion after
-  the single push, avoiding a follow-up state-only commit.
+  9 workflow).
+- `cargo test --release --locked`: **318 passed; 0 failed** (same suites).
+- The six live Git CLI E2E tests include shallow clone at depth 1, one-commit
+  deepen, unshallow to all three commits, then an ordinary fetch/pull after the
+  NewGit ref advances; existing smart-HTTP push/auth/CAS regressions also pass.
+- `cargo fmt --all -- --check`, warnings-denied Clippy, release build, SBOM
+  drift, Git 2.43.0 / `ssh-keygen` prerequisites, and `git diff --check`: clean.
+- Exact-SHA GitHub CI and CodeQL are checked after the single combined push;
+  report both links in the task completion response, with no state-only follow-up.
 - Empty-tree compatibility commit
   `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [hosted CI run
   37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979)

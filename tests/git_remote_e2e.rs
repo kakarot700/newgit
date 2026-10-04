@@ -1782,3 +1782,194 @@ fn real_git_initial_push_to_empty_newgit_repo_creates_main() {
     );
     server.shutdown();
 }
+
+#[test]
+fn real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http() {
+    let (_dir, root) = temp("shallow-history");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+
+    let first = commit(
+        &newgit,
+        "refs/main",
+        "first shallow-history snapshot",
+        &[("history.txt", b"first\n", EntryMode::File)],
+        vec![],
+    );
+    let second = commit(
+        &newgit,
+        "refs/main",
+        "second shallow-history snapshot",
+        &[("history.txt", b"second\n", EntryMode::File)],
+        vec![first],
+    );
+    let third = commit(
+        &newgit,
+        "refs/main",
+        "third shallow-history snapshot",
+        &[("history.txt", b"third\n", EntryMode::File)],
+        vec![second],
+    );
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set shallow-test default branch"),
+        )
+        .unwrap();
+
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        allow_anonymous_read: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let clone = root.join("shallow-clone");
+    let clone_path = clone.to_str().unwrap();
+
+    // The source is a live loopback HTTP peer, not Git's local/file transport,
+    // which refuses shallow clones unless explicitly overridden.
+    git(&["clone", "--quiet", "--depth=1", &url, clone_path]);
+    let shallow_tip = as_text(&git(&["-C", clone_path, "rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "rev-parse",
+            "--is-shallow-repository"
+        ]))
+        .trim(),
+        "true"
+    );
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-list", "--count", "HEAD"])).trim(),
+        "1"
+    );
+    assert_eq!(
+        std::fs::read_to_string(clone.join(".git/shallow")).unwrap(),
+        format!("{shallow_tip}\n")
+    );
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "show", "HEAD:history.txt"])),
+        "third\n"
+    );
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), third);
+
+    // A stateless upload-pack request must honor the client's shallow boundary
+    // and extend it by exactly one parent without changing the checked-out tip.
+    git(&["-C", clone_path, "fetch", "--quiet", "--deepen=1", "origin"]);
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-parse", "HEAD"])).trim(),
+        shallow_tip
+    );
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-list", "--count", "HEAD"])).trim(),
+        "2"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "show",
+            "-s",
+            "--format=%s",
+            "HEAD^"
+        ]))
+        .trim(),
+        "second shallow-history snapshot"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "rev-parse",
+            "--is-shallow-repository"
+        ]))
+        .trim(),
+        "true"
+    );
+
+    // Unshallow retrieves the remaining ancestry and removes the shallow
+    // boundary; normal subsequent fetch and pull continue to work.
+    git(&[
+        "-C",
+        clone_path,
+        "fetch",
+        "--quiet",
+        "--unshallow",
+        "origin",
+    ]);
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-list", "--count", "HEAD"])).trim(),
+        "3"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "rev-parse",
+            "--is-shallow-repository"
+        ]))
+        .trim(),
+        "false"
+    );
+    assert!(!clone.join(".git/shallow").exists());
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "show",
+            "-s",
+            "--format=%s",
+            "HEAD~2"
+        ]))
+        .trim(),
+        "first shallow-history snapshot"
+    );
+
+    let fourth = commit(
+        &newgit,
+        "refs/main",
+        "fourth shallow-history snapshot",
+        &[("history.txt", b"fourth\n", EntryMode::File)],
+        vec![third],
+    );
+    git(&["-C", clone_path, "fetch", "--quiet", "origin"]);
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "show",
+            "-s",
+            "--format=%s",
+            "refs/remotes/origin/main"
+        ]))
+        .trim(),
+        "fourth shallow-history snapshot"
+    );
+    git(&["-C", clone_path, "pull", "--quiet", "--ff-only"]);
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-parse", "HEAD"])).trim(),
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "rev-parse",
+            "refs/remotes/origin/main"
+        ]))
+        .trim()
+    );
+    assert_eq!(
+        as_text(&git(&["-C", clone_path, "rev-list", "--count", "HEAD"])).trim(),
+        "4"
+    );
+    assert_eq!(
+        std::fs::read(clone.join("history.txt")).unwrap(),
+        b"fourth\n"
+    );
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), fourth);
+    server.shutdown();
+}

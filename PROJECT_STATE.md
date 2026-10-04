@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. The active milestone is a deliberately bounded live Git smart-HTTP branch/tag-write slice, recorded below.
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. The active milestone is a real-Git smart-HTTP shallow-history read workflow, with the earlier branch/tag-write work retained below.
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,15 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git remote compatibility milestone — smart-HTTP receive-pack version negotiation (2026-10-05)
+## Current Git remote compatibility milestone — shallow smart-HTTP history (2026-10-05)
+
+- **Goal:** Extend live Git compatibility with a real daily-client history lifecycle, rather than a documentation-only claim or a conversion-only edge case.
+- **Evidence:** `tests/git_remote_e2e.rs::real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http` uses Git 2.43.0 over loopback HTTP against the running NewGit server. It asserts `clone --depth=1` has one commit and a `.git/shallow` boundary; `fetch --deepen=1` retains the tip but exposes exactly one parent; `fetch --unshallow` removes the boundary and restores three commits; an ordinary fetch and `pull --ff-only` then advance to a fourth remote commit and update the worktree.
+- **Implementation decision and boundary:** the existing adapter delegates upload-pack negotiation to Git, which already handles shallow requests correctly, so no custom protocol translation or capability advertisement was added. Shallow requests limit transferred history, but each HTTP request still materializes the full temporary Git projection from canonical NewGit objects. Evidence is limited to Git 2.43.0/Linux.
+- **Local verification (2026-10-05):** one consolidated pass succeeded: formatting, warnings-denied Clippy, `cargo test --locked` (**318/318**), `cargo test --release --locked` (**318/318**), release build, SBOM drift, Git/`ssh-keygen` prerequisites, and `git diff --check`. All **6/6** live Git CLI end-to-end tests passed.
+- **Hosted verification:** after one push of the combined implementation, regression, and documentation commit, run CI and CodeQL once on that exact SHA; provide both links in the task completion response, without a state-only follow-up commit.
+
+## Previous Git remote compatibility milestone — smart-HTTP receive-pack version negotiation (2026-10-05)
 
 - **Before:** Git interoperability was limited to one-shot `import-git`/`export-git`; a normal Git client could not use NewGit as an HTTP remote.
 - **Architecture:** preserve the NewGit object/ref model and JSON remote as canonical. Upload-pack remains delegated to `git upload-pack`; a separate receive-pack adapter delegates pack decoding/fsck to `git receive-pack` in a private projection, then imports through a scratch NewGit repo with existing Git commit IDs mapped back to canonical snapshots. Under the NewGit transaction lock, the old advertised Git tip is mapped to the canonical ref and CAS-checked before immutable objects are promoted; accepted branch creates, fast-forward and forced non-fast-forward updates, deletions, plus lightweight-tag creates/deletions are journal-committed together. No Git pack format was added to the NewGit core.

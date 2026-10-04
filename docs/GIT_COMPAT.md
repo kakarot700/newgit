@@ -202,7 +202,12 @@ environment and does not claim other Git versions or operating systems.
 5. **No direct incremental NewGit-object/Git-remote bridge**: import/export
    conversion remains whole-history. A separate smart-HTTP adapter supports
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
-   (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A separately
+   (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A real-Git
+   loopback regression also verifies `clone --depth=1`, `fetch --deepen=1`, and
+   `fetch --unshallow`, followed by ordinary fetch and pull; this is established
+   only for Git 2.43.0/Linux. Each request still materializes the complete
+   temporary Git projection, so shallow transfer does not make that export
+   incremental. A separately
    tested receive-pack slice accepts write-authenticated branch creates,
    fast-forward or forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions
    per request, including an initial push to an empty repository. Existing tags

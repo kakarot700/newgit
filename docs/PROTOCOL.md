@@ -52,6 +52,16 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
+A separate Git 2.43.0/Linux loopback regression verifies `clone --depth=1`
+creates a one-commit shallow checkout, `fetch --deepen=1` extends its history,
+and `fetch --unshallow` restores the full history. After unshallowing, ordinary
+`fetch` and `pull --ff-only` still advance the branch and worktree. This is
+standard Git upload-pack shallow negotiation; NewGit retains its complete
+canonical history, and each request still materializes the full temporary Git
+projection before Git negotiates the transferred pack. Other Git versions and
+platforms are not established by this test. Evidence:
+`tests/git_remote_e2e.rs::real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http`.
+
 The write-side receive-pack adapter accepts protocol versions 0 and 1. For
 version 1, the server delegates the standard `version 1` advertisement packet
 and receive-pack exchange to the installed Git executable, passing the validated

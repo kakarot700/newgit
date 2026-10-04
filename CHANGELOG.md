@@ -5,6 +5,11 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Added
+- Real Git 2.43.0/Linux loopback coverage now proves the smart-HTTP read path
+  supports `clone --depth=1`, `fetch --deepen=1`, and `fetch --unshallow`, then
+  ordinary fetch and pull to a new remote commit. This uses standard Git
+  upload-pack shallow negotiation; every request still exports a full temporary
+  projection from NewGit's canonical history.
 - Git smart-HTTP receive-pack advertises Git's `atomic` capability and accepts
   branch creates, fast-forward and forced non-fast-forward updates, and deletions
   plus lightweight tag creates/deletions. Accepted refs and imported objects are
