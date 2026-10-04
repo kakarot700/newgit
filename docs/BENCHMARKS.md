@@ -18,11 +18,11 @@ cpu: Intel(R) Xeon(R) Processor @ 2.60GHz   (shared-cloud vCPU, 1 core visible)
 mem: 2032608 kB (~2 GB)
 os: Linux 6.1.158+
 newgit: 0.1.0 (release profile, lto=thin, strip)
-workdir: /tmp (sandboxed overlay filesystem)
+workdir: temporary directory on overlay-backed storage
 date: 2026-10-04
 ```
 
-> These are sandbox numbers on a shared vCPU with an overlay FS — treat
+> These are shared-vCPU numbers from Linux with overlay-backed storage — treat
 > them as a **baseline and regression reference**, not as marketing peak
 > performance. Two consecutive full runs agreed within ~10% on every
 > median; the table below is the second run. A third run after the

@@ -129,11 +129,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   deterministic — CI drift gate); LICENSE-MIT + LICENSE-APACHE added.
 - DONE: reproducibility check — two clean release builds, bit-identical binary
   (sha256 abcd51c8…; same-host scope, KL #37).
-- DONE: cargo-audit RUN in-sandbox: 1290 advisories × 63 crates → zero findings;
+- DONE: recorded local cargo-audit run: 1290 advisories × 63 crates → zero findings;
   cargo-deny RUN: advisories/bans/licenses/sources all ok; all 8 runtime
   build.rs scripts read & classified (no network); deny.toml committed.
 - DONE: CI hardened (fake chaos knob removed; SBOM drift + audit + deny + dist +
-  reproducibility jobs) — defined, not runner-executed (honest note kept).
+  reproducibility jobs) — hosted execution was still pending at this historical checkpoint.
 - DONE: docs set complete — DEPLOYMENT.md (systemd/nginx/caddy/tunnel), TESTING.md,
   TROUBLESHOOTING.md, CONTRIBUTING.md; README index updated.
 
@@ -147,6 +147,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   278/278 release ✓ (chaos/fault/fuzz included), SBOM drift ✓, cargo-audit ✓ 0 findings,
   cargo-deny ✓ all-ok, dual-target rebuild bit-identical (sha256 30714184…), dist 28/28 ✓.
 - DONE: RELEASE_READINESS.md filled gate-by-gate; evidence-based classification:
-  **PRODUCTION-CANDIDATE** — every gate passes locally EXCEPT "CI green on hosted runner",
-  which is unsatisfiable from this sandbox (no GitHub remote); all its underlying checks have
-  been executed here. Full report: docs/COMPLETION_REPORT.md.
+  **PRODUCTION-CANDIDATE** — at implementation completion, hosted CI had not yet run;
+  the current publication result is recorded in RELEASE_READINESS.md and
+  docs/COMPLETION_REPORT.md.

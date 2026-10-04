@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible problem in NewGit
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before reporting, check the [troubleshooting guide](https://github.com/kakarot700/newgit/blob/main/docs/TROUBLESHOOTING.md) and search existing issues. Do not include secrets or private repository data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: State the observed behavior and why it is unexpected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest safe sequence of commands and any relevant output.
+      placeholder: |
+        1. Initialize a temporary repository
+        2. Run `newgit ...`
+        3. Observe the error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include `newgit --version`, operating system, architecture, Rust version if built from source, and system Git version if relevant.
+      render: text
+    validations:
+      required: true

@@ -6,12 +6,11 @@ Latest full run recorded at the bottom (updated each iteration).
 ## Commands
 
 ```bash
-export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
-cd /home/user/newgit
+# Run these commands from the repository root; rustup reads rust-toolchain.toml.
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                          # unit (src/**) + integration (tests/**)
-cargo test --release                # same suites, optimized (chaos uses this)
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked                 # unit (src/**) + integration (tests/**)
+cargo test --release --locked       # same suites, optimized (chaos uses this)
 ```
 
 ## Layer map

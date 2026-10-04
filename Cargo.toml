@@ -6,7 +6,7 @@ rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 description = "NewGit: an agent-native version-control system"
 readme = "README.md"
-repository = "https://example.invalid/newgit"
+repository = "https://github.com/kakarot700/newgit"
 
 [dependencies]
 sha2 = "0.10"

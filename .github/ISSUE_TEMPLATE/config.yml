@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/kakarot700/newgit/blob/main/docs/TROUBLESHOOTING.md
+    about: Check common symptoms and fixes before opening an issue.
+  - name: Report a security vulnerability privately
+    url: https://github.com/kakarot700/newgit/security/advisories/new
+    about: Use private vulnerability reporting; do not post exploit details publicly.

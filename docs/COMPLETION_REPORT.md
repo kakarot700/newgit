@@ -123,7 +123,7 @@ a test (it12: 3 findings → 3 fixes → regressions in 3 existing suites).
   and binds stdio only.
 * Accepted risks are enumerated, not hidden (THREAT_MODEL §7 rows; KL list).
 
-## 5. Benchmarks (docs/BENCHMARKS.md — real runs, release, sandbox vCPU)
+## 5. Benchmarks (docs/BENCHMARKS.md — real runs, release, shared Linux vCPU)
 
 put_blob 1KiB ≈ 0.10 ms (≈10k obj/s) · snapshot 1000 files: 61 ms cold
 (min 50), 2.3 ms warm · status: 1.8 ms cached / 4.8 ms cold · diff_trees
@@ -192,7 +192,7 @@ python3 scripts/sbom.py | diff -u SBOM.md -      # clean (no dependency drift)
 cargo audit                                      # 1290 advisories × 63 crates → 0 findings
 cargo deny check advisories bans licenses sources # advisories ok, bans ok, licenses ok, sources ok
 cargo build --release --locked                   # sha256 30714184e3e4c9a2…
-CARGO_TARGET_DIR=/var/tmp/ng-repro12 cargo build --release --locked
+CARGO_TARGET_DIR=<second-clean-target> cargo build --release --locked
                                                  # identical sha256 (bit-reproducible, same host)
 bash scripts/dist.sh --skip-build                # dist tarball bbafe611…
 (cd dist/newgit-0.1.0-x86_64-unknown-linux-gnu && sha256sum -c SHA256SUMS.txt)  # 28/28 OK

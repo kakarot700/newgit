@@ -16,8 +16,9 @@ pub fn temp_repo() -> (tempfile::TempDir, Repo) {
     (dir, repo)
 }
 
-pub fn faultlab_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_newgit-faultlab")
+pub fn faultlab_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_newgit-faultlab")
+        .expect("Cargo must provide CARGO_BIN_EXE_newgit-faultlab for integration tests")
 }
 
 /// Run faultlab in a child process; `faults` sets NEWGIT_FAULTS.

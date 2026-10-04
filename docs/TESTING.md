@@ -46,9 +46,9 @@ holds (they never are; see DECISIONS D-009/D-015).
 
 ## Rules this project holds itself to
 
-1. **No fake passes.** A test that cannot run (e.g. CI-only workflows, no
-   hosted runner in the sandbox) is DOCUMENTED as not executed — never
-   claimed green.
+1. **No fake passes.** Record the exact command, commit, environment, and result
+   for every gate. Mark hosted CI or platform checks pending until the actual
+   run completes; never infer a green result from local equivalents.
 2. **No weakened tests.** Failing tests get fixed at the root cause; a test
    is only edited when the test itself encodes a wrong expectation, with the
    reason in the commit message.

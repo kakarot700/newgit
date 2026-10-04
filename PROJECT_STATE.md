@@ -5,36 +5,27 @@
 
 ## Current status
 
-- **Phase:** ALL 12 ITERATIONS COMPLETE (2026-10-04). Iteration 12 (final forensic audit) found 3 real issues in the newest seams — ALL FIXED with regression tests: (1) /v1/diff internal-spec probe (check_wire_spec, 400 invalid; regression inside internal_namespaces_never_cross_the_wire), (2) unbounded workflow listings (cap at max_batch_objects + additive `truncated` flag on ListData), (3) MCP flag-shaped positionals (`--` separator before every bare positional; dash-value test cases). README quickstart executed VERBATIM end-to-end against the built binary (verify: 19 objects, 0 errors). Final gates ALL re-run on final code: fmt ✓, clippy -D warnings ✓, 278/278 debug ✓, 278/278 release ✓, SBOM drift ✓, cargo-audit 0 findings ✓, cargo-deny all-ok ✓, dual-target rebuild bit-identical (sha256 30714184e3e4c9a2d4d28821b7cc1995171c259b07fc9ac7c98c5c7b822a4858), dist tarball bbafe611… 28/28 checksums ✓.
-- **Classification:** **PRODUCTION-CANDIDATE** (RELEASE_READINESS.md decision block): every gate passes with evidence EXCEPT "CI green on hosted runner" — unsatisfiable from this sandbox (no GitHub remote); all underlying checks executed locally. Conversion to READY: push to GitHub, watch CI pass once, re-run dist on runner.
-- **Final deliverable:** docs/COMPLETION_REPORT.md (architecture, feature/test inventories, security findings, benchmarks, compatibility, deployment, limitations, decision, exact commands+results).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **278/278** ✓ (128 unit + 6 chaos + 16 cli-e2e + 4 concurrency + 8 diff + 8 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 16 remote-e2e + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release; re-run due it11).
+- **Phase:** The 12 implementation iterations are complete. Public-repository setup and hosted validation are in progress.
+- **Classification:** **PRODUCTION-CANDIDATE**, not Production Ready. Local checks pass; hosted GitHub Actions, CodeQL, repository security settings, and the mandatory clean-clone run remain release gates.
+- **Local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check all pass on the pinned Rust 1.99.0 toolchain.
+- **Secret and workflow checks:** Gitleaks v8.30.1 found 0 findings in the worktree and in 14 commits reachable via refs/reflogs; actionlint v1.7.12 reports no errors in the two Actions workflows.
+- **Final deliverable:** the preserved development history plus the public GitHub repository, release decision, and updated completion/readiness report.
 
-## Environment / how to resume
+## Local development setup
+
+Run from the repository root. The checked-in toolchain file pins Rust 1.99.0;
+`rustup` installs that toolchain when Cargo is first invoked in the checkout.
+System Git 2.20 or newer is required for Git import/export and those tests.
 
 ```bash
-# Toolchain lives outside the repo snapshot. /tmp is a 993 MB tmpfs — do NOT
-# install there; use /var/tmp (root fs, 20 GB free). If the sandbox is
-# recycled the toolchain is gone and must be reinstalled (~2 min):
-#   curl -sSf https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init -o /tmp/rustup-init
-#   chmod +x /tmp/rustup-init
-#   RUSTUP_HOME=/var/tmp/rustup CARGO_HOME=/var/tmp/cargo \
-#     /tmp/rustup-init -y --default-toolchain stable --profile minimal \
-#     --component clippy,rustfmt --no-modify-path
-#   rm -rf /tmp/rustup-init            # free the tmpfs
-export RUSTUP_HOME=/var/tmp/rustup CARGO_HOME=/var/tmp/cargo
-export PATH=/var/tmp/cargo/bin:$PATH
-export RUSTUP_TOOLCHAIN=stable   # pinned "1.99.0" in rust-toolchain.toml would
-                                 # otherwise trigger a second full download
-cd /home/user/newgit
-cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo test --release --locked
 ```
 
-Rust 1.99.0 stable (pinned in rust-toolchain.toml). System `git` 2.47
-available (used by git interop tests). 2 CPUs, 2 GB RAM — keep test
-parallelism modest; avoid heavyweight dev-dependencies. Cargo registry +
-`target/` are outside the snapshot, so a fresh sandbox needs one full
-rebuild (~2 min) before the suite runs.
+These are the reproducible contributor commands; they do not depend on a
+machine-specific Cargo or Rustup directory.
 
 ## Repository layout (as of now)
 
@@ -66,8 +57,8 @@ src/
   bin/newgit-faultlab.rs           # crash-test harness child process
   bin/newgit-bench.rs              # benchmark harness (no bench deps)
 tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e,verify_gc,chaos,fuzz_parsers,git_compat,remote_e2e}.rs
-docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,AGENT_GUIDE,BENCHMARKS,GIT_COMPAT,PROTOCOL}.md
-.github/workflows/ci.yml           # GitHub Actions fmt/clippy/test (exists since it3; cannot execute in sandbox — no GitHub remote; it11 extends: audit, SBOM, release builds)
+  docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,AGENT_GUIDE,BENCHMARKS,GIT_COMPAT,PROTOCOL}.md
+.github/workflows/ci.yml           # GitHub Actions checks, dependency security, reproducible packaging, and tag releases
 ```
 
 ## What exists and works (verified by tests)
@@ -457,13 +448,13 @@ None.
   (proc-macro crates + build-edge deps = build-time): 21 runtime, 7
   build-time (proc-macro2/quote/syn/unicode-ident/version_check/serde_derive/
   thiserror-impl), 34 dev-only. Drift gate: `sbom.py | diff -u SBOM.md -`.
-- Reproducibility: sha256 abcd51c89b717d00dec8cce561504626e415fb3f2278f4936f349e0b8ae0ae3d
-  for BOTH target/release/newgit and CARGO_TARGET_DIR=/var/tmp/ng-target2 clean
-  rebuild; rustc 1.99.0 = rust-toolchain.toml pin; profile: lto=thin,
-  debug=false, strip=true.
-- cargo-audit 0.22.2 installed to /var/tmp/cargo/bin (4.5 min compile);
-  `cargo audit` → 1290 advisories, 63 locked crates, ZERO findings, exit 0.
-  Advisory DB cached at /var/tmp/cargo/advisory-db (github reachable).
+- Reproducibility: the archived same-host check used two separate clean release
+  target directories and recorded identical binary hashes; Rust 1.99.0 is
+  pinned in rust-toolchain.toml; profile: lto=thin, debug=false, strip=true.
+- cargo-audit 0.22.2 was installed for the original audit run; `cargo audit`
+  reported 1290 advisories and 63 locked crates with ZERO findings. The local
+  installation and advisory-database cache locations are intentionally omitted;
+  hosted CI re-runs the audit against its current database.
 - build.rs audit (vendored sources read): crc32fast(35L), generic-array(5L),
   libc(605L), serde(69L), serde_core(113L), serde_json(30L), thiserror(195L),
   zmij(45L) — all Command::new uses are rustc probes; libc also
@@ -490,8 +481,8 @@ None.
   TESTING.md (layers table, fault injection, 5 no-fake rules),
   TROUBLESHOOTING.md (exit codes, symptom→fix; locks are <path>.lock files,
   tokens.json = {"tokens":[{id,sha256,role}]}), CONTRIBUTING.md (rules,
-  gates, code map). KL #37 (repro scope), #38 (audit snapshot/cargo-deny
-  unexecuted); KL #27 expanded (client-side TLS). THREAT_MODEL §G rewritten
+  gates, code map). KL #37 (repro scope), #38 (advisory-database snapshot and
+  hosted workflow pending at that checkpoint); KL #27 expanded (client-side TLS). THREAT_MODEL §G rewritten
   with run data + artifact-tampering row. README index complete + license
   files linked.
 - NEWGIT_LOG=1 is the obs env var (NOT NEWGIT_DEBUG).
@@ -513,18 +504,18 @@ None.
 - Classification decided: PRODUCTION-CANDIDATE (single blocked gate: hosted CI).
 - 11 commits on main so far (one per iteration); this final commit makes 12.
 
-## Current task (next iteration)
+## Current task (publication)
 
-**NONE — the 12-iteration plan is COMPLETE.** The loop's standing directive
-is fulfilled: docs/COMPLETION_REPORT.md is the final deliverable. Any future
-work starts from ROADMAP post-1.0 candidates (client-side TLS/protocol v2,
-UI mutations, packed objects, horizontal scale) and must obey
-docs/CONTRIBUTING.md (gates, no-fake rules, docs discipline).
+Local verification and pre-push security scanning are complete. Remaining
+steps are to publish the preserved `main` history, observe the real hosted CI
+and CodeQL results, enable the appropriate GitHub security settings, update
+the readiness record with those results, tag only after the final commit is
+verified, then test a clean clone of the published repository and its release
+artifacts.
 
-## Next tasks (ordered)
-
-(none — plan complete; see docs/COMPLETION_REPORT.md §9 for the CANDIDATE→READY
-conversion steps, which require a GitHub remote this environment does not have.)
+Future product work should start from the post-1.0 candidates in ROADMAP.md
+(client-side TLS/protocol v2, UI mutations, packed objects, and horizontal
+scale) and follow docs/CONTRIBUTING.md.
 
 ## Important decisions (full log in DECISIONS.md)
 
@@ -538,7 +529,8 @@ conversion steps, which require a GitHub remote this environment does not have.)
 ## Commands
 
 ```bash
-cargo test                     # unit + integration
-cargo test --release           # perf-sensitive suites (chaos)
-NEWGIT_CHAOS_ITERATIONS=500 cargo test --release --test chaos
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo test --release --locked
 ```
