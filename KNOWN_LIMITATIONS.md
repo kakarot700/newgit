@@ -89,7 +89,9 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     before object promotion. The receive-pack wire command carries no force flag,
     so a custom write-authenticated client can send the same non-fast-forward
     command without `--force`; explicit-force intent is not server-verifiable.
-    Signed pushes, non-v0 receive-pack, Git-over-SSH, and
+    A receive-pack `version=2` request falls back to conventional v0 framing;
+    protocol-v2 push itself is not implemented. Signed pushes, receive-pack v2
+    framing, Git-over-SSH, and
     GitHub/GitLab hosting features are not implemented. Every request rebuilds a temporary
     Git view from NewGit's canonical objects/refs. If a process or storage
     failure interrupts promotion of immutable objects, unreachable objects may

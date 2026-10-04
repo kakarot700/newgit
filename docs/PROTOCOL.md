@@ -52,6 +52,14 @@ local NewGit-backed server, and verifies refs, commit/tree behavior, and blob
 bytes. The recorded environment is Git 2.43.0 on Linux; no wider version or
 platform matrix is claimed.
 
+The write-side receive-pack adapter accepts protocol versions 0 and 1. For
+version 1, the server delegates the standard `version 1` advertisement packet
+and receive-pack exchange to the installed Git executable, passing the validated
+version on both discovery and POST requests. A real Git 2.43.0 test verifies the
+v1 advertisement and completes an atomic branch push. A request for receive-pack protocol version 2 is answered and processed with
+the conventional v0 framing, matching Git 2.43 receive-pack behavior. This is a
+fallback, not v2 push support; other unsupported versions are refused.
+
 **Bounded write policy:** receive-pack accepts branch creates, fast-forward or
 forced non-fast-forward updates, and deletions under `refs/heads/*`, plus lightweight tag creates or
 deletions under `refs/tags/*`; this includes a first branch push to an empty
@@ -79,10 +87,12 @@ requires its old object ID to map to the canonical old tip, then rechecks that
 tip with CAS under the transaction lock before promoting objects. A custom
 write-authenticated client can submit the same non-fast-forward wire command
 without a force flag, so explicit force intent cannot be enforced server-side.
-Signed pushes and protocol versions other than v0 are refused. A branch such as `refs/heads/main` maps
+Signed pushes remain refused. Receive-pack protocol version 2 falls back to v0
+rather than enabling v2 push framing; other unsupported versions are refused. A
+branch such as `refs/heads/main` maps
 to NewGit's `refs/main`; `refs/tags/v1` maps to NewGit's `refs/tags/v1`. Unmapped
 names must pass NewGit's ref-name validation. Actual Git 2.43.0/Linux tests cover
-branch and tag creation/deletion, atomic branch-plus-tag creation, unauthorized
+branch and tag creation/deletion, protocol-v1 atomic branch creation, a `protocol.version=2` atomic push via v0 fallback, atomic branch-plus-tag creation, unauthorized
 and invalid-tag rejection without canonical mutation, ordinary stale-push and
 mismatched-lease rejection, matching `--force-with-lease` and `--force` success,
 forced atomic-batch rejection without canonical mutation, and post-force

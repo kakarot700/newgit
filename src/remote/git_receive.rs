@@ -28,24 +28,29 @@ struct PushCommand {
     ref_name: String,
 }
 
-/// This receive-pack adapter currently implements the conventional v0 HTTP
-/// exchange only. Reject an explicit alternate protocol rather than replying
-/// with the wrong wire framing.
-pub fn validate_git_protocol(value: Option<&str>) -> Result<()> {
+/// Receive-pack uses the conventional push exchange for v0 and v1; v1 adds
+/// its version packet to the advertisement. A v2 request is deliberately
+/// downgraded to v0 because Git has no receive-pack v2 push command here.
+pub fn validate_git_protocol(value: Option<&str>) -> Result<Option<&'static str>> {
     match value.map(str::trim) {
-        None | Some("") | Some("version=0") => Ok(()),
+        None | Some("") | Some("version=0") | Some("version=2") => Ok(None),
+        Some("version=1") => Ok(Some("version=1")),
         Some(other) => Err(Error::Protocol(format!(
-            "Git receive-pack supports protocol version 0 only, got {other:?}"
+            "Git receive-pack supports protocol versions 0 and 1 only, got {other:?}"
         ))),
     }
 }
 
 /// Return the standard smart-HTTP service advertisement using Git's own
 /// receive-pack implementation over an isolated NewGit-backed projection.
-pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
+pub fn advertise(
+    repo: &Repo,
+    git_protocol: Option<&str>,
+    max_response_bytes: u64,
+) -> Result<Vec<u8>> {
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let (view, _) = TempGitView::from_newgit_with_export(repo, deadline)?;
-    let mut command = receive_pack_command(&view, true);
+    let mut command = receive_pack_command(&view, true, git_protocol);
     let (status, payload) = run_git(&view, &mut command, None, max_response_bytes, deadline)?;
     if !status.success() {
         return Err(Error::Protocol(format!(
@@ -74,6 +79,7 @@ pub fn advertise(repo: &Repo, max_response_bytes: u64) -> Result<Vec<u8>> {
 pub fn receive_pack(
     repo: &Repo,
     request: &[u8],
+    git_protocol: Option<&str>,
     max_response_bytes: u64,
     principal: &str,
 ) -> Result<Vec<u8>> {
@@ -136,7 +142,7 @@ pub fn receive_pack(
     }
 
     ensure_batch_ref_names_do_not_conflict(&newgit_names)?;
-    let mut command = receive_pack_command(&view, false);
+    let mut command = receive_pack_command(&view, false, git_protocol);
     let (status, response) = run_git(
         &view,
         &mut command,
@@ -422,7 +428,11 @@ fn git_ref_fallback_newgit_name(ref_name: &str) -> Result<String> {
     }
 }
 
-fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
+fn receive_pack_command(
+    view: &TempGitView,
+    advertise: bool,
+    git_protocol: Option<&str>,
+) -> Command {
     let mut command = Command::new("git");
     command
         .args([
@@ -457,6 +467,9 @@ fn receive_pack_command(view: &TempGitView, advertise: bool) -> Command {
         .env("GIT_CONFIG_GLOBAL", &view.global_config)
         .env("GIT_CONFIG_COUNT", "0");
     git_http::isolate_git_environment(&mut command);
+    if let Some(protocol) = git_protocol {
+        command.env("GIT_PROTOCOL", protocol);
+    }
     command
 }
 
@@ -679,8 +692,8 @@ fn git_deadline_error() -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_no_ref_name_conflict, parse_push_command, validate_lightweight_tag_target,
-        validate_sha1, ZERO_SHA1,
+        ensure_no_ref_name_conflict, parse_push_command, validate_git_protocol,
+        validate_lightweight_tag_target, validate_sha1, ZERO_SHA1,
     };
     use crate::repo::txn::{self, Cas, RefLogEntry, TxnOp};
     use crate::repo::Repo;
@@ -696,6 +709,18 @@ mod tests {
         let mut out = pkt(command);
         out.extend_from_slice(b"0000PACK");
         out
+    }
+
+    #[test]
+    fn receive_pack_supports_v0_v1_and_falls_back_from_v2() {
+        assert_eq!(validate_git_protocol(None).unwrap(), None);
+        assert_eq!(validate_git_protocol(Some("version=0")).unwrap(), None);
+        assert_eq!(
+            validate_git_protocol(Some("version=1")).unwrap(),
+            Some("version=1")
+        );
+        assert_eq!(validate_git_protocol(Some("version=2")).unwrap(), None);
+        assert!(validate_git_protocol(Some("version=3")).is_err());
     }
 
     #[test]

@@ -311,7 +311,7 @@ fn route_git_http(
                 ))
             } else if req.query[0].1 == "git-receive-pack" {
                 git_receive::validate_git_protocol(req.header("git-protocol"))
-                    .and_then(|_| git_receive::advertise(repo, cfg.max_body))
+                    .and_then(|protocol| git_receive::advertise(repo, protocol, cfg.max_body))
                     .map(|body| ("application/x-git-receive-pack-advertisement", body))
                     .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string()))
             } else if req.query[0].1 != "git-upload-pack" {
@@ -366,9 +366,11 @@ fn route_git_http(
                 ))
             } else {
                 match git_receive::validate_git_protocol(req.header("git-protocol")) {
-                    Ok(()) => git_receive::receive_pack(repo, &req.body, cfg.max_body, &who)
-                        .map(|body| ("application/x-git-receive-pack-result", body))
-                        .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string())),
+                    Ok(protocol) => {
+                        git_receive::receive_pack(repo, &req.body, protocol, cfg.max_body, &who)
+                            .map(|body| ("application/x-git-receive-pack-result", body))
+                            .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string()))
+                    }
                     Err(e) => Err((http::status_for_error(&e), e.category(), e.to_string())),
                 }
             }

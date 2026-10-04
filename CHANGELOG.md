@@ -8,7 +8,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 - Git smart-HTTP receive-pack advertises Git's `atomic` capability and accepts
   branch creates, fast-forward and forced non-fast-forward updates, and deletions
   plus lightweight tag creates/deletions. Accepted refs and imported objects are
-  CAS-committed in one NewGit transaction. Real-Git CLI coverage includes
+  CAS-committed in one NewGit transaction. Receive-pack now supports protocol
+  v0 and v1; a real Git 2.43.0 test checks the v1 advertisement and completes an
+  atomic branch push. A protocol-v2 receive-pack request receives the conventional v0 fallback (not v2 push support); signed pushes remain refused.
+  Real-Git CLI coverage includes
   ordinary stale-push and mismatched-lease rejection, successful matching
   `--force-with-lease` and `--force` updates, atomic annotated-tag rejection
   without canonical mutation, and post-force clone/fetch. The receive-pack wire

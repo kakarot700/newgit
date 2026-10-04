@@ -222,7 +222,11 @@ environment and does not claim other Git versions or operating systems.
    objects. Receive-pack does not transmit a force flag, so the server cannot
    distinguish an explicit CLI force from a custom client's equivalent wire
    command; explicit-force behavior is a standard-Git-client contract, not a
-   server-verifiable property. Signed pushes remain refused. Both directions rematerialize a complete temporary Git projection
+   server-verifiable property. Receive-pack protocol v0 and v1 are supported;
+   a real Git 2.43.0 atomic v1 branch push and its `version 1` advertisement
+   are tested. A `version=2` request falls back to v0 (not v2 push support); signed
+pushes remain refused. Both
+   directions rematerialize a complete temporary Git projection
    for every HTTP request; pack negotiation does not avoid the full NewGit-to-Git
    export. Git over SSH remains unsupported. See [protocol
    details](PROTOCOL.md#git-smart-http-compatibility) and the [evidence

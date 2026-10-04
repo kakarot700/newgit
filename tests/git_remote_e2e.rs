@@ -165,10 +165,20 @@ fn raw_git_receive_get_status(addr: SocketAddr, authorization: Option<&str>) -> 
 }
 
 fn raw_git_receive_advertisement(addr: SocketAddr, authorization: &str) -> Vec<u8> {
+    raw_git_receive_advertisement_with_protocol(addr, authorization, None)
+}
+fn raw_git_receive_advertisement_with_protocol(
+    addr: SocketAddr,
+    authorization: &str,
+    git_protocol: Option<&str>,
+) -> Vec<u8> {
     let mut stream = TcpStream::connect(addr).unwrap();
+    let protocol = git_protocol
+        .map(|value| format!("Git-Protocol: {value}\r\n"))
+        .unwrap_or_default();
     write!(
         stream,
-        "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {authorization}\r\nConnection: close\r\n\r\n"
+        "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {authorization}\r\n{protocol}Connection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = Vec::new();
@@ -399,6 +409,28 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         String::from_utf8_lossy(&receive_advertisement).contains(" atomic "),
         "receive-pack must advertise the atomic capability: {:?}",
         String::from_utf8_lossy(&receive_advertisement)
+    );
+    let receive_v1_advertisement =
+        raw_git_receive_advertisement_with_protocol(server.addr(), &write_auth, Some("version=1"));
+    let receive_v1_text = String::from_utf8_lossy(&receive_v1_advertisement);
+    assert!(
+        receive_v1_text.contains("000eversion 1\n"),
+        "receive-pack v1 must include its version packet: {receive_v1_text:?}"
+    );
+    assert!(
+        receive_v1_text.contains(" atomic "),
+        "receive-pack v1 must retain the atomic capability: {receive_v1_text:?}"
+    );
+    let receive_v2_fallback =
+        raw_git_receive_advertisement_with_protocol(server.addr(), &write_auth, Some("version=2"));
+    let receive_v2_text = String::from_utf8_lossy(&receive_v2_fallback);
+    assert!(
+        !receive_v2_text.contains("version 1") && !receive_v2_text.contains("version 2"),
+        "receive-pack must fall back to v0 framing for a v2 request: {receive_v2_text:?}"
+    );
+    assert!(
+        receive_v2_text.contains(" atomic "),
+        "the v0 fallback must retain the atomic capability: {receive_v2_text:?}"
     );
     let clone_path = root.join("clone");
     let clone_path_str = clone_path.to_str().unwrap();
@@ -660,14 +692,33 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
     // New Git branch names map to canonical NewGit refs/<name> refs.
     git(&[
         "-c",
+        "protocol.version=1",
+        "-c",
         &write_auth_config,
         "-C",
         clone_path_str,
         "push",
+        "--atomic",
         "origin",
         "main:refs/heads/published",
     ]);
     assert_eq!(newgit.refs.read("refs/published").unwrap(), pushed_tip);
+    git(&[
+        "-c",
+        "protocol.version=2",
+        "-c",
+        &write_auth_config,
+        "-C",
+        clone_path_str,
+        "push",
+        "--atomic",
+        "origin",
+        "main:refs/heads/v2-requested-fallback",
+    ]);
+    assert_eq!(
+        newgit.refs.read("refs/v2-requested-fallback").unwrap(),
+        pushed_tip
+    );
 
     // One `git push --atomic` updates an existing branch, advances another
     // existing branch, and creates a third branch. Git's projection-side
