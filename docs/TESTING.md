@@ -24,6 +24,13 @@ The PR-only dependency-review job and tag-only release job were skipped on
 this push event; a version tag invokes a separate release workflow gated on
 the functional, security, and distribution jobs.
 
+The C-quoted UTF-8 Git-path implementation, commit
+`b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`, passed [GitHub CI run
+37202630994](https://github.com/kakarot700/newgit/actions/runs/37202630994) and
+[CodeQL run 37202630998](https://github.com/kakarot700/newgit/actions/runs/37202630998)
+on that exact SHA. CI passed the dependency/SBOM checks, formatting, Clippy,
+debug and release tests, release build, reproducible package, and checksums.
+
 An independent clean clone at commit `b648079` also passed the locked build,
 all 278 debug and release tests, the README install/CLI quick start, an agent
 workflow that exercised the explicit `proposal approve` CLI step under a test

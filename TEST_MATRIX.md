@@ -79,3 +79,7 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 - Hosted checks passed on implementation SHA
   `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2`: [CI run 37201393466](https://github.com/kakarot700/newgit/actions/runs/37201393466),
   [CodeQL run 37201393416](https://github.com/kakarot700/newgit/actions/runs/37201393416).
+- The C-quoted UTF-8 pathname implementation SHA `b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`
+  passed [hosted CI run 37202630994](https://github.com/kakarot700/newgit/actions/runs/37202630994)
+  and [CodeQL run 37202630998](https://github.com/kakarot700/newgit/actions/runs/37202630998)
+  on the exact SHA.

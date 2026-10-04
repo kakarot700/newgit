@@ -75,8 +75,10 @@
   tests passed as part of both complete suites (286 debug and 286 release).
   `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
   `cargo build --release --locked`, SBOM drift check, and `git diff --check`
-  all passed. Hosted checks are pending for the new branch head and are not
-  claimed until GitHub reports them.
+  all passed. Hosted GitHub CI [run 37202630994](https://github.com/kakarot700/newgit/actions/runs/37202630994)
+  and CodeQL [run 37202630998](https://github.com/kakarot700/newgit/actions/runs/37202630998)
+  both completed successfully on implementation SHA
+  `b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`.
 
 ## Local development setup
 
