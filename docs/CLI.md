@@ -227,9 +227,105 @@ to `refs/heads/X`.
 Flags: `--json` (`{ok,data:{commits,blobs,refs_exported,refs_skipped,head,
 target}}`), `--repo/-C`, `--debug`.
 
+## Remote commands (iteration 9) — protocol v1, docs/PROTOCOL.md
+
+### serve
+
+```
+newgit serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
+             [--max-body BYTES] [--max-threads N]
+```
+
+Runs the HTTP/1.1 + JSON protocol-v1 server for the current repo; blocks
+until killed. `--bind` accepts port `0` (ephemeral), in which case the real
+address is announced on stdout as
+`newgit serve: listening on http://HOST:PORT (protocol v1)` — parse that
+line in scripts/tests. Default bind `127.0.0.1:8787` (loopback only:
+publishing means choosing to). No TLS in v1 — terminate TLS at a reverse
+proxy. Exit 2 on bad flag values, non-zero with `cannot bind …` on an
+occupied port.
+
+### token add|list|remove
+
+```
+newgit token add <id> --role read|write|admin [--token RAW] [--token-file P]
+newgit token list [--token-file P]
+newgit token remove <id> [--token-file P]
+```
+
+Server credential management. Without `--token`, a 32-byte OS-CSPRNG token
+is generated and printed **exactly once** (`--json` ⇒
+`{id, role, token}`); only its SHA-256 is stored (`<repo>/.newgit/tokens.json`,
+0600). `list` prints id+role and never leaks token material. Duplicate ids
+or duplicate token values are rejected.
+
+### remote add|list|remove
+
+```
+newgit remote add <name> <http://host[:port]> [--token T]
+newgit remote list        # token shown as set|none, never the value
+newgit remote remove <name>
+```
+
+Client-side remote registry in `.newgit/remotes.json` (0600). URLs must be
+plain `http://host[:port]` — `https://` and URL paths are rejected with an
+actionable message (exit 2) because v1 has no TLS and no path routing.
+
+### push
+
+```
+newgit push <remote> [ref…] [--all] [--force]
+```
+
+Uploads what the server lacks and moves server refs in one transaction.
+Default ref selection: the ref HEAD points at; `--all` = every local ref
+outside internal namespaces. Non-fast-forward pushes are REFUSED (exit 5,
+`conflict`) unless `--force`: the observed server tip must exist locally and
+be an ancestor of the local tip. Concurrent pushers are serialized by the
+wire CAS — the loser exits 4 (`cas_failed`) and can retry. JSON data:
+`{remote, url, refs_pushed, objects_sent, bytes_sent, had_probe_requests}`.
+
+### pull
+
+```
+newgit pull <remote> [ref…]
+```
+
+Negotiates (`have` = local ref tips + HEAD), fetches only missing objects
+(each re-verified locally: digest, id match, dependency presence), then
+moves local refs in ONE transaction CAS'd against the tips observed at
+start. **HEAD and workspaces are untouched** — this is `fetch` semantics by
+design: integrate explicitly so agents control their working state.
+Re-running is a no-op report (`refs_up_to_date`). JSON data:
+`{remote, url, refs_updated, refs_up_to_date, objects_received,
+bytes_received, txn_id}`.
+
+### audit
+
+```
+newgit audit [-n N]
+```
+
+Tails the server's append-only audit log (`.newgit/audit.log`): `ts_ms`,
+principal (token id / `anonymous` / `bad-token`), method, path, HTTP status,
+error category. Every request is logged including 401/403/409 failures; no
+token material is ever recorded. `--json` ⇒ `{entries:[…], count:N}`.
+
+### Remote exit codes
+
+| code | meaning |
+|---|---|
+| 0 | success |
+| 2 | usage (bad flag/url/subcommand) |
+| 3 | protocol/repo error (server unreachable, bad envelope, unknown endpoint) |
+| 4 | CAS race on the wire — retry |
+| 5 | non-fast-forward refusal — pull/integrate first, or `--force` |
+| 6 | limit exceeded (batch/body) |
+| 7 | authentication or authorization failure |
+
 ## Coming in later iterations
 
-`remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
+`ui` (it10).
 
 ## Agent usage notes
 

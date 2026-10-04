@@ -4,6 +4,42 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 9 — 2026-10-04)
+- **Remote protocol v1 + server + client (docs/PROTOCOL.md, D-017)** — new
+  `src/remote/` layer, std-only, zero new dependencies:
+  - `newgit serve [--bind host:port]` — hand-rolled total HTTP/1.1 server
+    (thread-per-connection, bounded pool ⇒ 429, 30 s IO timeouts,
+    Content-Length checked before reading, port-0 announcement line for
+    scripts/tests). Endpoints: `/healthz`, `/v1/info`, `/v1/refs`,
+    `/v1/have`, `/v1/negotiate`, `/v1/objects/get`, `/v1/objects/put`,
+    `/v1/refs/update`, `/v1/audit` — CLI-identical `{ok,data|error}`
+    envelopes, stable category→HTTP-status mapping, `X-NewGit-Protocol`
+    version negotiation with actionable mismatch errors.
+  - Auth: bearer tokens (32-byte OS-CSPRNG, SHA-256 at rest, 0600 file),
+    roles read<write<admin, invalid token never downgrades to anonymous;
+    `newgit token add|list|remove` (raw token printed exactly once, never
+    listed). Append-only audit log (`.newgit/audit.log`) records every
+    request including failures; readable via `/v1/audit` (admin) or
+    `newgit audit`.
+  - `newgit remote add|list|remove` (`.newgit/remotes.json`, tokens masked
+    in listings), `newgit push` (negotiated incremental upload via batched
+    have-probes; dependency-ordered batches; **non-fast-forward refusal**
+    ⇒ exit 5 unless `--force`; refs move server-side in ONE CAS
+    transaction), `newgit pull` (server-side closure-delta negotiation,
+    per-object local re-validation of digest/id/dependencies, local refs
+    move in one CAS transaction; HEAD/workspaces untouched — fetch
+    semantics by design).
+  - Server-side **link-closure invariant**: remote object writes are
+    refused unless every dependency is already stored, which makes
+    "have X ⇒ hold closure(X)" true and lets negotiation prune safely.
+- Tests: `tests/remote_e2e.rs` (14 suites, real TCP, no mocks) · 2 CLI
+  remote suites (serve child + full command contracts) · HTTP/wire-struct
+  fuzz sweep (`fuzz_http_and_wire_json_never_panic`, 20k inputs) · 15 new
+  lib unit tests (http framing, auth, audit, negotiate post-order).
+- Docs: docs/PROTOCOL.md (normative v1 spec), CLI.md remote sections +
+  remote exit-code table, THREAT_MODEL §D/§E rows now ✅ with test names,
+  SECURITY_MODEL realized, TEST_MATRIX I20–I24, KNOWN_LIMITATIONS #27–32.
+
 ### Added (iteration 8 — 2026-10-04)
 - **Git compatibility (D-007/D-016, docs/GIT_COMPAT.md)** — new `src/gitio/`
   layer, zero new dependencies, uses the *system git's own stream formats*:

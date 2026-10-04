@@ -89,10 +89,16 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - Compatibility tests against real git repos (history, trees, modes, messages).
 - Migration guide + exact documented limitations.
 
-## Iteration 9 — Remote protocol + server  [ ]
-- Versioned JSON/HTTP v1 protocol doc; minimal HTTP/1.1 server (std only).
-- push/pull (object negotiation, batched transfer), refs CAS over the wire.
-- Auth (hashed bearer tokens, roles), audit log, request limits; parser fuzz tests.
+## Iteration 9 — Remote protocol + server  [x] ✅ 2026-10-04
+- DONE: docs/PROTOCOL.md (normative v1); std-only HTTP/1.1 server
+  (`newgit serve`, bounded threads, timeouts, size caps, port-0 announcement).
+- DONE: negotiated push/pull (have-probe BFS + closure-delta, dependency-
+  ordered batches, incremental: re-push sends 0 objects), refs CAS in one
+  server-side transaction, non-fast-forward refusal (git semantics).
+- DONE: bearer tokens hashed at rest + roles read/write/admin + audit log
+  (`newgit token`, `newgit audit`); invalid tokens never downgrade.
+- DONE: 14 remote_e2e suites (real TCP) + 2 CLI suites + HTTP/wire fuzz
+  sweep; THREAT_MODEL §E fully realized with test names; D-017.
 
 ## Iteration 10 — Web UI + agent API + MCP  [ ]
 - Embedded single-file UI: dashboard, history, changes, goals, proposals, evidence,

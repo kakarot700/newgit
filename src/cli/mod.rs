@@ -9,6 +9,7 @@
 //!   are handled in iteration 9 with the same rule).
 
 pub mod args;
+mod remote_cmds;
 pub mod workflow_cmds;
 
 use std::path::{Path, PathBuf};
@@ -139,6 +140,9 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "config" => cmd_config(ctx, tail),
         "import-git" => cmd_import_git(ctx, tail),
         "export-git" => cmd_export_git(ctx, tail),
+        "serve" | "remote" | "push" | "pull" | "fetch" | "token" | "audit" => {
+            remote_cmds::dispatch(ctx, cmd, tail)
+        }
         "verify" | "fsck" => cmd_verify(ctx, tail),
         "gc" => cmd_gc(ctx, tail),
         "recover" => cmd_recover(ctx, tail),
@@ -227,6 +231,17 @@ Workflow (goals / changes / evidence / evaluations / proposals):
 Git interop (system git required; D-007):
   import-git <git-repo>        stream a git repo in (fast-export; atomic ref switch)
   export-git <target-dir>      stream history out (fast-import; target must be empty)
+
+Remote (HTTP/1.1 + JSON protocol v1; docs/PROTOCOL.md):
+  serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
+                               run the remote server (blocks; Ctrl-C stops)
+  remote add <name> <url> [--token T] | list | remove <name>
+  push <remote> [refs…] [--all] [--force]
+                               upload missing objects + CAS-move refs (one txn)
+  pull <remote> [refs…]        negotiate + fetch missing objects, move refs (one txn)
+  token add <id> --role read|write|admin [--token-file P] [--token RAW]
+  token list | remove <id>     server credential management (raw token shown once)
+  audit [-n N]                 show the server audit log (who/what/status/when)
 
 Maintenance:
   verify [--deep]              integrity check (fsck); exit 3 on errors

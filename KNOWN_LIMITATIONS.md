@@ -98,3 +98,24 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     ref grammar are skipped and reported.
 26. Git interop requires a **system git ≥ ~2.20** on PATH (tested against
     2.47). Everything else in NewGit works without git installed.
+27. Remote protocol v1 is **plain HTTP** — no TLS, no request signing.
+    Deploy behind a TLS-terminating reverse proxy (documented); tokens
+    travel as bearer credentials, so an unencrypted network exposes them.
+    Loopback-only default bind reflects this.
+28. Wire encoding is JSON + base64 (~33% payload inflation, JSON parse
+    cost). Fine at v1 scale; binary framing is a v2 candidate. No
+    keep-alive/pipelining: one request per connection.
+29. One server process serves ONE repository (the one it was started in);
+    no multi-repo routing, no URL paths. `git`-style smart-HTTP discovery
+    is out of scope — NewGit remotes are NewGit servers.
+30. `push` non-fast-forward checking and negotiation walk object closures
+    client-side (RAM/CPU proportional to reachable history, like verify/gc);
+    every connection reopens the repo (recovery scan). Acceptable at v1
+    scale; documented for huge repos.
+31. No transfer resume: an interrupted push/pull restarts the batch stream
+    (objects already stored are skipped via negotiation, so retries are
+    cheap but not free).
+32. `pull` never touches HEAD or workspaces (fetch semantics by design);
+    there is no remote-side merge — integrate locally and explicitly.
+    Git remotes cannot be pushed to / pulled from incrementally (iteration
+    8's import/export are whole-history one-shots).

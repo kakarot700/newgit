@@ -182,3 +182,37 @@ also undo the integration without rewriting history).
 * Never fabricate identities: `--author` is display metadata; authenticated
   identity arrives with remote auth (iteration 9) and is kept separate
   (SECURITY_MODEL §4).
+
+
+## Remote collaboration (protocol v1)
+
+Two agents on different machines share goals through a NewGit server — same
+honesty rules, now over the wire (full spec: docs/PROTOCOL.md):
+
+```bash
+# ── host ──────────────────────────────────────────────────────────────
+newgit token add agent-b --role write     # raw token printed ONCE; store it
+newgit serve --bind 0.0.0.0:8787          # TLS via reverse proxy in production
+
+# ── agent B's machine ─────────────────────────────────────────────────
+newgit remote add origin http://host:8787 --token <raw-token>
+newgit pull origin                        # refs only — HEAD/workspace untouched
+newgit integrate --ref refs/main -w ws-b  # agent B controls integration explicitly
+# … work, snapshot, evidence, proposals as above …
+newgit push origin refs/ws-b              # non-fast-forward pushes are refused (exit 5)
+
+# ── anyone with an admin token ────────────────────────────────────────
+newgit audit                              # every remote action: who/what/status/when
+```
+
+Agent-relevant contracts:
+
+* `push` fails with exit 5 (`conflict`) when the server moved ahead in a
+  non-ancestor way — `pull`, integrate, retry. Exit 4 (`cas_failed`) means
+  a concurrent pusher won the race — just retry.
+* Exit 7 (`auth`) means the token is missing, wrong, or under-privileged.
+  Tokens are never echoed by `remote list`/`token list`/`audit`.
+* `pull` re-validates every object (digest, id, dependencies) before
+  storing: a compromised server cannot corrupt the local repo.
+* Prefer `--json`; `data.refs_pushed`, `data.objects_sent`,
+  `data.refs_updated` make sync progress machine-readable.

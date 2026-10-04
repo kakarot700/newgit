@@ -128,6 +128,33 @@ fn fuzz_hex_base64_refnames_never_panic() {
 }
 
 #[test]
+fn fuzz_http_and_wire_json_never_panic() {
+    use newgit::remote::http::{percent_decode, read_request};
+    use newgit::remote::proto::{HaveReq, NegotiateReq, ObjectsPutReq, RefsUpdateReq};
+    // Prefix-anchored with real HTTP framing so garbage lands inside header
+    // parsing, Content-Length body reads, and query decoding.
+    let prefixes: [&[u8]; 4] = [
+        b"GET /v1/info HTTP/1.1\r\n",
+        b"POST /v1/objects/put HTTP/1.1\r\nContent-Length: 12\r\n\r\n{\"oids\":[",
+        b"POST /v1/refs/update?limit=9 HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer ",
+        b"GET /a%2",
+    ];
+    let mut rng = Rng(0xF00F_0008);
+    for i in 0..ITERS {
+        let bytes = rng.bytes(Some(prefixes[i % prefixes.len()]));
+        let mut cur = bytes.as_slice();
+        let _ = read_request(&mut cur, 1024);
+        // wire structs against garbage JSON strings
+        let s = rng.string(None);
+        let _: Result<HaveReq, _> = serde_json::from_str(&s);
+        let _: Result<NegotiateReq, _> = serde_json::from_str(&s);
+        let _: Result<ObjectsPutReq, _> = serde_json::from_str(&s);
+        let _: Result<RefsUpdateReq, _> = serde_json::from_str(&s);
+        let _ = percent_decode(&s);
+    }
+}
+
+#[test]
 fn fuzz_fastexport_parser_never_panics() {
     use newgit::gitio::fastexport::Parser;
     // Prefix-anchored with real fast-export framing so garbage lands deep

@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 8 of 12 complete — Git compatibility landed; no remote/auth, web UI, or release engineering yet).
+**Current classification: NOT PRODUCTION READY** (iteration 9 of 12 complete — Git compatibility and remote protocol/auth landed; no web UI, release engineering, or CI yet).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -23,7 +23,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] crash-safe object writes (tmp→fsync→rename→dir fsync) + fault hooks — iteration 1
 - [x] crash recovery for transactions (forward recovery, quarantine, dedup) — iteration 2 ✅ (5 abort scenarios)
 - [x] corruption detection (digest, misfiling, truncation, bombs) — iteration 1
-- [x→partial] concurrency testing: refs/txn races ✅ it2; integrate serialization ✅ it5; remote races due it9
+- [x] concurrency testing: refs/txn races ✅ it2; integrate serialization ✅ it5; remote push races + concurrent connections ✅ it9
 - [x] failure injection suite end-to-end — iterations 2–7 ✅ (30+ fault-point scenarios via newgit-faultlab)
 - [x] recovery verification (chaos) — iteration 7 ✅ (tests/chaos.rs: 6 seeds × random ops × random kills; per-step deep-verify invariant)
 - [x] safe gc — iteration 7 ✅ (non-destructive mark-sweep, D-014; `gc_*` suites + chaos end-of-seed)
@@ -33,10 +33,10 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] path safety + parser hardening tests — iteration 1
 - [ ] dependency review + SBOM + cargo-audit/deny — iteration 11
 - [x] no unsafe code (`#![forbid(unsafe_code)]`), no implicit execution — DESIGN + iteration 1
-- [ ] access control (remote authn/authz) tested — iteration 9
+- [x] access control (remote authn/authz) tested — iteration 9 ✅ (bearer tokens hashed at rest, roles read<write<admin, invalid-token-never-anonymous, authz before every mutation, audit log of every request incl. failures; tested in remote_e2e + cli_e2e exit-code contracts)
 
 ## QUALITY
-- [x] unit tests (108) + integration/e2e (73) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (7) + git-compat (9) + misc (2) — iterations 1–8 (237 total)
+- [x] unit tests (123) + integration/e2e (89, incl. 14 remote + 9 git-compat) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (8) + misc (11) — iterations 1–9 (269 total)
 - [x] integration/E2E/property/fuzz/chaos suites ✅ it2–7; regression discipline active (chaos seeds grow per bug found)
 
 ## PERFORMANCE
@@ -47,7 +47,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## DOCUMENTATION
 - [x] README, ARCHITECTURE, STORAGE_FORMAT, SECURITY_MODEL, THREAT_MODEL — iteration 1
-- [x→partial] CLI reference ✅ it3; protocol reference, agent guide, migration guide, contributor/testing/troubleshooting/deployment — iterations 8–11
+- [x→partial] CLI reference ✅ it3 (remote sections it9); protocol reference ✅ it9 (docs/PROTOCOL.md); git compat/migration ✅ it8 (docs/GIT_COMPAT.md); agent guide ✅ (docs/AGENT_WORKFLOW.md); contributor/testing/troubleshooting/deployment — iterations 10–11
 
 ## RELEASE
 - [ ] clean reproducible build + artifacts + checksums — iteration 11

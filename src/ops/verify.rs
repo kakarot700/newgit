@@ -789,6 +789,62 @@ pub fn verify_ok(repo: &Repo) -> Result<VerifyReport> {
 /// Follows every link type, including `extras.prev` chain links (older
 /// Goal/Change/Proposal versions are reachable through the chain audit
 /// trail and must never be collected).
+/// Every object id `obj` depends on (its links), including chain-audit
+/// `extras.prev` links. Single source of truth for reachability walks
+/// (gc, verify, remote negotiation).
+pub fn object_links(obj: &Object) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    let extras = match obj {
+        Object::Goal(g) => Some(&g.extras),
+        Object::Change(c) => Some(&c.extras),
+        Object::Proposal(p) => Some(&p.extras),
+        _ => None,
+    };
+    if let Some(ex) = extras {
+        if let Some(hex) = ex.get("prev") {
+            if let Ok(p) = ObjectId::from_hex(hex) {
+                out.push(p);
+            }
+        }
+    }
+    match obj {
+        Object::Tree(t) => out.extend(t.entries.iter().map(|e| e.oid)),
+        Object::Snapshot(s) => {
+            out.push(s.root);
+            out.push(s.author);
+            out.extend(s.parents.iter().copied());
+            out.extend(s.goal);
+            out.extend(s.change);
+        }
+        Object::Goal(g) => out.push(g.creator),
+        Object::Change(c) => {
+            out.push(c.base);
+            out.push(c.result);
+            out.push(c.author);
+            out.extend(c.evidence.iter().copied());
+        }
+        Object::Evidence(e) => {
+            out.push(e.producer);
+            out.extend(e.target);
+            out.extend(e.output);
+        }
+        Object::Evaluation(v) => {
+            out.push(v.target);
+            out.push(v.evaluator);
+        }
+        Object::Proposal(p) => {
+            out.push(p.change);
+            out.push(p.base);
+            out.push(p.author);
+            out.extend(p.evidence.iter().copied());
+            out.extend(p.depends_on.iter().copied());
+            out.extend(p.approvals.iter().map(|(a, _)| *a));
+        }
+        Object::Actor(_) | Object::Blob(_) => {}
+    }
+    out
+}
+
 pub fn reachable(repo: &Repo, roots: &[ObjectId]) -> (BTreeSet<ObjectId>, Vec<ObjectId>) {
     let mut seen = BTreeSet::new();
     let mut missing = Vec::new();
@@ -808,55 +864,7 @@ pub fn reachable(repo: &Repo, roots: &[ObjectId]) -> (BTreeSet<ObjectId>, Vec<Ob
                 continue;
             }
         };
-        // Chain audit links live in extras.prev (hex string).
-        let extras = match &obj {
-            Object::Goal(g) => Some(&g.extras),
-            Object::Change(c) => Some(&c.extras),
-            Object::Proposal(p) => Some(&p.extras),
-            _ => None,
-        };
-        if let Some(ex) = extras {
-            if let Some(hex) = ex.get("prev") {
-                if let Ok(p) = ObjectId::from_hex(hex) {
-                    stack.push(p);
-                }
-            }
-        }
-        match obj {
-            Object::Tree(t) => stack.extend(t.entries.iter().map(|e| e.oid)),
-            Object::Snapshot(s) => {
-                stack.push(s.root);
-                stack.push(s.author);
-                stack.extend(s.parents.iter().copied());
-                stack.extend(s.goal);
-                stack.extend(s.change);
-            }
-            Object::Goal(g) => stack.push(g.creator),
-            Object::Change(c) => {
-                stack.push(c.base);
-                stack.push(c.result);
-                stack.push(c.author);
-                stack.extend(c.evidence.iter().copied());
-            }
-            Object::Evidence(e) => {
-                stack.push(e.producer);
-                stack.extend(e.target);
-                stack.extend(e.output);
-            }
-            Object::Evaluation(v) => {
-                stack.push(v.target);
-                stack.push(v.evaluator);
-            }
-            Object::Proposal(p) => {
-                stack.push(p.change);
-                stack.push(p.base);
-                stack.push(p.author);
-                stack.extend(p.evidence.iter().copied());
-                stack.extend(p.depends_on.iter().copied());
-                stack.extend(p.approvals.iter().map(|(a, _)| *a));
-            }
-            Object::Actor(_) | Object::Blob(_) => {}
-        }
+        stack.extend(object_links(&obj));
     }
     (seen, missing)
 }

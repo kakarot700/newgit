@@ -19,6 +19,7 @@ pub mod merge;
 pub mod object;
 pub mod obs;
 pub mod ops;
+pub mod remote;
 pub mod repo;
 pub mod util;
 

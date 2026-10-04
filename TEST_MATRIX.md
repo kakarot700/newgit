@@ -21,11 +21,12 @@ cargo test --release                # same suites, optimized (chaos uses this)
 | Unit | `src/**/mod tests` | hex, varint (incl. non-minimal/truncation), fsx (atomic write, locks, stale reclaim, path traversal, symlink escape), ObjectId determinism, all 9 type codecs roundtrip + garbage rejection, envelope (bit-flip, truncation sweep, type mismatch, decompression bomb), ostore (roundtrip, idempotent put, corruption, misfiling, truncation, iter/prefix, limits, temp sweep), config parse/reject | ✅ iter 1 |
 | Property | `tests/property_core.rs` | hex/varint/base64 roundtrips; blob/tree/snapshot/actor canonical roundtrips; total decoder (no panics on arbitrary bytes); envelope single-bit-flip detection; canonical uniqueness under re-sort; **diff reconstructs + deterministic** | ✅ iter 2–4 (11 suites × 256 cases) |
 | Integration | `tests/txn_recovery.rs`, `tests/ops_snapshot.rs`, `tests/version.rs`, `tests/verify_gc.rs` | ref CRUD/CAS/reflog, txn atomicity, quarantine, snapshot/status/history/workspace cycles, checkout safety, VERSION sync, **verify corruption classes + read-only invariant, gc reachability/grace/forensics/debris** | ✅ iter 2–7 |
-| E2E (CLI) | `tests/cli_e2e.rs` | full workflow, JSON envelopes, exit codes, discovery, determinism, debug logging, merge/rollback flows, **two-agent goal workflow**, **verify/gc/recover contract (exit 3, forensics)**, **import-git/export-git CLI contracts + error exits** | ✅ iter 3–8 (12 suites) |
+| E2E (CLI) | `tests/cli_e2e.rs` | full workflow, JSON envelopes, exit codes, discovery, determinism, debug logging, merge/rollback flows, **two-agent goal workflow**, **verify/gc/recover contract (exit 3, forensics)**, **import-git/export-git CLI contracts + error exits**, **serve/token/remote/push/pull/audit contracts + exit codes 2/3/5/7** | ✅ iter 3–9 (14 suites) |
 | Concurrency | `tests/concurrency_refs.rs` | CAS races (one winner/version, reflog count equality), parallel multi-ref txns, concurrent object writes, concurrent open/recover vs writers | ✅ iter 2 (workspace races: iter 3) |
 | Crash/failure injection | `tests/txn_recovery.rs` + `newgit-faultlab` | child-process aborts at 5 txn fault points; forward-recovery, partial-apply completion, reflog dedup, quarantine | ✅ iter 2 (ostore crash points: iter 3) |
 | Chaos | `tests/chaos.rs` | 6 fixed xorshift64* seeds × 14–25 random ops (snapshot/ws-create/integrate/put-blob/txn-set) killed at random fault points; after EVERY step: auto-recovery, deep verify zero errors, refs resolve, status computes; end-of-seed gc + history walk | ✅ iter 7 (6 suites) |
-| Fuzz-like | `tests/fuzz_parsers.rs` | 130k seeded prefix-anchored garbage inputs vs envelope/canonical/index/journal/config/hex/base64/ref-grammar + **fast-export stream** parsers (no panics, no OOM); remote-protocol parsers join in iter 9 | ✅ iter 7–8 (7 suites) |
+| Fuzz-like | `tests/fuzz_parsers.rs` | 150k seeded prefix-anchored garbage inputs vs envelope/canonical/index/journal/config/hex/base64/ref-grammar/fast-export + **HTTP request framing, percent-decoding and all remote wire structs** (no panics, no OOM) | ✅ iter 7–9 (8 suites) |
+| E2E (remote) | `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | REAL in-process server + REAL TCP client (no mocks): info/healthz anonymous, refs gating, role matrix (read/write/admin ⇒ 401/403 boundaries), bad token never downgrades, push→pull oid + object-universe equality, incremental push (0 objects on re-push), non-fast-forward refusal + wire CAS (one winner), dependency-order + corrupt-envelope rejection on put, batch/body limits, internal namespaces never cross, audit content + ordering, concurrent pushes to different refs, crash-mid-push leaves server clean and retry reuses orphans, negotiate superset + post-order, protocol-version and URL validation. CLI: `serve` port-0 announcement line, `token add/list` (no leaks), `remote add/list/remove`, `push`/`pull`/`audit` `--json` envelopes, exit codes 2/3/5/7, bind-conflict and not-a-repo errors | ✅ iter 9 (14 + 2 suites) |
 | Compatibility | `tests/git_compat.rs` | REAL system-git repos (branches, merges, annotated+light tags, binary, symlink, exec bit, unicode, renames, empty commits, distinct author/committer, remotes+notes refs): import equality vs `ls-tree`/`cat-file`/`log`, import determinism, export round-trip (byte-identical blob SHAs + identity multiset + clean worktree), submodule refusal atomicity, empty repo, ref-move atomicity, export refusals, reimport stability | ✅ iter 8 (9 suites) |
 | Performance | `src/bin/newgit-bench.rs` + docs/BENCHMARKS.md | put_blob / snapshot 1k+5k cold+warm / status cached+uncached / diff / history / integrate / verify / gc — real recorded numbers + regression policy | ✅ iter 7 (release re-check: iter 11) |
 
@@ -52,13 +53,18 @@ cargo test --release                # same suites, optimized (chaos uses this)
 | I17 | git import is deterministic (same repo ⇒ same oids) | `import_is_deterministic` ✅ |
 | I18 | unsupported git content (submodules) fails loudly and atomically — zero refs move | `submodule_import_is_refused_atomically` ✅ |
 | I19 | export→reimport is a fixpoint on trees/messages | `reimport_after_export_is_stable` ✅ |
+| I20 | remote store is link-closed: "server has X" ⇒ "server has closure(X)"; out-of-order/corrupt objects refused | `dependency_order_enforced_on_put`, `crash_mid_push_leaves_server_clean_and_retry_succeeds` ✅ |
+| I21 | refs never move without authority: authn+authz before mutation, CAS over the wire, non-fast-forward refused | `roles_enforced_reader_writer_admin`, `push_cas_race_one_winner_clean_loser`, `info_anonymous_and_refs_gated`, cli_e2e exit-7 contracts ✅ |
+| I22 | a remote can never inject an unverifiable or dangling object into a local repo | `push_pull_roundtrip_oid_equality` (object-universe equality + deep verify), pull-side envelope/id/dependency re-validation ✅ |
+| I23 | no secret is ever emitted: token list, remote list, audit log, error messages | cli_e2e `remote_cli_push_pull_serve_token_audit`, `audit_log_records_who_what_result` ✅ |
+| I24 | interrupted remote operations leave both repos verifiable and unchanged in visible state | `crash_mid_push_leaves_server_clean_and_retry_succeeds`, `push_cas_race_one_winner_clean_loser` ✅ |
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (iteration 8)
-- `cargo test`: **237 passed; 0 failed** (108 lib unit, 6 chaos, 12 cli_e2e,
-  4 concurrency_refs, 8 diff_engine, 7 fuzz_parsers, 9 git_compat,
-  18 merge_integrate, 13 ops_snapshot, 12 property_core, 10 txn_recovery,
-  20 verify_gc, 1 version, 9 workflow)
+- Date: 2026-10-04 (iteration 9)
+- `cargo test`: **269 passed; 0 failed** (123 lib unit, 6 chaos, 14 cli_e2e,
+  4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers, 9 git_compat,
+  18 merge_integrate, 13 ops_snapshot, 12 property_core, 14 remote_e2e,
+  10 txn_recovery, 20 verify_gc, 1 version, 9 workflow)
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo fmt --check`: clean

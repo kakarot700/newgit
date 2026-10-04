@@ -46,8 +46,13 @@ confused (`deterministic`, `ai_generated`).
   blob round-trip, deterministic import, atomic ref moves, and exact
   documented limitations (docs/GIT_COMPAT.md) — no faking, no git
   reimplementation.
+- **Self-hostable remotes** — `newgit serve` is a built-in HTTP/1.1 + JSON
+  server (protocol v1, std-only, no framework): bearer tokens hashed at
+  rest, roles, append-only audit log, negotiated incremental push/pull with
+  non-fast-forward protection and CAS ref transactions. Zero-rupee: run it
+  on any box; TLS via your reverse proxy.
 - **Zero-rupee, self-hostable** — 5 small runtime dependencies, no cloud,
-  no paid services, single static binary + optional built-in server/web UI.
+  no paid services, single static binary + built-in server (web UI: iteration 10).
 
 ## Quickstart (real, working syntax — full transcript in docs/AGENT_WORKFLOW.md)
 
@@ -74,6 +79,20 @@ newgit goal set-status <goal-id> achieved
 newgit verify && newgit history --goal <goal-id>
 ```
 
+Remote sync (two machines/agents sharing a goal):
+
+```bash
+# host: publish the repo (loopback by default; TLS via reverse proxy)
+newgit token add ci-bot --role write          # prints the raw token ONCE
+newgit serve --bind 0.0.0.0:8787
+
+# client: register, exchange history
+newgit remote add origin http://host:8787 --token <raw-token>
+newgit push origin --all                      # negotiated, non-FF-safe
+newgit pull origin                            # fetch semantics: refs only, integrate explicitly
+newgit audit                                  # who did what, when, with what result
+```
+
 All commands support `--json` for agents and scripts; exit codes are stable
 (see `src/error.rs::exit_code`).
 
@@ -90,7 +109,12 @@ All commands support `--json` for agents and scripts; exit codes are stable
 | [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) | honest bounds |
 | [CHANGELOG.md](CHANGELOG.md) | per-iteration changes |
 | [RELEASE_READINESS.md](RELEASE_READINESS.md) | production gate status |
-| docs/CLI.md, docs/PROTOCOL.md, docs/AGENT_GUIDE.md, docs/GIT_MIGRATION.md, docs/TESTING.md, docs/BENCHMARKS.md, docs/DEPLOYMENT.md, docs/CONTRIBUTING.md, docs/TROUBLESHOOTING.md | land with their iterations |
+| [docs/CLI.md](docs/CLI.md) | full command reference + exit codes |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | normative remote protocol v1 spec |
+| [docs/GIT_COMPAT.md](docs/GIT_COMPAT.md) | git import/export mapping + guarantees + limits |
+| [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) | two-agent goal workflow, real transcript |
+| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | recorded real benchmark runs |
+| docs/AGENT_GUIDE.md, docs/TESTING.md, docs/DEPLOYMENT.md, docs/CONTRIBUTING.md, docs/TROUBLESHOOTING.md | land with iterations 10–11 |
 
 ## Building
 

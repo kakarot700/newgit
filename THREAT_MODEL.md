@@ -50,17 +50,20 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Command/shell injection | no shell anywhere; fixed argv for git subprocess | git_compat tests (it8) |
 | Ambiguous id prefixes | ≥4 hex, unique-match requirement, loud ambiguity error | `iter_and_prefix` ✅ |
 | Arg parsing bombs (huge values) | limits at parse; no unbounded allocation | (it3) pending |
-| Secrets in output/logs | never print token material; audit excludes secrets | (it9) pending |
+| Secrets in output/logs | never print token material; audit excludes secrets | cli_e2e token/remote-list no-leak assertions ✅ |
 
-## E. Remote protocol (it9)
+## E. Remote protocol (it9 — REALIZED)
 
 | Threat | Mitigation | Test |
 |---|---|---|
-| Unauthenticated mutation | bearer tokens (hashed at rest), roles, authz before mutation | pending(it9) |
-| Malformed HTTP/JSON | strict parser with size/count limits; total decoder | fuzz suite pending(it9) |
-| Object smuggling (bad id/content) | every received object digest-verified before store; type/limit checks | pending(it9) |
-| Ref force-push / history rewrite | CAS with expected-old; admin-only force flag; audit-logged | pending(it9) |
-| DoS (huge bodies, slowloris) | request size caps, read timeouts, bounded threads | pending(it9) |
+| Unauthenticated mutation | bearer tokens (SHA-256 at rest), roles read<write<admin, authz checked before every mutation; invalid token never downgrades to anonymous | `roles_enforced_reader_writer_admin`, `info_anonymous_and_refs_gated`, cli_e2e exit-7 contracts ✅ |
+| Malformed HTTP/JSON | total parser: request-line/header/body caps checked pre-allocation, chunked refused, wire structs strictly typed | `fuzz_http_and_wire_json_never_panic` + http unit tests ✅ |
+| Object smuggling (bad id/content) | envelope digest+id re-verified on receipt (both directions); **link-closure invariant**: put refused unless all dependencies stored ⇒ no dangling objects can enter | `dependency_order_enforced_on_put`, `push_pull_roundtrip_oid_equality` ✅ |
+| Ref force-push / history rewrite | client non-fast-forward guard (exit 5) + wire CAS `exactly(old)` in one transaction; `--force` is explicit, writer-role only, audit-logged; overwritten objects never destroyed | `push_cas_race_one_winner_clean_loser` ✅ |
+| DoS (huge bodies, slowloris) | Content-Length cap pre-read (413), batch caps, 30 s IO timeouts, bounded thread pool (429), client-side timeouts | `limits_enforced_batch_and_body` ✅ |
+| Token/secret leakage | raw tokens printed once at creation; never listed, logged, or put in error messages; audit records ids only; token file 0600 | cli_e2e token/remote list assertions, `audit_log_records_who_what_result` ✅ |
+| Internal-state exfiltration/injection via refs | `workspaces/*` + `chains/*` invisible in listings (user ref grammar) AND explicitly refused by remote refs/update | `internal_namespaces_never_cross_the_wire` ✅ |
+| Interrupted transfer corruption | objects idempotent + refs atomic (one txn) on BOTH ends; crash between phases leaves orphans (gc fodder), zero visible change | `crash_mid_push_leaves_server_clean_and_retry_succeeds` ✅ |
 | SSRF (remote URLs) | client connects only to operator-provided host:port; no redirects followed | pending(it9) |
 | Confused deputy (server acts with client privileges) | per-request auth context; no ambient credentials; audit ties actions to token role | pending(it9) |
 | Replay | CAS semantics make replays no-ops or CAS failures | pending(it9) |

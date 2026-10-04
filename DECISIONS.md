@@ -305,3 +305,37 @@ Realizes D-007. Chosen after implementing and testing both directions:
 - Rejected: gitoxide/libgit2 dependency (supply chain + weight, violates
   D-002); reimplementing SHA-1 object format (huge surface, zero benefit);
   silent best-effort submodule import (faking).
+
+## D-017 · Remote protocol v1: JSON/HTTP on std, have-invariant negotiation, client-side FF guard (Iteration 9)
+
+- **Hand-rolled HTTP/1.1 + JSON over std sockets** (no hyper/axum/tokio):
+  the protocol needs exactly 9 endpoints with Content-Length framing; a
+  total 300-line parser is auditable and fuzzable, and keeps D-002 (tiny
+  dependency budget) intact. Cost: no keep-alive, no chunked, no HTTP/2 —
+  accepted (KL #28).
+- **Objects travel as self-verifying envelopes, re-validated on receipt**
+  (digest + id + canonical form + dependency presence). Neither side trusts
+  the other's oid claims; a corrupt or malicious peer cannot inject
+  dangling/corrupt objects (tests: dependency_order, roundtrip oid equality).
+- **Have-invariant**: remote `objects/put` refuses objects whose links are
+  not yet stored ⇒ every store is link-closed ⇒ "peer has X" safely prunes
+  negotiation at X without walking X's closure. This is what makes
+  incremental push cheap (re-push = 0 objects) and divergence-safe (pruned
+  oids need not exist locally).
+- **Push = client-side non-fast-forward guard + server-side CAS txn**:
+  the guard (server tip must be a local ancestor) gives git semantics
+  (stale clones cannot clobber; exit 5 with "pull first"); the CAS
+  `exactly(observed)` protects the observe→update window against
+  concurrent pushers (one winner, exit 4). `--force` is explicit and
+  audit-logged; overwritten objects are never destroyed (gc decides).
+- **Pull = fetch semantics** (refs only, HEAD/workspaces untouched):
+  NewGit's model integrates explicitly (workspaces, proposals, integrate);
+  an implicit merge on pull would bypass the evidence/proposal flow.
+- **Auth: random bearer tokens, SHA-256 at rest, roles read<write<admin.**
+  No user database, no OAuth, no TLS in v1 (reverse proxy does TLS —
+  zero-rupee, self-hostable). Invalid token ≠ anonymous (tested). Audit log
+  is append-only, best-effort (availability first), secrets-free.
+- Rejected: git smart-HTTP compatibility (huge surface, iteration 8 covers
+  git interop via files); libp2p/custom TCP protocol (debuggability, proxy
+  compatibility); async runtime (concurrency needs are modest: thread-per-
+  connection with a bounded pool passed the concurrent-push tests).

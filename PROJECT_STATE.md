@@ -5,22 +5,35 @@
 
 ## Current status
 
-- **Phase:** Iteration 8 COMPLETE — Git compatibility: `src/gitio/` (total fast-export parser + deterministic fast-import emitter), `newgit import-git`/`export-git`, 9 real-git compat suites, docs/GIT_COMPAT.md, D-016 (on top of iteration 7: verify/gc/recover/chaos/fuzz/benchmarks).
-- **Classification:** NOT PRODUCTION READY (no remote/auth, web UI, or release engineering yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **237/237** ✓ (108 unit + 6 chaos + 12 cli-e2e + 4 concurrency + 8 diff + 7 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release).
+- **Phase:** Iteration 9 COMPLETE — remote protocol v1: `src/remote/` (std-only HTTP/1.1 server + client, bearer-token auth w/ roles, audit log, negotiated push/pull), `newgit serve/remote/push/pull/token/audit`, docs/PROTOCOL.md, D-017, 14 remote_e2e suites over real TCP (on top of iteration 8: git import/export; iteration 7: verify/gc/chaos/fuzz/benchmarks).
+- **Classification:** NOT PRODUCTION READY (no web UI, release engineering, or CI yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **269/269** ✓ (123 unit + 6 chaos + 14 cli-e2e + 4 concurrency + 8 diff + 8 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 14 remote-e2e + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release).
 
 ## Environment / how to resume
 
 ```bash
-# Toolchain lives outside the repo snapshot:
-export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+# Toolchain lives outside the repo snapshot. /tmp is a 993 MB tmpfs — do NOT
+# install there; use /var/tmp (root fs, 20 GB free). If the sandbox is
+# recycled the toolchain is gone and must be reinstalled (~2 min):
+#   curl -sSf https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init -o /tmp/rustup-init
+#   chmod +x /tmp/rustup-init
+#   RUSTUP_HOME=/var/tmp/rustup CARGO_HOME=/var/tmp/cargo \
+#     /tmp/rustup-init -y --default-toolchain stable --profile minimal \
+#     --component clippy,rustfmt --no-modify-path
+#   rm -rf /tmp/rustup-init            # free the tmpfs
+export RUSTUP_HOME=/var/tmp/rustup CARGO_HOME=/var/tmp/cargo
+export PATH=/var/tmp/cargo/bin:$PATH
+export RUSTUP_TOOLCHAIN=stable   # pinned "1.99.0" in rust-toolchain.toml would
+                                 # otherwise trigger a second full download
 cd /home/user/newgit
 cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-Rust 1.99.0 stable (pinned in rust-toolchain.toml). System `git` available
-(used later by git interop tests). 2 CPUs, 2 GB RAM — keep test parallelism
-modest; avoid heavyweight dev-dependencies.
+Rust 1.99.0 stable (pinned in rust-toolchain.toml). System `git` 2.47
+available (used by git interop tests). 2 CPUs, 2 GB RAM — keep test
+parallelism modest; avoid heavyweight dev-dependencies. Cargo registry +
+`target/` are outside the snapshot, so a fresh sandbox needs one full
+rebuild (~2 min) before the suite runs.
 
 ## Repository layout (as of now)
 
@@ -41,15 +54,17 @@ src/
   ops/workflow.rs                # goals/changes/evidence/evaluations/proposals (chains)
   ops/verify.rs                  # fsck: coded Issues, deep link walk, reachable() for gc
   ops/gc.rs                      # non-destructive mark&sweep (D-014), grace window
+  gitio/{fastexport,import,export}.rs  # git interop: total parser, atomic import, deterministic export (D-016)
+  remote/{proto,http,auth,audit,negotiate,server,client}.rs  # protocol v1: wire types, HTTP, tokens/roles, audit, negotiation, server, push/pull (D-017)
   cli/workflow_cmds.rs           # workflow CLI command families
+  cli/remote_cmds.rs             # serve/remote/push/pull/token/audit commands
   cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
   bin/newgit-bench.rs              # benchmark harness (no bench deps)
-tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e,verify_gc,chaos,fuzz_parsers}.rs
-docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,BENCHMARKS}.md
-docs/                 # STORAGE_FORMAT.md (normative)
-.github/workflows/ci.yml
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e,verify_gc,chaos,fuzz_parsers,git_compat,remote_e2e}.rs
+docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW,BENCHMARKS,GIT_COMPAT,PROTOCOL}.md
+.github/workflows/ci.yml           # GitHub Actions fmt/clippy/test (exists since it3; cannot execute in sandbox — no GitHub remote; it11 extends: audit, SBOM, release builds)
 ```
 
 ## What exists and works (verified by tests)
@@ -222,6 +237,106 @@ None.
 - CLI e2e: verify/gc/recover contract test (exit codes, JSON envelopes,
   forensics preservation). 33 new tests total.
 
+## Iteration 9 outcome (facts for resume)
+
+- `src/remote/proto.rs`: PROTOCOL_VERSION=1; HDR_PROTOCOL="x-newgit-protocol";
+  is_internal_ref()=workspaces/|chains/; wire structs (serde): InfoData,
+  RefsData/RefEntry, HaveReq/Data, NegotiateReq/Data{send}, ObjectWire{data_b64},
+  ObjectsGetReq/ObjectsData, ObjectsPutReq/PutData, CasWire (tagged kind
+  any|exactly{old:Option}), RefUpdateWire, RefsUpdateReq/UpdateData, AuditData,
+  PushReport{remote,url,refs_pushed,objects_sent,bytes_sent,had_probe_requests},
+  PullReport{...,refs_updated,refs_up_to_date,objects_received,bytes_received,txn_id}.
+- `src/remote/http.rs`: total parser read_request(BufRead,max_body)->
+  Result<Request,(u16,String)>; caps MAX_REQUEST_LINE 16K/128 headers/64K total;
+  methods GET|POST|HEAD|PUT|DELETE else 405; HTTP/1.x only; origin-form paths
+  only; percent_decode total ('+'→space, bad %XX literal, lossy utf8); chunked
+  →501; CL required for body, cap→413; write_response(status,content_type,body)
+  with CL+Connection:close+protocol header; status_for_error: Auth→401,
+  CasFailed|LockBusy|Conflict→409, Limit→413, NotFound|RefNotFound|NotRepo→404,
+  Invalid|Malformed|InvalidRef|Protocol→400, else 500. 9 unit tests.
+- `src/remote/auth.rs`: Role read<write<admin (Ord); TokenFile{tokens:[{id,
+  sha256 hex,role}]}; hash_token=sha256 hex; generate_token=32B /dev/urandom
+  base64 (loud error if unavailable); load (missing→empty; malformed→Config;
+  id/sha checks) / save (atomic_write+0600 unix); authenticate(None header)→
+  Ok(None) anonymous, bad header→Err(Auth) NEVER downgrades; add() rejects dup
+  id/dup token/bad id chars; authorize(p,required)=role>=required. 4 unit tests.
+- `src/remote/audit.rs`: AuditLog::new(ng) → ng/audit.log; append(principal,
+  method,path,status,error_category) JSONL under FileLock+fsync, BEST-EFFORT
+  (failures→obs event only); tail(limit) skips damaged lines. 1 unit test.
+- `src/remote/negotiate.rs`: closure(repo,roots)=verify::reachable().0;
+  post_order(repo,roots,exclude:HashSet)->Vec dependencies-first, iterative
+  DFS (oid,expanded) stack, exclude prunes WITHOUT reading (peer vouches
+  closure), missing non-excluded object→Error::Protocol. 2 unit tests.
+- verify.rs refactor: `pub fn object_links(&Object)->Vec<ObjectId>` is now the
+  SINGLE SOURCE for links (incl. extras.prev chain links); reachable() uses it.
+- `src/remote/server.rs`: ServerConfig{bind,repo_root,token_file,
+  allow_anonymous_read,max_body 64MiB,max_threads 32}; spawn()→ServerHandle
+  {addr(),port(),shutdown()}; nonblocking accept + 50ms poll; thread-per-conn
+  bounded (AtomicUsize, over cap→429); IO_TIMEOUT 30s; repo+tokens reloaded
+  PER CONNECTION; routes: GET /healthz,/v1/info (anon), /v1/refs+/v1/audit
+  (GET) + POST /v1/have,/v1/negotiate,/v1/objects/get (read; anon iff
+  allow_anonymous_read), POST /v1/objects/put,/v1/refs/update (write),
+  GET /v1/audit (admin); unknown→404, wrong method→405; EVERY request
+  audit-logged (principal id | "anonymous" | "bad-token"); envelope
+  {ok,data|error{category,message}}.
+  - objects/put: b64→envelope::verify(max_object_bytes)→from_canonical→
+    object_links all contains (HAVE-INVARIANT: dependency-order enforced;
+    violation→400 "missing dependency") → put_canonical; sequential, first
+    error aborts batch (earlier objects remain = harmless orphans).
+  - refs/update: check_ref_name_system + is_internal_ref REFUSED + new oid
+    must be stored + ONE txn::execute with Cas mapping + RefLogEntry::system
+    ("remote update by <principal>[: msg]"); CAS fail→409 cas_failed.
+  - negotiate: have filtered to stored (superset semantics), want must all
+    exist (else 404), send=post_order(want, exclude=closure(have)); batch cap
+    max(max_batch_objects,10_000) for have/want args.
+  - listening_line(addr) prints "newgit serve: listening on http://ADDR
+    (protocol v1)" — CLI prints+flushes it (port-0 discovery contract, tested).
+- `src/remote/client.rs`: REMOTES_FILE=remotes.json (0600, token raw inside —
+  documented trust model); Remote{name,url,token}; load/save/add/remove/get;
+  validate_url: http://host[:port] ONLY (https→Invalid w/ "plain HTTP" hint,
+  paths refused, default port 80); Client::call(method,path,body)→data Value:
+  one request per connection, connect 10s/read 300s/write 60s timeouts,
+  read_response total (status line+headers+CL body; caps 64K head/2GiB body);
+  error mapping by (status,category): 401|403→Auth, (409,cas_failed)→CasFailed,
+  (409,lock_busy)→LockBusy, 409→Conflict, 413|limit→Limit, 404→RefNotFound,
+  malformed→Malformed, auth→Auth, else Protocol.
+  - push(repo,remote,refs,force): info (protocol check)→refs→NON-FF GUARD
+    (unless force: server tip must exist locally AND ∈ closure(local tip),
+    else Error::Conflict "non-fast-forward…pull first")→BFS have-probes
+    (batched /v1/have; descent stops at server-held oids)→send=post_order
+    (tips,exclude=known_server)→objects/put batches (raw envelope files b64)→
+    refs/update ONE txn cas exactly(observed server tip)|any(force).
+  - pull(repo,remote,filter): info→refs (internal filtered)→negotiate
+    {have:local tips+head, want:selected}→objects/get batches→PER-OBJECT
+    local re-validation (envelope::verify + id==requested + object_links all
+    contains)→put_canonical→local txn refs move cas exactly(observed local
+    tip), RefLogEntry "pull from remote…"; HEAD/workspaces UNTOUCHED (fetch
+    semantics by design, D-017).
+  - default_push_refs=HEAD symbolic name (detached→Invalid); all_push_refs=
+    refs.list minus internal (list itself never returns internal names —
+    user grammar filters them; double defense).
+- CLI (`src/cli/remote_cmds.rs`, dispatch in mod.rs): serve [--bind
+  --token-file --max-body --max-threads --allow-anonymous-read] (fails fast
+  on bad token file BEFORE bind; prints listening line; blocks in 1h sleeps;
+  --json prints {listening,protocol} then blocks); remote add|list|remove
+  (list masks tokens "set|none"); push <remote> [refs…|--all] [--force];
+  pull <remote> [refs…] (alias fetch); token add|list|remove [--role
+  --token --token-file]; audit [-n N] (text: ts/principal/method path/
+  status/error; json {entries,count}). Help section "Remote".
+- Exit codes seen in tests: 0 ok · 2 usage (bad url/flags) · 3 protocol/repo
+  (unreachable server, verify) · 4 cas_failed (wire race) · 5 conflict
+  (non-FF) · 6 limit · 7 auth (401/403).
+- Fuzz: fuzz_http_and_wire_json_never_panic (20k inputs, 4 HTTP prefixes,
+  read_request+percent_decode+4 wire structs).
+- Test gotchas learned: Repo::init does NOT create missing parent dirs
+  (test helpers must create_dir_all); unborn workspaces have NO position ref
+  (create one via refs.update with system grammar); refs.list() applies the
+  USER grammar so workspaces/* refs are writable but invisible in listings;
+  verify --json has no "errors" field (issues[] + exit-3 contract; use
+  objects_checked); CasFailed category string is "cas_failed" (not "race");
+  serve child stdout line parse: split("http://").nth(1) then split(' ');
+  tempfile::TempDir IS a dev-dep (used by cli_e2e/remote_e2e).
+
 ## Iteration 8 outcome (facts for resume)
 
 - `src/gitio/fastexport.rs`: Event::Blob/Commit/Tag/Reset/Meta; total parser
@@ -273,38 +388,55 @@ None.
 
 ## Current task (next iteration)
 
-**Iteration 9: Remote protocol + server (HTTP/1.1, JSON v1, std-only).**
+**Iteration 10: Web UI + agent API/MCP (served by the remote server).**
 Completion condition:
-1. `docs/PROTOCOL.md`: versioned JSON-over-HTTP v1 spec — endpoints
-   (`/v1/info`, `/v1/objects` batch get/put with digests, `/v1/refs` list +
-   CAS update txn, `/v1/snapshot` push/pull negotiation by oid sets,
-   `/v1/history`), envelope `{ok,data|error}` identical to CLI, version
-   header `X-NewGit-Version`, explicit capability negotiation.
-2. `src/remote/`: hand-rolled HTTP/1.1 server on std TcpListener (no
-   framework): request-line/headers parser (total, capped), body limits,
-   timeout, keep-alive optional; thread-per-connection with bounded pool.
-3. Auth: bearer tokens (SHA-256 hashed at rest in `.newgit/config` or
-   tokens file), roles read|write|admin mapped to endpoint classes; audit
-   log (who/what/when/result) as reflog-style append-only file. No TLS in
-   v1 (documented; recommend reverse proxy) — zero-rupee.
-4. Client: `newgit remote add/list/remove`, `newgit push <remote>`,
-   `newgit pull <remote>` — negotiation: send local oid set digest → server
-   responds missing/wanted lists → batched object transfer (base64 or
-   binary+digest per object), refs moved via server-side txn (CAS);
-   atomicity + crash-safety reuse existing txn engine on both ends.
-5. Security: threat-model section E realized — parser fuzz joins
-   tests/fuzz_parsers.rs; request-size caps; no path/JSON injection;
-   authz tested (read cannot write; bad token exit 7); loops only to
-   127.0.0.1 in tests.
-6. Tests: tests/remote_e2e.rs — spin server on ephemeral port in-process;
-   clone-equivalent pull into fresh repo (oid equality), push CAS race
-   (one winner), auth failures, oversized request refusal, crash mid-push
-   (server restart → verify clean); cli_e2e remote commands --json.
-7. Docs + state updates; commit.
+1. `src/ui/` module: single embedded HTML file (no build step, no npm, no
+   external CDN — inline CSS/JS, works offline in a sandboxed iframe with
+   `sandbox="allow-scripts"`): talks to the SAME protocol-v1 endpoints via
+   fetch() with a session token; NO new server endpoints beyond one static
+   `GET /` (ui) + reuse of /v1/* (auth applies: UI asks for token once,
+   stores in memory/sessionStorage only).
+2. Views (communicating the NewGit model, NOT a GitHub clone):
+   - Dashboard: HEAD, ref list, repo info/limits, audit tail (admin).
+   - History: snapshot graph (first-parent list + parent links), message,
+     author, timestamp; click → snapshot detail.
+   - Snapshot detail: tree browser (lazy per-tree fetch via objects/get),
+     blob viewer (text + hex for binary), parents/links.
+   - Goals/Changes: goal list + status, changes per goal with base/result
+     snapshots, evidence items with honesty flags (deterministic/ai_generated
+     visually distinct), evaluations, proposals + approvals; chain view.
+   - Compare: pick two snapshots → unified diff (client-side via existing
+     diff data from /v1 objects OR a read-only diff endpoint decision — see
+     step 3); renames/modes shown.
+   - Workspaces: list + positions (read-only view of internal refs requires
+     an admin/read exception decision — default: hidden like the wire).
+3. Diff over the wire: objects/get is enough (client fetches both trees +
+   blobs and renders) BUT for large trees add `POST /v1/diff {a,b}` returning
+   the existing diff engine's JSON (read role) — decide by measurement;
+   prefer reusing ops::diff (no new logic).
+4. `newgit ui [--bind] [--token]` convenience: starts serve with UI enabled
+   and prints the URL; OR serve always exposes `/` when `--ui` flag given
+   (default off for headless servers? decide: default ON is friendlier,
+   auth still gates data endpoints; `/` itself serves static HTML without
+   auth — it contains no data).
+5. MCP/agent API: `newgit mcp` stdio JSON-RPC 2.0 server exposing tools:
+   status, history, cat, diff, snapshot, goal/change/evidence/proposal
+   workflow calls — thin wrappers over the SAME CLI dispatch (no logic
+   duplication); protocol version handshake; errors as JSON-RPC errors with
+   our categories. Document in docs/AGENT_GUIDE.md (new) incl. curl recipes
+   for the HTTP API as the "agent API".
+6. Tests: tests/ui_e2e.rs — fetch `/` (static, no auth), assert inline
+   assets (no external URLs in the HTML), assert UI JS bundle references
+   only /v1/ endpoints; mcp: spawn `newgit mcp` child, drive JSON-RPC over
+   stdio (initialize, tools/list, tools/call status/snapshot/history,
+   error contract); /v1/diff endpoint test if added.
+7. Docs: docs/AGENT_GUIDE.md, README UI bullet, ARCHITECTURE UI/MCP boxes
+   become real, TEST_MATRIX rows, CHANGELOG, ROADMAP [x], PROJECT_STATE.
+8. Gates + commit.
 
 ## Next tasks (ordered)
 
-9. Remote protocol (HTTP/1.1, JSON v1) server+client, auth, audit. ← CURRENT
+10. Web UI + agent API/MCP. ← CURRENT
 10. Web UI served by remote server; MCP/agent-API docs.
 11. Release engineering (dist script, checksums, reproducible build);
     benchmark re-run + full docs set; dependency audit/SBOM.

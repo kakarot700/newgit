@@ -1006,3 +1006,222 @@ fn import_export_git_cli() {
     let r = ng(&proj, &["import-git"]);
     assert_eq!(r.code, 2);
 }
+
+// ---------------------------------------------------------------------------
+// Remote protocol v1 over the real binary (TEST_MATRIX "E2E remote")
+// ---------------------------------------------------------------------------
+
+use std::process::Stdio;
+
+struct Serve {
+    child: std::process::Child,
+    url: String,
+}
+
+impl Drop for Serve {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawn `newgit serve` on an ephemeral port and wait for its listening
+/// line — this asserts the port-0 announcement contract at the same time.
+fn spawn_serve(repo: &Path) -> Serve {
+    use std::io::{BufRead, BufReader};
+    let mut child = Command::new(newgit_bin())
+        .current_dir(repo)
+        .args(["serve", "--bind", "127.0.0.1:0"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn newgit serve");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut lines = BufReader::new(stdout).lines();
+    let line = lines
+        .next()
+        .expect("serve produced no output")
+        .expect("serve stdout");
+    let addr = line
+        .split("http://")
+        .nth(1)
+        .unwrap_or_else(|| panic!("unexpected listening line: {line}"))
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(line.contains("protocol v1"), "{line}");
+    child.stdout = None;
+    Serve {
+        child,
+        url: format!("http://{addr}"),
+    }
+}
+
+#[test]
+fn remote_cli_push_pull_serve_token_audit() {
+    let (_d, dir) = tmp();
+    // Server repo with one commit.
+    let srv = dir.join("srv");
+    std::fs::create_dir_all(&srv).unwrap();
+    ok(&srv, &["init"]);
+    ok(
+        &srv,
+        &["actor", "set-default", "--id", "agent:srv", "--name", "Srv"],
+    );
+    write(&srv, "hello.txt", b"server side\n");
+    ok(&srv, &["snapshot", "-m", "srv s1"]);
+
+    // Token management: raw token printed once, list never leaks it.
+    let out = ok(&srv, &["token", "add", "ci", "--role", "write", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let raw = v["data"]["token"].as_str().unwrap().to_string();
+    assert!(raw.len() >= 32, "token must be high-entropy: {raw}");
+    let out = ok(
+        &srv,
+        &[
+            "token", "add", "boss", "--role", "admin", "--token", "tok-boss",
+        ],
+    );
+    assert!(out.contains("tok-boss"), "explicit token shown once");
+    let out = ok(&srv, &["token", "list", "--json"]);
+    assert!(out.contains("ci") && out.contains("admin"));
+    assert!(
+        !out.contains(&raw) && !out.contains("tok-boss"),
+        "list must never leak tokens"
+    );
+
+    let serve = spawn_serve(&srv);
+
+    // Client repo: remote add (token masked in list), pull the server state.
+    let cli = dir.join("cli");
+    std::fs::create_dir_all(&cli).unwrap();
+    ok(&cli, &["init"]);
+    ok(
+        &cli,
+        &["actor", "set-default", "--id", "agent:cli", "--name", "Cli"],
+    );
+    ok(
+        &cli,
+        &["remote", "add", "origin", &serve.url, "--token", &raw],
+    );
+    let out = ok(&cli, &["remote", "list"]);
+    assert!(out.contains("origin") && out.contains("token=set") && !out.contains(&raw));
+    let out = ok(&cli, &["pull", "origin", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"]["refs_updated"].as_array().unwrap().len(), 1);
+    assert!(v["data"]["objects_received"].as_u64().unwrap() > 0);
+    let out = ok(&cli, &["history"]);
+    assert!(out.contains("srv s1"), "pulled history: {out}");
+    assert!(
+        !cli.join("hello.txt").exists(),
+        "pull moves refs, not worktrees (documented)"
+    );
+
+    // Push a new commit back.
+    write(&cli, "from-cli.txt", b"client side\n");
+    ok(&cli, &["snapshot", "-m", "cli s2"]);
+    let out = ok(&cli, &["push", "origin", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["refs_pushed"], serde_json::json!(["refs/main"]));
+    let out = ok(&srv, &["history"]);
+    assert!(out.contains("cli s2"), "server received the push: {out}");
+
+    // Auth contracts: no token ⇒ exit 7 (AUTH), read token cannot write.
+    ok(&cli, &["remote", "add", "notok", &serve.url]);
+    let r = ng(&cli, &["push", "notok", "--json"]);
+    assert_eq!(
+        r.code, 7,
+        "anonymous push must exit AUTH: {}{}",
+        r.out, r.err
+    );
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"]["category"], "auth");
+    ok(
+        &srv,
+        &["token", "add", "ro", "--role", "read", "--token", "tok-ro"],
+    );
+    ok(
+        &cli,
+        &["remote", "add", "ronly", &serve.url, "--token", "tok-ro"],
+    );
+    let r = ng(&cli, &["push", "ronly", "--json"]);
+    assert_eq!(r.code, 7, "read-role push must exit AUTH: {}", r.out);
+    // ...but the read token CAN pull
+    ok(&cli, &["pull", "ronly"]);
+
+    // Audit: the server recorded who did what — including the failures.
+    let out = ok(&srv, &["audit", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let entries = v["data"]["entries"].as_array().unwrap();
+    let has = |p: &str, path: &str, status: u64| {
+        entries
+            .iter()
+            .any(|e| e["principal"] == p && e["path"] == path && e["status"] == status)
+    };
+    assert!(
+        has("ci", "/v1/objects/put", 200),
+        "push objects audited: {entries:?}"
+    );
+    assert!(has("ci", "/v1/refs/update", 200), "ref update audited");
+    assert!(
+        entries.iter().any(|e| e["status"] == 401),
+        "auth failures audited: {entries:?}"
+    );
+    let out = ok(&srv, &["audit"]);
+    assert!(
+        out.contains("ci") && out.contains("/v1/refs/update"),
+        "text audit: {out}"
+    );
+    let out = ok(&srv, &["--json", "config", "show"]);
+    assert!(out.contains("ok"), "config show still works while serving");
+
+    // URL validation errors are usage errors.
+    let r = ng(&cli, &["remote", "add", "bad", "https://example/x"]);
+    assert_eq!(r.code, 2, "https/path urls must be USAGE: {}", r.err);
+    assert!(r.err.contains("plain HTTP") || r.out.contains("plain HTTP"));
+
+    // Unknown remote ⇒ config error, non-zero.
+    let r = ng(&cli, &["push", "nosuch"]);
+    assert_ne!(r.code, 0);
+    assert!(r.err.contains("no remote named") || r.out.contains("no remote named"));
+
+    // remote remove
+    ok(&cli, &["remote", "remove", "notok"]);
+    let out = ok(&cli, &["remote", "list", "--json"]);
+    assert!(!out.contains("notok"));
+
+    // Server repo still verifies deep after all of this (ok() enforces the
+    // exit-3-on-errors contract; double-check no error-severity issues).
+    let out = ok(&srv, &["verify", "--deep", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["data"]["objects_checked"].as_u64().unwrap() > 0);
+    let issues = v["data"]["issues"].as_array().unwrap();
+    assert!(issues.iter().all(|i| i["severity"] != "error"), "{out}");
+}
+
+#[test]
+fn remote_cli_refuses_to_serve_outside_a_repo_and_reports_bind_errors() {
+    let (_d, dir) = tmp();
+    // not a repo ⇒ exit 3 (REPO)
+    let r = ng(&dir, &["serve", "--bind", "127.0.0.1:0"]);
+    assert_ne!(r.code, 0);
+    // an occupied port is a config error, not a panic
+    let srv = dir.join("srv2");
+    std::fs::create_dir_all(&srv).unwrap();
+    ok(&srv, &["init"]);
+    let s1 = spawn_serve(&srv);
+    let addr = s1.url.trim_start_matches("http://");
+    let r = ng(&srv, &["serve", "--bind", addr]);
+    assert_ne!(r.code, 0, "double bind must fail cleanly");
+    assert!(
+        r.err.contains("cannot bind") || r.err.contains("address"),
+        "{}",
+        r.err
+    );
+    // bad --max-body value ⇒ usage error
+    let r = ng(&srv, &["serve", "--max-body", "lots"]);
+    assert_eq!(r.code, 2, "{}", r.err);
+}
