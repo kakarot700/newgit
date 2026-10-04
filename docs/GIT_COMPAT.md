@@ -22,7 +22,8 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | author `Name <email>` | `Actor` object: `display_name=Name`, `extras.email`, `id="git:<email>"`, kind Human | exact; same person ⇒ same Actor oid |
 | author date + tz | `timestamp_ms` (seconds×1000), `tz_offset_min` | exact to the second |
 | committer (when ≠ author) | `extras.git_committer_{name,email,ts_ms,tz}` | exact (restored on export) |
-| original commit sha | `extras.git_sha1` (via `--show-original-ids`) | exact |
+| original Git commit object ID | `extras.git_oid` (via `--show-original-ids`); SHA-1 sources also retain legacy `extras.git_sha1` | exact source ID metadata; not the NewGit snapshot ID and not preserved in exported commit IDs |
+| SHA-256 Git repository | same semantic snapshot/ref mapping as SHA-1 input; source commit IDs recorded in `git_oid` | real-Git semantic import/export fixture; destination uses `git init`'s default object format, so object IDs are not expected to match |
 | signed commit | no signature field in NewGit; `signed_commits_stripped` reports source commit IDs whose `gpgsig` header was dropped by `fast-export` | lossy; the signature is neither preserved nor verified |
 | first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact (restored on export) |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
@@ -119,6 +120,13 @@ between `main` and `refs/main`, validates the mapped destination with Git's
 real-Git round-trip fixture checks ordered parents for a valid merge whose second
 parent is already an ancestor of its first.
 
+`sha256_git_import_export_roundtrips_semantically` creates a real Git
+`--object-format=sha256` repository, confirms 64-character original IDs in the
+fast-export stream, checks that imported commits retain those IDs in
+`extras.git_oid`, and compares every commit's paths, modes, and blob bytes after
+export. The fresh export target uses Git's default object format, so this is a
+semantic repository-equivalence test, not Git object-ID preservation.
+
 `empty_git_trees_roundtrip_across_root_and_followup_commits` constructs its
 history with the Git CLI. It compares each source and exported tree object id,
 checks source-parent to exported-parent mapping, verifies empty root trees in
@@ -174,6 +182,10 @@ environment and does not claim other Git versions or operating systems.
     A real, Git-verified SSH-signed commit proves this loss/reporting behavior on
     Git 2.43.0/Linux. OpenPGP signatures, alternate Git versions, and other
     signature-header variants are not established by that fixture.
+12. **Git SHA-256 object IDs are accepted for import**, but source object IDs
+    are metadata only and export initializes a fresh repository using Git's
+    default object format. The semantic SHA-256 import/export fixture is limited
+    to Git 2.43.0/Linux; cross-version and cross-platform behavior is untested.
 
 ## CLI details
 

@@ -453,8 +453,13 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 let author = get_actor(repo, &mut actors, &author_p, &mut rep)?;
 
                 let mut extras: BTreeMap<String, String> = BTreeMap::new();
-                if let Some(sha) = &c.git_sha {
-                    extras.insert("git_sha1".into(), sha.clone());
+                if let Some(oid) = &c.git_sha {
+                    extras.insert("git_oid".into(), oid.clone());
+                    // Preserve the original metadata key for existing SHA-1
+                    // consumers while using git_oid for both hash formats.
+                    if oid.len() == 40 {
+                        extras.insert("git_sha1".into(), oid.clone());
+                    }
                 }
                 if let Some(cm) = &c.committer {
                     if cm.name != author_p.name

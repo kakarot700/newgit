@@ -42,8 +42,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     commit confirms this behavior on Git 2.43.0/Linux; other signature types and
     Git versions are untested. Detecting signatures requires a separate
     streaming `cat-file --batch` pass over exported commit headers; its
-    large-history performance impact has not been benchmarked. Import disables
-    replacement-object substitution during `fast-export` so an omitted overlay cannot silently
+    large-history performance impact has not been benchmarked. SHA-256 Git
+    repositories are accepted and semantically round-trip in one Git 2.43.0/Linux
+    fixture; export uses the destination Git's default object format and does not
+    preserve source object IDs. Cross-version/platform coverage is untested.
+    Import disables replacement-object substitution during `fast-export` so an omitted overlay cannot silently
     rewrite ordinary branch history. This imports stored objects, not Git's
     replacement-aware view, and is tested for one replacement commit on Git
     2.43.0/Linux. Git LFS
@@ -126,8 +129,9 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     refuses distinct NewGit ref names that map to the same Git ref (for
     example, `main` and `refs/main`) rather than silently overwriting one.
 26. Git interop requires a **system git ≥ ~2.20** on PATH (the recorded
-    compatibility suite runs against Git 2.43.0). Everything else in NewGit
-    works without git installed.
+    compatibility suite runs against Git 2.43.0). SHA-256 import additionally
+    requires a Git build with SHA-256 repository support. Everything else in
+    NewGit works without git installed.
 27. Remote protocol v1 is **plain HTTP** — no TLS, no request signing.
     Deploy behind a TLS-terminating reverse proxy (documented); tokens
     travel as bearer credentials, so an unencrypted network exposes them.

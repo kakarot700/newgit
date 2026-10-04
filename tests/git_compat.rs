@@ -204,7 +204,8 @@ fn ng_tree(repo: &Repo, snap: ObjectId) -> BTreeMap<String, (String, Vec<u8>)> {
     out
 }
 
-/// Map git sha → newgit snapshot oid via extras.git_sha1, for every ref tip
+/// Map source Git object ID → NewGit snapshot oid via format-neutral extras,
+/// with a fallback for repositories imported before `git_oid` was added.
 /// and its ancestors.
 fn snapshots_by_git_sha(repo: &Repo) -> BTreeMap<String, ObjectId> {
     let mut out = BTreeMap::new();
@@ -224,8 +225,8 @@ fn snapshots_by_git_sha(repo: &Repo) -> BTreeMap<String, ObjectId> {
                 continue;
             }
             if let Ok(Object::Snapshot(s)) = repo.objects.get(&o) {
-                if let Some(sha) = s.extras.get("git_sha1") {
-                    out.insert(sha.clone(), o);
+                if let Some(oid) = s.extras.get("git_oid").or_else(|| s.extras.get("git_sha1")) {
+                    out.insert(oid.clone(), o);
                 }
                 stack.extend(s.parents.iter().copied());
             }
@@ -986,6 +987,164 @@ fn empty_git_repo_imports_cleanly() {
     assert_eq!(rep.commits, 0);
     assert!(rep.refs_imported.is_empty());
     assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
+
+#[test]
+fn sha256_git_import_export_roundtrips_semantically() {
+    let d = tempfile::tempdir().unwrap();
+    let probe_dir = d.path().join("format-probe");
+    std::fs::create_dir_all(&probe_dir).unwrap();
+    let probe = Command::new("git")
+        .arg("-C")
+        .arg(&probe_dir)
+        .args(["init", "--quiet", "--bare", "--object-format=sha256"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("spawn Git SHA-256 capability probe");
+    if !probe.status.success() {
+        let stderr = String::from_utf8_lossy(&probe.stderr);
+        let lower = stderr.to_ascii_lowercase();
+        if lower.contains("sha256")
+            && (lower.contains("unknown")
+                || lower.contains("not supported")
+                || lower.contains("unsupported"))
+        {
+            eprintln!("skipping SHA-256 Git fixture: this Git build lacks support: {stderr}");
+            return;
+        }
+        panic!("Git SHA-256 capability probe failed unexpectedly: {stderr}");
+    }
+
+    let gdir = d.path().join("git-sha256");
+    std::fs::create_dir_all(&gdir).unwrap();
+    let init = Command::new("git")
+        .arg("-C")
+        .arg(&gdir)
+        .args(["init", "--quiet", "--object-format=sha256", "-b", "master"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("spawn git init");
+    assert!(
+        init.status.success(),
+        "SHA-256 capability probe succeeded but fixture initialization failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    git(&gdir, &["config", "user.name", "SHA-256 Fixture"]);
+    git(&gdir, &["config", "user.email", "sha256@example.test"]);
+    assert_eq!(
+        git_out(&gdir, &["rev-parse", "--show-object-format"]).trim(),
+        "sha256"
+    );
+
+    write(&gdir, "root.txt", b"sha256 root\n");
+    commit(&gdir, "sha256 root");
+    let root_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    write(&gdir, "nested/data.bin", &[0, 1, 2, 128, 255]);
+    commit(&gdir, "sha256 child");
+    git(&gdir, &["tag", "v-sha256"]);
+    let tip_sha = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    assert_eq!(root_sha.len(), 64);
+    assert_eq!(tip_sha.len(), 64);
+
+    let stream = git(
+        &gdir,
+        &["fast-export", "--all", "--full-tree", "--show-original-ids"],
+    );
+    let stream = String::from_utf8_lossy(&stream.stdout);
+    let stream_oids: Vec<&str> = stream
+        .lines()
+        .filter_map(|line| line.strip_prefix("original-oid "))
+        .collect();
+    assert!(
+        stream_oids.len() >= 4,
+        "expected blob/commit original IDs: {stream}"
+    );
+    assert!(stream_oids
+        .iter()
+        .all(|oid| { oid.len() == 64 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) }));
+    assert!(stream_oids.contains(&root_sha.as_str()));
+    assert!(stream_oids.contains(&tip_sha.as_str()));
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert_eq!(report.commits, 2);
+    assert!(report
+        .refs_imported
+        .iter()
+        .any(|(name, _)| name == "refs/heads/master"));
+    assert!(report
+        .refs_imported
+        .iter()
+        .any(|(name, _)| name == "refs/tags/v-sha256"));
+    let by_git_oid = snapshots_by_git_sha(&repo);
+    assert_eq!(by_git_oid.len(), 2);
+    let imported_tip = *by_git_oid.get(&tip_sha).expect("tip source ID mapped");
+    assert_eq!(
+        repo.refs.read_opt("refs/tags/v-sha256").unwrap(),
+        Some(imported_tip),
+        "imported lightweight tag must point at its source commit"
+    );
+    for source_oid in [&root_sha, &tip_sha] {
+        let snapshot_oid = by_git_oid.get(source_oid).expect("source commit mapped");
+        let snapshot = match repo.objects.get(snapshot_oid).unwrap() {
+            Object::Snapshot(snapshot) => snapshot,
+            _ => panic!("mapped source commit is not a snapshot"),
+        };
+        assert_eq!(snapshot.extras.get("git_oid"), Some(source_oid));
+        assert!(!snapshot.extras.contains_key("git_sha1"));
+    }
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+    git(&gdir, &["fsck", "--full"]);
+
+    let outdir = d.path().join("exported");
+    let export_report = export_git(&repo, &outdir).unwrap();
+    assert_eq!(export_report.commits, 2);
+    git(
+        &outdir,
+        &["show-ref", "--verify", "--quiet", "refs/tags/v-sha256"],
+    );
+    let exported_tag = git_out(&outdir, &["rev-parse", "refs/tags/v-sha256^{commit}"])
+        .trim()
+        .to_string();
+    let exported_tip = git_out(&outdir, &["rev-parse", "refs/heads/master"])
+        .trim()
+        .to_string();
+    assert_eq!(
+        exported_tag, exported_tip,
+        "exported tag must point at the tip"
+    );
+    let source_commits: Vec<String> =
+        git_out(&gdir, &["rev-list", "--reverse", "refs/heads/master"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+    let exported_commits: Vec<String> =
+        git_out(&outdir, &["rev-list", "--reverse", "refs/heads/master"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+    assert_eq!(source_commits.len(), 2);
+    assert_eq!(exported_commits.len(), source_commits.len());
+    for (source_commit, exported_commit) in source_commits.iter().zip(&exported_commits) {
+        let source_tree = git_tree(&gdir, source_commit);
+        let exported_tree = git_tree(&outdir, exported_commit);
+        assert_eq!(
+            source_tree.keys().collect::<Vec<_>>(),
+            exported_tree.keys().collect::<Vec<_>>()
+        );
+        for (path, (source_mode, source_blob)) in &source_tree {
+            let (exported_mode, exported_blob) = &exported_tree[path];
+            assert_eq!(source_mode, exported_mode, "mode at {path}");
+            assert_eq!(
+                git_blob(&gdir, source_blob),
+                git_blob(&outdir, exported_blob),
+                "blob at {path}"
+            );
+        }
+    }
+    git(&outdir, &["fsck", "--full"]);
 }
 
 #[test]

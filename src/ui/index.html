@@ -308,7 +308,7 @@ async function viewHistory(params) {
         parents.length ? parents : el("span", { class: "dim", text: "root" }),
         s.goal ? badge("goal") : null, s.change ? badge("change") : null,
         s.workspace ? badge("ws:" + s.workspace) : null,
-        (s.extras && s.extras.git_sha1) ? badge("git:" + short(s.extras.git_sha1), "acc") : null),
+        (s.extras && (s.extras.git_oid || s.extras.git_sha1)) ? badge("git:" + short(s.extras.git_oid || s.extras.git_sha1), "acc") : null),
     ]);
     cur = (s.parents && s.parents[0]) || null;
   }

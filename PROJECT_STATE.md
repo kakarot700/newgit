@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: report Git commit signatures that `fast-export` strips during import, without implying preservation or verification (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: accept Git SHA-256 object IDs for semantic import/export without claiming object-ID preservation (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -19,13 +19,47 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — signed commit signatures (2026-10-04)
+## Current Git compatibility milestone — SHA-256 Git repositories (2026-10-04)
+
+- **Defect and real-Git reproduction:** Git 2.43.0 created a real
+  `--object-format=sha256` repository whose `fast-export --show-original-ids`
+  stream contains 64-hex object IDs. Before the fix, NewGit rejected the first
+  `original-oid` as malformed because the parser required 40 hex characters.
+- **Implementation:** fast-export object-ID parsing now accepts Git's 40- and
+  64-hex widths, including raw gitlink IDs (gitlinks remain refused by policy).
+  Imported source commit IDs use format-neutral `extras.git_oid`; SHA-1 imports
+  also keep the existing `extras.git_sha1` key for compatibility. The UI prefers
+  `git_oid` and falls back to the legacy key.
+- **Regression and boundary:** `sha256_git_import_export_roundtrips_semantically`
+  creates two real Git SHA-256 commits and a lightweight tag, checks 64-character
+  stream/source IDs and imported metadata, compares refs, commit count, paths,
+  modes, and blob bytes after export, and runs Git `fsck` plus deep NewGit
+  verification. The fresh export repository uses Git's default object format;
+  object IDs are therefore not claimed to survive. Evidence is one Git 2.43.0/
+  Linux fixture; other versions and platforms are untested.
+- **Performance:** the fix adds no subprocess, history walk, or full-history
+  scan; it accepts the existing streamed ID representation and adds constant
+  per-ID parsing/metadata work.
+- **Independent adversarial review:** the reviewer flagged an overly broad
+  capability skip and missing tag-target assertions. The test now skips only on
+  specific SHA-256 unsupported diagnostics, asserts imported/exported tag tips,
+  and passed follow-up review with no remaining blocker.
+- **Local verification:** focused interoperability suite **22 passed**; full
+  debug and release suites **292 passed each**; formatting, warnings-denied
+  clippy, release build, SBOM drift, and diff checks passed on the combined
+  code-and-documentation change.
+- **Hosted verification gate:** completion requires GitHub CI and CodeQL to pass
+  on this exact combined pushed SHA; exact run links are included in the task
+  completion report after those runs finish.
+
+## Previous Git compatibility milestone — signed commit signatures (2026-10-04)
 
 - **Defect and real-Git probe:** a Git 2.43.0/Linux repository was created with a real SSH-signed commit. `git verify-commit` verified it and the raw commit object contained `gpgsig`; `git fast-export --all --full-tree --show-original-ids` omitted that signature header without warning. Import previously had no signature-loss report.
 - **Implementation:** while parsing the fast-export stream, import collects its source commit IDs, then uses one streaming `git cat-file --batch` pass over the original objects with replacement substitution disabled. It detects `gpgsig` and `gpgsig-sha256` headers and fills `ImportReport.signed_commits_stripped` before the atomic ref transaction. Text and JSON CLI reports surface those IDs. Signature bytes are neither retained nor cryptographically verified.
 - **Regression and attack:** `tests/git_compat.rs::signed_git_commit_signature_loss_is_reported` verifies the real source signature, raw-object header, header omission in the export stream, exact reported source ID, deep NewGit integrity, unsigned exported commit, and both human/JSON CLI report paths. Independent review found no scanner framing or signature-header correctness issue; it identified a Git/OpenSSH test prerequisite mismatch, addressed by explicitly gating the cryptographic fixture on Git 2.34+ and available `ssh-keygen`.
 - **Boundary and performance:** classify signed commits as **LOSSY**. Evidence is limited to one SSH-signed commit on Git 2.43.0/Linux; OpenPGP, other Git versions, and alternate signature-header variants are not established. Older Git installations may skip this signature-specific fixture while the rest of the Git suite remains available. The additional streaming commit-header pass has not been benchmarked on large histories.
 - **Local verification:** Git interoperability suite **21 passed**; complete debug and release suites **290 passed each**. `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo build --release --locked`, SBOM drift check, and `git diff --check` passed on this combined implementation/documentation state.
+- **Hosted verification:** implementation commit `4ca77359f46bdfac3a76195d2af3550cef416523` passed GitHub [CI run 37207949205](https://github.com/kakarot700/newgit/actions/runs/37207949205) and [CodeQL run 37207949242](https://github.com/kakarot700/newgit/actions/runs/37207949242), both on that exact SHA.
 - **Hosted verification policy:** before closing each milestone, confirm GitHub CI and CodeQL against its exact pushed SHA; include both exact run links in the task completion report.
 
 ## Previous Git compatibility milestone — detached `HEAD` and ref integrity (2026-10-04)

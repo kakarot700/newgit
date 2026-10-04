@@ -5,6 +5,11 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Fixed
+- `import-git` now accepts 64-hex original object IDs from real Git SHA-256
+  repositories, stores source commit IDs under format-neutral `git_oid` metadata
+  (while retaining `git_sha1` for SHA-1 sources), and exports semantic history
+  into a fresh repository using Git's default object format. A real-Git fixture
+  checks commit identity metadata, refs, paths, modes, and blob bytes.
 - `import-git` no longer persists `git fast-export --all`'s detached-HEAD
   pseudo-ref as an ordinary NewGit ref. `export-git` now preserves detached
   HEAD, including histories not reachable from any named ref, and deletes its

@@ -17,7 +17,7 @@
 //!             | "data" SP "<<" delim NL <lines> delim NL
 //! fileop     := "M" SP mode SP (mark | "inline" data) SP path NL
 //!             | "D" SP path NL | "R" SP path SP path NL
-//! committish := ":" mark | 40-hex-sha | "refs/..."
+//! committish := ":" mark | 40- or 64-hex Git object ID | "refs/..."
 //! ```
 //! Paths are C-quoted by git when they contain special characters; the
 //! unquoter below handles the documented escapes.
@@ -62,7 +62,7 @@ pub enum FileOp {
     Delete {
         path: String,
     },
-    /// `M 160000 <40-hex-sha> <path>` — git submodule (gitlink). NewGit
+    /// `M 160000 <40- or 64-hex-sha> <path>` — git submodule (gitlink). NewGit
     /// does not support submodules; the importer turns this into a loud,
     /// actionable error.
     Gitlink {
@@ -298,7 +298,7 @@ impl<R: BufRead> Parser<R> {
         };
         if let Some(sha) = line.strip_prefix("original-oid ") {
             let sha = sha.trim().to_string();
-            if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            if !is_git_object_id(&sha) {
                 return Err(bad(format!("bad original-oid {sha:?}")));
             }
             Ok(Some(sha))
@@ -416,11 +416,11 @@ impl<R: BufRead> Parser<R> {
         };
         if !src.starts_with(':') && src != "inline" {
             // raw sha source: git emits this only for gitlinks (submodules)
-            if src.len() == 40 && src.chars().all(|c| c.is_ascii_hexdigit()) {
+            if is_git_object_id(&src) {
                 return Ok(FileOp::Gitlink { sha: src, path });
             }
             return Err(bad(format!(
-                "M source must be :mark, inline, or a 40-hex gitlink sha; got {src:?}"
+                "M source must be :mark, inline, or a 40-/64-hex gitlink object ID; got {src:?}"
             )));
         }
         if src == "inline" {
@@ -523,6 +523,10 @@ fn bad(msg: impl Into<String>) -> Error {
     Error::Malformed(format!("fast-export: {}", msg.into()))
 }
 
+fn is_git_object_id(s: &str) -> bool {
+    matches!(s.len(), 40 | 64) && s.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 pub fn parse_person(body: &str) -> Result<FxPerson> {
     // "Name <email> <ts> <tz>"
     let (name_email, tail) = body
@@ -583,7 +587,7 @@ pub fn parse_committish(s: &str) -> Result<Committish> {
             .map_err(|_| bad(format!("bad mark committish {s:?}")))?;
         return Ok(Committish::Mark(m));
     }
-    if (s.len() == 40 || s.len() == 64) && s.chars().all(|c| c.is_ascii_hexdigit()) {
+    if is_git_object_id(s) {
         return Ok(Committish::Sha(s.to_string()));
     }
     if s.starts_with("refs/") || s == "HEAD" {
@@ -790,6 +794,29 @@ mod tests {
         match &evs[2] {
             Event::Reset(r) => assert!(matches!(r.from, Some(Committish::Mark(2)))),
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parses_sha256_object_ids_and_gitlinks() {
+        let oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let stream = format!(
+            "blob\noriginal-oid {oid}\ndata 1\nx\n\ncommit refs/heads/master\nmark :1\nauthor A <a@x> 100 +0000\ncommitter A <a@x> 100 +0000\ndata 0\nM 160000 {oid} sub\n\n"
+        );
+        let events = parse_all(&stream).unwrap();
+        match &events[0] {
+            Event::Blob(blob) => assert_eq!(blob.git_sha.as_deref(), Some(oid)),
+            _ => panic!("expected blob"),
+        }
+        match &events[1] {
+            Event::Commit(commit) => match &commit.ops[0] {
+                FileOp::Gitlink { sha, path } => {
+                    assert_eq!(sha, oid);
+                    assert_eq!(path, "sub");
+                }
+                _ => panic!("expected gitlink"),
+            },
+            _ => panic!("expected commit"),
         }
     }
 
