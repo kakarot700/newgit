@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 7 of 12 complete — no Git compatibility, no remote/auth yet).
+**Current classification: NOT PRODUCTION READY** (iteration 8 of 12 complete — Git compatibility landed; no remote/auth, web UI, or release engineering yet).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -17,7 +17,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] changes / goals / evidence / evaluations / proposals — iteration 6 ✅ (9 workflow suites + two-agent e2e)
 - [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
 - [x] verification (fsck) — iteration 7 ✅ (`newgit verify [--deep]`, 20 verify_gc suites + chaos per-step)
-- [ ] Git compatibility path — iteration 8
+- [x] Git compatibility path — iteration 8 ✅ (`import-git`/`export-git` via system git fast-export/fast-import; byte-identical blob round-trip + determinism + atomic refusal tested against real git; honest documented limits in docs/GIT_COMPAT.md — annotated tags lossy, no submodules)
 
 ## RELIABILITY
 - [x] crash-safe object writes (tmp→fsync→rename→dir fsync) + fault hooks — iteration 1
@@ -36,7 +36,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [ ] access control (remote authn/authz) tested — iteration 9
 
 ## QUALITY
-- [x] unit tests (101) + integration (49) + e2e (11) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (6) — iterations 1–7 (219 total)
+- [x] unit tests (108) + integration/e2e (73) + property (12) + verify/gc (20) + chaos (6) + fuzz-like (7) + git-compat (9) + misc (2) — iterations 1–8 (237 total)
 - [x] integration/E2E/property/fuzz/chaos suites ✅ it2–7; regression discipline active (chaos seeds grow per bug found)
 
 ## PERFORMANCE

@@ -4,6 +4,34 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 8 — 2026-10-04)
+- **Git compatibility (D-007/D-016, docs/GIT_COMPAT.md)** — new `src/gitio/`
+  layer, zero new dependencies, uses the *system git's own stream formats*:
+  - `newgit import-git <git-repo>` — streams `git fast-export --all
+    --full-tree --show-original-ids --signed-tags=strip` through a
+    hand-rolled total parser (7 unit tests on real-git framing quirks);
+    commits → Snapshots (author → Actor `git:<email>`; committer, original
+    sha, tz, ordered merge parents preserved in extras), trees/blobs
+    byte-exact, modes 100644/100755/120000 mapped; **all refs + HEAD move
+    in one transaction**; deterministic oids; skipped namespaces and
+    stripped annotated-tag metadata are reported, never silent.
+  - `newgit export-git <target-dir>` — topological `git fast-import` stream
+    with deterministic marks, piped into `git init` + `fast-import --done`;
+    committer/first-parent metadata restored from extras; HEAD mirrored;
+    working tree materialized and clean.
+  - Round-trip verified against real git: byte-identical blob SHAs, modes,
+    messages, author+committer identities/timestamps, first-parent lineage;
+    reimport fixpoint on trees/messages.
+  - Hard, loud limits: submodules abort import atomically (zero refs move);
+    annotated/signed tag metadata stripped (reported); ms→s export precision
+    loss documented.
+- Tests: `tests/git_compat.rs` (9 suites vs REAL git 2.47 repos incl.
+  merges, tags, binary, symlinks, exec bits, unicode, renames, empty
+  commits, notes/remotes skipping, refusal contracts) · cli_e2e
+  `import_export_git_cli` · fastexport fuzz sweep in `tests/fuzz_parsers.rs`.
+- Docs: docs/GIT_COMPAT.md (mapping tables + guarantees + limits), CLI.md
+  sections, THREAT_MODEL untrusted-import rows, KNOWN_LIMITATIONS #20–26.
+
 ### Added (iteration 7 — 2026-10-04)
 - `newgit verify [--deep] [--json]` — read-only fsck with stable issue codes
   and error/warning severities: object layout/name/envelope/digest/misfiled/

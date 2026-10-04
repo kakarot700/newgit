@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 7 COMPLETE — verify (fsck) + non-destructive gc + recover CLI + chaos suite + fuzz-like parsers + benchmarks (D-014, D-015).
-- **Classification:** NOT PRODUCTION READY (no Git compatibility, no remote/auth yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **219/219** ✓ (101 unit + 6 chaos + 11 cli-e2e + 4 concurrency + 8 diff + 6 fuzz + 18 merge + 13 ops + 12 property + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks recorded in docs/BENCHMARKS.md (real runs, `cargo run --release --bin newgit-bench`).
+- **Phase:** Iteration 8 COMPLETE — Git compatibility: `src/gitio/` (total fast-export parser + deterministic fast-import emitter), `newgit import-git`/`export-git`, 9 real-git compat suites, docs/GIT_COMPAT.md, D-016 (on top of iteration 7: verify/gc/recover/chaos/fuzz/benchmarks).
+- **Classification:** NOT PRODUCTION READY (no remote/auth, web UI, or release engineering yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **237/237** ✓ (108 unit + 6 chaos + 12 cli-e2e + 4 concurrency + 8 diff + 7 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release).
 
 ## Environment / how to resume
 
@@ -222,40 +222,89 @@ None.
 - CLI e2e: verify/gc/recover contract test (exit codes, JSON envelopes,
   forensics preservation). 33 new tests total.
 
+## Iteration 8 outcome (facts for resume)
+
+- `src/gitio/fastexport.rs`: Event::Blob/Commit/Tag/Reset/Meta; total parser
+  (`Parser::new(BufRead)`, `from_child_stdout`); FileOp incl. Gitlink (raw
+  40-hex `M` source = submodule); MAX_DATA 2 GiB; 7 unit tests pin real-git
+  framing quirks (exact data lengths, optional trailing LF, deleteall under
+  --full-tree, tag block order, light-tag reset form).
+- `src/gitio/import.rs`: `import_git(repo,&Path)->ImportReport`; streams
+  `git fast-export --all --full-tree --show-original-ids --signed-tags=strip
+  --tag-of-filtered-object=drop`; actors cached (name,email)→Actor
+  `git:<email>`; snapshot extras: git_sha1, git_committer_* (only when ≠
+  author), git_parents_ordered (>1 parent), git_message_lossy; modes
+  100644/100755/120000→File/Executable/Symlink; 160000/Gitlink→Err (atomic
+  refusal); skip_ref(): remotes|notes|replace|stash|bisect|worktree (skips
+  recorded from Commit/Tag/Reset branches, deduped); ALL refs + HEAD in ONE
+  txn (TxnOp::File{rel:"HEAD"}); child exit status checked after stream.
+- `src/gitio/export.rs`: `export_git(repo,&Path)->ExportReport`; target must
+  be absent/empty; skips workspaces//chains/; non-snapshot ref→Err; topo DFS
+  (two HashSets); deterministic marks (blobs 1..B by topo+sorted-path,
+  commits B+1..); per-ref D+M diff vs first parent; final `reset <ref> from
+  :mark` pins tips; pipes to `git init --quiet` + `git fast-import --quiet
+  --done --export-marks=<tmp>` (the --export-marks= form MUST be one argv
+  entry — splitting it caused exit 129); marks→sha map; HEAD symbolic→
+  `git symbolic-ref` + `reset --hard --quiet`, detached→`reset --hard <sha>`;
+  map_ref_name: heads/tags pass through, other refs/X→refs/heads/X, bare→
+  refs/heads/name; C-quoting only for control/quote/backslash.
+- CLI: `import-git <git-repo>` / `export-git <target-dir>` (--json envelope =
+  serde report; text mode lists per-ref mappings, skipped refs, stripped
+  annotated tags; help section "Git interop"). NOTE: `cat` still resolves
+  hex prefixes only, NOT ref names (cli_e2e takes tip oid via `history
+  --from <ref> --json`).
+- Verified guarantees (tests/git_compat.rs, 9/9 vs real git 2.47): import
+  content equality (ls-tree/cat-file/log per commit: paths, modes, bytes,
+  messages, author, tz, parent counts) · import determinism · export
+  round-trip: byte-identical blob SHAs + `%an|%ae|%cn|%ce|%at|%ct|%s`
+  multiset equality + first-parent lineage + clean worktree + symlink on
+  disk · native-repo export · submodule refusal atomic · empty repo ·
+  import-into-used-repo atomic ref move · export refusals (dirty target,
+  non-snapshot ref) · reimport-after-export fixpoint on trees/messages.
+- Test gotchas learned: git `%B` appends record-terminating newline
+  (trim_end both sides); `rev-list --all` includes notes/remotes commits
+  (use `--branches --tags`); `git checkout -f` does NOT materialize a
+  fast-imported worktree (`reset --hard` does); snapshot workspace names
+  cannot contain '/'; exec-bit recipe = add → update-index --chmod=+x →
+  commit; bind `git_out()` String to a local before `.split_whitespace()`
+  (E0716).
+- Fuzz: `fuzz_fastexport_parser_never_panics` added (20k prefix-anchored
+  inputs, 4 real-framing prefixes, bounded drain).
+
 ## Current task (next iteration)
 
-**Iteration 8: Git compatibility (import/export via system git, D-007).**
+**Iteration 9: Remote protocol + server (HTTP/1.1, JSON v1, std-only).**
 Completion condition:
-1. `src/gitio/` module: hand-rolled `git fast-export` stream parser and
-   `git fast-import` stream emitter (no new dependencies). Mapping:
-   git commit → Snapshot (author+committer → Actor objects with
-   deterministic ids derived from name+email; timestamps preserved;
-   message preserved byte-exact; merge parents → sorted parents set),
-   git tree → Tree (modes 100644/100755/120000/040000 → EntryMode),
-   blob → Blob byte-exact, refs/heads/* + refs/tags/* → NewGit refs.
-2. `newgit import-git <git-repo-path>`: runs `git -C <path> fast-export
-   --all` in a child (system git per D-007), streams into the object
-   store, moves refs via txn engine; progress + summary; deterministic:
-   importing the same git repo twice into fresh newgit repos yields
-   identical oids (test this).
-3. `newgit export-git <target-dir>`: walks NewGit history, emits
-   fast-import stream, pipes into `git fast-import` child; round-trip
-   test: git → import → export → git; compare file trees, messages,
-   timestamps, authorship via git itself.
-4. Honest limitations (docs/GIT_COMPAT.md + KNOWN_LIMITATIONS): no
-   submodules (gitlink 160000 → loud error, documented), signed tags →
-   signatures stripped + recorded in extras, no git notes/LFS smudging,
-   octopus merges supported (parents set), criss-cross history preserved.
-5. tests/git_compat.rs against REAL system-git repos (branches, merges,
-   renames, binary files, symlinks, exec bits, unicode messages, tags,
-   empty commits, deep history); malformed fast-export input → clean
-   errors (fuzz the parser too); exit codes documented.
-6. Docs + state updates; commit.
+1. `docs/PROTOCOL.md`: versioned JSON-over-HTTP v1 spec — endpoints
+   (`/v1/info`, `/v1/objects` batch get/put with digests, `/v1/refs` list +
+   CAS update txn, `/v1/snapshot` push/pull negotiation by oid sets,
+   `/v1/history`), envelope `{ok,data|error}` identical to CLI, version
+   header `X-NewGit-Version`, explicit capability negotiation.
+2. `src/remote/`: hand-rolled HTTP/1.1 server on std TcpListener (no
+   framework): request-line/headers parser (total, capped), body limits,
+   timeout, keep-alive optional; thread-per-connection with bounded pool.
+3. Auth: bearer tokens (SHA-256 hashed at rest in `.newgit/config` or
+   tokens file), roles read|write|admin mapped to endpoint classes; audit
+   log (who/what/when/result) as reflog-style append-only file. No TLS in
+   v1 (documented; recommend reverse proxy) — zero-rupee.
+4. Client: `newgit remote add/list/remove`, `newgit push <remote>`,
+   `newgit pull <remote>` — negotiation: send local oid set digest → server
+   responds missing/wanted lists → batched object transfer (base64 or
+   binary+digest per object), refs moved via server-side txn (CAS);
+   atomicity + crash-safety reuse existing txn engine on both ends.
+5. Security: threat-model section E realized — parser fuzz joins
+   tests/fuzz_parsers.rs; request-size caps; no path/JSON injection;
+   authz tested (read cannot write; bad token exit 7); loops only to
+   127.0.0.1 in tests.
+6. Tests: tests/remote_e2e.rs — spin server on ephemeral port in-process;
+   clone-equivalent pull into fresh repo (oid equality), push CAS race
+   (one winner), auth failures, oversized request refusal, crash mid-push
+   (server restart → verify clean); cli_e2e remote commands --json.
+7. Docs + state updates; commit.
 
 ## Next tasks (ordered)
 
-8. Git import/export via fast-export/fast-import + compatibility tests.
-9. Remote protocol (HTTP/1.1, JSON v1) server+client, auth, audit.
+9. Remote protocol (HTTP/1.1, JSON v1) server+client, auth, audit. ← CURRENT
 10. Web UI served by remote server; MCP/agent-API docs.
 11. Release engineering (dist script, checksums, reproducible build);
     benchmark re-run + full docs set; dependency audit/SBOM.

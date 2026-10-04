@@ -41,9 +41,11 @@ confused (`deterministic`, `ai_generated`).
 - **Secure by design** — no implicit execution of repo content, total parsers
   (no panics on malformed input), path-safety grammar, configurable resource
   limits, threat-model-driven tests.
-- **Git-compatible where it matters** — import real git repos, export back
-  (fast-export/fast-import via system git), documented exact limitations
-  (landing iteration 8).
+- **Git-compatible where it matters** — `newgit import-git` / `export-git`
+  via the system git's own fast-export/fast-import streams: byte-identical
+  blob round-trip, deterministic import, atomic ref moves, and exact
+  documented limitations (docs/GIT_COMPAT.md) — no faking, no git
+  reimplementation.
 - **Zero-rupee, self-hostable** — 5 small runtime dependencies, no cloud,
   no paid services, single static binary + optional built-in server/web UI.
 

@@ -913,3 +913,96 @@ fn verify_gc_recover_cli_contract() {
     assert_eq!(r.code, 0);
     assert!(r.out.contains("recover:"));
 }
+
+#[test]
+fn import_export_git_cli() {
+    use std::process::Command;
+    let (_d, dir) = tmp();
+    // a small real git repo
+    let gdir = dir.join("gsrc");
+    std::fs::create_dir_all(&gdir).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(&gdir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    git(&["init", "--quiet", "-b", "master"]);
+    git(&["config", "user.name", "CLI Tester"]);
+    git(&["config", "user.email", "cli@test"]);
+    std::fs::write(gdir.join("hello.txt"), b"hello git\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "--quiet", "-m", "git commit one"]);
+
+    // newgit side
+    let proj = dir.join("p8");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    let out = ok(&proj, &["import-git", gdir.to_str().unwrap(), "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], serde_json::json!(true));
+    assert_eq!(v["data"]["commits"], serde_json::json!(1));
+    assert_eq!(
+        v["data"]["head"],
+        serde_json::json!("ref: refs/heads/master")
+    );
+    ok(&proj, &["verify", "--deep"]);
+    let out = ok(&proj, &["history", "--from", "refs/heads/master"]);
+    assert!(out.contains("git commit one"), "{out}");
+    // cat resolves oids (not ref names): take the tip oid from history
+    let out = ok(
+        &proj,
+        &[
+            "history",
+            "--from",
+            "refs/heads/master",
+            "-n",
+            "1",
+            "--json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let tip = v["data"][0]["oid"].as_str().unwrap().to_string();
+    let out = ok(&proj, &["cat", &tip, "--json"]);
+    assert!(
+        out.contains("git_sha1"),
+        "snapshot must carry the original git sha"
+    );
+
+    // export back out
+    let outdir = dir.join("gout");
+    let out = ok(&proj, &["export-git", outdir.to_str().unwrap(), "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["commits"], serde_json::json!(1));
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(&outdir)
+        .args(["log", "--format=%s", "refs/heads/master"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "git commit one");
+    assert_eq!(
+        std::fs::read(outdir.join("hello.txt")).unwrap(),
+        b"hello git\n"
+    );
+
+    // error contracts: not a git repo / occupied target — both usage errors
+    let r = ng(&proj, &["import-git", proj.to_str().unwrap()]);
+    assert_eq!(r.code, 2, "{}{}", r.out, r.err);
+    assert!(r.err.contains("not a git repository") || r.out.contains("not a git repository"));
+    let r = ng(&proj, &["export-git", gdir.to_str().unwrap()]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("not empty") || r.out.contains("not empty"));
+    // missing positional
+    let r = ng(&proj, &["import-git"]);
+    assert_eq!(r.code, 2);
+}

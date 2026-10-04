@@ -76,3 +76,25 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     regression net, not an open-ended fuzzer; seeds are added when bugs are
     found (regression capture). Fuzz-like parser tests are likewise seeded
     firehoses, not coverage-guided.
+20. `import-git` caches per-commit tree state (needed for incremental
+    fast-export streams and parent inheritance): RAM grows with total
+    distinct paths × commits-in-flight, not with blob bytes (blobs stream).
+    Very large monorepo histories can be memory-hungry; a streaming
+    `--full-tree`-only mode could trade CPU for RAM later.
+21. Git **annotated/signed tags** import as plain refs: tagger, tag message,
+    and signature are stripped (`--signed-tags=strip`) and listed in the
+    import report. NewGit has no tag object type; export rebuilds
+    lightweight tags only.
+22. Git **submodules (gitlinks, mode 160000) are refused**: the whole import
+    aborts atomically with an actionable error (zero refs move). No partial
+    or faked submodule support.
+23. Export loses **sub-second timestamp precision** (git stores whole
+    seconds); import is exact at git's own precision.
+24. **No incremental git sync**: import/export are whole-history one-shot
+    operations; there is no fetch/pull negotiation against git remotes.
+    NewGit-native remotes with negotiation arrive in iteration 9.
+25. Non-UTF-8 git commit messages become lossy-converted and are flagged
+    (`extras.git_message_lossy`); git ref names violating NewGit's stricter
+    ref grammar are skipped and reported.
+26. Git interop requires a **system git ≥ ~2.20** on PATH (tested against
+    2.47). Everything else in NewGit works without git installed.

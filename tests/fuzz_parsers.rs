@@ -126,3 +126,28 @@ fn fuzz_hex_base64_refnames_never_panic() {
         let _ = newgit::util::fsx::check_rel_path(&s, 255);
     }
 }
+
+#[test]
+fn fuzz_fastexport_parser_never_panics() {
+    use newgit::gitio::fastexport::Parser;
+    // Prefix-anchored with real fast-export framing so garbage lands deep
+    // inside blob/commit/tag/reset parsing, not just at the first token.
+    let prefixes: [&[u8]; 4] = [
+        b"blob\nmark :1\ndata 5\nhello\n\n",
+        b"commit refs/heads/m\nmark :2\nauthor A <a@x> 1 +0000\ncommitter A <a@x> 1 +0000\ndata 2\nhi\nM 100644 inline x\ndata 1\ny\n\n",
+        b"tag v1\nfrom :1\ntagger T <t@x> 1 +0000\ndata 2\nhi\n\n",
+        b"reset refs/heads/b\nfrom :1\n\n",
+    ];
+    let mut rng = Rng(0xF00F_0007);
+    for i in 0..ITERS {
+        let bytes = rng.bytes(Some(prefixes[i % prefixes.len()]));
+        let mut p = Parser::new(&bytes[..]);
+        // Bounded drain: every call must terminate (Err, None, or an event).
+        for _ in 0..10_000 {
+            match p.next_event() {
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+    }
+}

@@ -13,6 +13,11 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Parser panics on malformed objects | total decoders; prefix-vs-remaining checks | `decode_rejects_garbage`, truncation sweeps ✅ + fuzz suite (it7) |
 | Cross-type confusion (blob decoded as tree) | type tag in envelope + canonical header, cross-checked | `type_mismatch_detected` ✅ |
 | Non-canonical encodings (id aliasing) | minimal varints, sorted sets, no trailing bytes rejected | ✅ roundtrip/garbage tests + property tests (it2) |
+| Malicious git repo via `import-git`: path traversal in fast-export paths (`../`, absolute, NUL) | every path through `fsx::check_rel_path` grammar before any store write | `git_compat` + path-grammar fuzz ✅ |
+| Malicious fast-export stream: bogus lengths/marks/framing | total hand-rolled parser, 2 GiB `data` cap, bounded marks, malformed ⇒ clean Err; parser never trusts git's byte counts beyond caps | 7 parser unit tests + `fuzz_fastexport_parser_never_panics` ✅ |
+| Ref-name injection from git refs (`refs/remotes/..`, control chars) | skip-list for foreign namespaces + NewGit ref grammar re-check on every imported name | `git_compat` (notes/remotes skipped) ✅ |
+| Smuggled gitlinks/submodules | mode `160000` and raw-sha `M` lines refused loudly; import aborts atomically (zero refs move) | `submodule_import_is_refused_atomically` ✅ |
+| Runaway child git process | child status checked after stream; import runs read-only git commands only (`rev-parse`, `fast-export`) — no network, no config execution beyond git's own repo load | manual review + cli_e2e error contracts ✅ |
 
 ## B. Filesystem / workspace attacks
 

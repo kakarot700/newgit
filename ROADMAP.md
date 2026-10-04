@@ -76,7 +76,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   (pulled forward from iteration 11). ✅
 - 33 new tests (total 219); fmt/clippy clean. ✅
 
-## Iteration 8 — Git compatibility  [ ]
+## Iteration 8 — Git compatibility  [x] ✅ 2026-10-04
+- DONE: `src/gitio/` (total fast-export parser + deterministic fast-import
+  emitter), `newgit import-git` / `export-git` (--json, reports, obs events).
+- DONE: 9 `tests/git_compat.rs` suites vs REAL git repos + cli_e2e contract
+  + parser fuzz sweep; round-trip: byte-identical blob SHAs, identity/
+  timestamp multiset equality, first-parent lineage, reimport fixpoint.
+- DONE: docs/GIT_COMPAT.md mapping + limits; D-016; THREAT_MODEL import
+  rows; KNOWN_LIMITATIONS #20–26. Submodules refused atomically; annotated
+  tags stripped + reported; ms→s export precision loss documented.
 - `newgit import-git` (parse `git fast-export`), `newgit export-git` (emit `git fast-import`).
 - Compatibility tests against real git repos (history, trees, modes, messages).
 - Migration guide + exact documented limitations.

@@ -273,3 +273,35 @@ awaiting recovery); recovery scans shrink to O(pending); `verify`'s
 journal_pending warning becomes meaningful (concurrent activity or genuinely
 unrecovered crash). Tests upgraded to the stronger invariant: after
 recovery, zero journal files remain.
+
+## D-016 · Git interop specifics: stream via system git, one-transaction import, honest lossy points (Iteration 8)
+
+Realizes D-007. Chosen after implementing and testing both directions:
+
+- **Parser/emitter are hand-rolled, total, and dependency-free**; git is
+  invoked only for its own `fast-export`/`fast-import` streams (never for
+  network ops). If git is absent, only these two commands fail.
+- **Import atomicity**: objects (idempotent, content-addressed) are written
+  first; ALL refs + HEAD move in ONE txn. Any error (incl. submodule
+  gitlink `160000`) ⇒ zero refs move. Rationale: a half-imported history is
+  worse than none — agents must be able to retry safely.
+- **Lossless-first-parent trick**: NewGit `Snapshot.parents` is a sorted set
+  (frozen protocol), but git merges are ordered. Import stores
+  `extras.git_parents_ordered` + `extras.git_sha1` (`--show-original-ids`);
+  export replays exact `from`/`merge` order ⇒ round-trip lineage equality
+  is tested, not hoped for.
+- **Committer vs author**: git has both; NewGit snapshots have one Actor.
+  Author becomes the Actor; committer lands in `git_committer_*` extras ONLY
+  when it differs, and export restores it. Identity/timestamp multiset
+  equality across round-trip is a test (`%an|%ae|%cn|%ce|%at|%ct|%s`).
+- **Documented lossy points, loudly reported** (never silent): annotated/
+  signed tag metadata stripped (no tag object type in NewGit) and listed in
+  the import report; ms→s precision loss on export; non-UTF-8 messages
+  lossy + flagged in extras; `refs/X` (non-heads/tags) exports as
+  `refs/heads/X`.
+- **Skipped namespaces** both directions (remotes/notes/replace/stash/
+  bisect/worktree on import; workspaces//chains/ on export) — mirroring
+  would leak internal state into git or duplicate remote-tracking refs.
+- Rejected: gitoxide/libgit2 dependency (supply chain + weight, violates
+  D-002); reimplementing SHA-1 object format (huge surface, zero benefit);
+  silent best-effort submodule import (faking).

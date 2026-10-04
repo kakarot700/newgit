@@ -198,10 +198,38 @@ open): redoes RUNNING journals (idempotent), checkpoint-deletes terminal
 journals, quarantines unparsable journals, sweeps stale object temp files.
 JSON: `{redone:[ids], quarantined:[names], cleaned:N, temp_files_swept:N}`.
 
+## import-git <git-repo-path>
+
+Imports a real git repository into the current NewGit repo via the system
+git's `fast-export` stream (D-007/D-016; full mapping + limitations in
+docs/GIT_COMPAT.md). Objects are written first, then ALL refs + HEAD move in
+ONE transaction — a failed import (e.g. a submodule/gitlink ⇒ exit 2 with an
+actionable error) moves zero refs. Deterministic: the same git repo imported
+into fresh NewGit repos yields identical object ids. Skipped namespaces
+(`refs/remotes/*`, `refs/notes/*`, `refs/replace/*`, `refs/stash`,
+`refs/bisect/*`, `refs/worktree/*`) and stripped annotated/signed tag
+metadata are listed in the report — nothing is lost silently.
+
+Flags: `--json` (`{ok,data:{commits,blobs,trees,actors,refs_imported,
+refs_skipped,annotated_tags_stripped,head}}`), `--repo/-C`, `--debug`.
+
+## export-git <target-dir>
+
+Exports the NewGit repo to a git repository at `<target-dir>` (must be
+absent or empty) via `git init` + `git fast-import`. Round-trip guarantee
+(tested against real git): byte-identical blob SHAs, modes, messages,
+author AND committer identities/timestamps, first-parent lineage, working
+tree materialized and clean. Sub-second timestamps lose precision (git is
+whole-second). NewGit-internal namespaces (`workspaces/*`, `chains/*`) are
+skipped; non-snapshot ref targets ⇒ exit 2; `refs/X` (non heads/tags) maps
+to `refs/heads/X`.
+
+Flags: `--json` (`{ok,data:{commits,blobs,refs_exported,refs_skipped,head,
+target}}`), `--repo/-C`, `--debug`.
+
 ## Coming in later iterations
 
-`import-git`/`export-git` (it8) · `remote`/`serve`/`push`/`pull` (it9) ·
-`ui` (it10).
+`remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
 
 ## Agent usage notes
 

@@ -137,6 +137,8 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "checkout" => cmd_checkout(ctx, tail),
         "actor" => cmd_actor(ctx, tail),
         "config" => cmd_config(ctx, tail),
+        "import-git" => cmd_import_git(ctx, tail),
+        "export-git" => cmd_export_git(ctx, tail),
         "verify" | "fsck" => cmd_verify(ctx, tail),
         "gc" => cmd_gc(ctx, tail),
         "recover" => cmd_recover(ctx, tail),
@@ -221,6 +223,10 @@ Workflow (goals / changes / evidence / evaluations / proposals):
   evaluation from-evidence <change-id> | show <oid>
   proposal create <title> --change <id> [--rationale R] [--base s] [--evidence oids] [--depends ids]
   proposal show <id> | list | approve <id> | reject <id> | close <id> | integrate <id> [-w ws]
+
+Git interop (system git required; D-007):
+  import-git <git-repo>        stream a git repo in (fast-export; atomic ref switch)
+  export-git <target-dir>      stream history out (fast-import; target must be empty)
 
 Maintenance:
   verify [--deep]              integrity check (fsck); exit 3 on errors
@@ -1191,6 +1197,83 @@ fn cmd_config(ctx: &Ctx, tail: &[String]) -> Result<Output> {
             "unknown config subcommand {other:?}"
         ))),
     }
+}
+
+fn cmd_import_git(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo"])?;
+    let path = a.pos_req(0, "git-repo-path")?;
+    let repo = open_repo(ctx)?;
+    let _span = obs::span("import_git");
+    let rep = crate::gitio::import::import_git(&repo, std::path::Path::new(path))?;
+    obs::event(
+        "import_git_done",
+        &[
+            ("commits", json!(rep.commits)),
+            ("blobs", json!(rep.blobs)),
+            ("refs", json!(rep.refs_imported.len())),
+        ],
+    );
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&rep).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut t = format!(
+        "imported {} commits, {} blobs, {} trees, {} actors from {}\n",
+        rep.commits, rep.blobs, rep.trees, rep.actors, path
+    );
+    for (name, oid) in &rep.refs_imported {
+        t.push_str(&format!("  ref {name} → {}\n", &oid[..oid.len().min(12)]));
+    }
+    for name in &rep.refs_skipped {
+        t.push_str(&format!("  skipped {name} (git-internal namespace)\n"));
+    }
+    for name in &rep.annotated_tags_stripped {
+        t.push_str(&format!(
+            "  annotated tag {name}: ref imported, tagger/message metadata stripped (documented)\n"
+        ));
+    }
+    if let Some(h) = &rep.head {
+        t.push_str(&format!("  HEAD → {h}\n"));
+    }
+    Ok(Output::Text(t.trim_end().to_string()))
+}
+
+fn cmd_export_git(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &[], COMMON_ALIASES)?;
+    a.reject_unknown(&["json", "debug", "repo"])?;
+    let target = a.pos_req(0, "target-dir")?;
+    let repo = open_repo(ctx)?;
+    let _span = obs::span("export_git");
+    let rep = crate::gitio::export::export_git(&repo, std::path::Path::new(target))?;
+    obs::event(
+        "export_git_done",
+        &[
+            ("commits", json!(rep.commits)),
+            ("blobs", json!(rep.blobs)),
+            ("refs", json!(rep.refs_exported.len())),
+        ],
+    );
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&rep).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut t = format!(
+        "exported {} commits, {} blobs to {}\n",
+        rep.commits, rep.blobs, target
+    );
+    for (ng, g) in &rep.refs_exported {
+        t.push_str(&format!("  {ng} → {g}\n"));
+    }
+    for name in &rep.refs_skipped {
+        t.push_str(&format!("  skipped {name} (newgit-internal namespace)\n"));
+    }
+    if let Some(h) = &rep.head {
+        t.push_str(&format!("  git HEAD → {h}\n"));
+    }
+    Ok(Output::Text(t.trim_end().to_string()))
 }
 
 fn cmd_verify(ctx: &Ctx, tail: &[String]) -> Result<Output> {

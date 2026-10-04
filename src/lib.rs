@@ -14,6 +14,7 @@
 pub mod cli;
 pub mod diff;
 pub mod error;
+pub mod gitio;
 pub mod merge;
 pub mod object;
 pub mod obs;
