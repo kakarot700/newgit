@@ -134,6 +134,24 @@ fn run(args: &[String]) -> Result<()> {
             );
             Ok(())
         }
+        "integrate" => {
+            // integrate <root> <workspace> <other-oid-hex>
+            let root = std::path::Path::new(&args[2]);
+            let repo = Repo::open(root)?;
+            let author = repo.default_actor()?;
+            let other = ObjectId::from_hex(&args[4])?;
+            let req = newgit::ops::integrate::IntegrateRequest {
+                workspace: args[3].clone(),
+                other,
+                message: None,
+                author,
+                timestamp_ms: Some(1_700_000_001_000),
+                merge_opts: Default::default(),
+            };
+            let out = newgit::ops::integrate::integrate(&repo, &req)?;
+            println!("OK {:?}", out);
+            Ok(())
+        }
         "workspace-create" => {
             // workspace-create <root> <name>
             let root = std::path::Path::new(&args[2]);

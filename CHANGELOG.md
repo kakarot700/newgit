@@ -4,6 +4,24 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 5 — 2026-10-04)
+- Three-way merge engine: per-path resolution on flattened trees; exact
+  rename tracking (rename+edit merges cleanly; rename/rename and
+  rename/delete conflict); mode combining; modify/delete conflicts;
+  dir/file collision detection; add/add with empty virtual base.
+- diff3 content merge (Myers anchors); conflict blobs with
+  ours/base/theirs markers stored for inspection (`merged_oid`).
+- Ancestry: bounded, deterministic `is_ancestor` / `merge_base`.
+- `newgit integrate` (atomic; up-to-date / fast-forward / merge; exit 5 on
+  conflicts with nothing written), `newgit merge-tree` (dry run; exit 5 on
+  conflicts in both text and JSON modes), `newgit rollback` (new snapshot,
+  old tree; merge-role aware default target), `newgit checkout` (resync
+  files; removes previously-materialized files absent from the target).
+- Workspace checkout after integrate/rollback removes stale tracked files
+  and prunes empty directories (never touches untracked content).
+- 34 new tests: merge cases, integrate atomicity/races/crash (faultlab
+  `integrate`), rollback, CLI flows, diff3 properties (total 176).
+
 ### Added (iteration 4 — 2026-10-04)
 - Diff engine: Myers O(ND) line diff with bounded edit distance and
   exact coarse fallback; canonical opcodes; reconstruction property.

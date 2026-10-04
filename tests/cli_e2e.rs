@@ -400,6 +400,129 @@ fn diff_cli_flows() {
 }
 
 #[test]
+fn integrate_merge_tree_rollback_cli() {
+    let (_d, dir) = tmp();
+    let proj = dir.join("pi");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "doc.md", b"# Title\n\nintro line\n");
+    ok(&proj, &["snapshot", "-m", "base", "--time", "1000"]);
+
+    // two agents branch from main
+    ok(&proj, &["workspace", "create", "agent-x"]);
+    ok(&proj, &["workspace", "create", "agent-y"]);
+    let xd = proj.join(".newgit/workspaces/agent-x/files");
+    let yd = proj.join(".newgit/workspaces/agent-y/files");
+    write(&xd, "doc.md", b"# Title (X edit)\n\nintro line\n");
+    write(&xd, "x-notes.md", b"X\n");
+    ok(
+        &proj,
+        &[
+            "snapshot", "-w", "agent-x", "-m", "X work", "--time", "2000",
+        ],
+    );
+    write(&yd, "doc.md", b"# Title\n\nintro line\n\nappendix (Y)\n");
+    write(&yd, "y-notes.md", b"Y\n");
+    ok(
+        &proj,
+        &[
+            "snapshot", "-w", "agent-y", "-m", "Y work", "--time", "2001",
+        ],
+    );
+
+    // dry-run merge-tree (clean): exit 0
+    let out = ok(&proj, &["merge-tree", "ws:agent-x", "ws:agent-y", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["clean"], true);
+    assert_eq!(v["data"]["entries"], 3); // doc.md + x-notes.md + y-notes.md
+
+    // real integrate into agent-x
+    let out = ok(
+        &proj,
+        &["integrate", "ws:agent-y", "-w", "agent-x", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["result"], "merged");
+    // files materialized in agent-x
+    let doc = std::fs::read(xd.join("doc.md")).unwrap();
+    assert_eq!(doc, b"# Title (X edit)\n\nintro line\n\nappendix (Y)\n");
+    assert!(xd.join("y-notes.md").exists());
+    // second integrate is up to date
+    let out = ok(
+        &proj,
+        &["integrate", "ws:agent-y", "-w", "agent-x", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["data"]["result"], "up_to_date");
+
+    // conflict path: make agent-y diverge on the same line
+    write(&yd, "doc.md", b"CONFLICT Y\n");
+    ok(
+        &proj,
+        &[
+            "snapshot",
+            "-w",
+            "agent-y",
+            "-m",
+            "Y conflict",
+            "--time",
+            "3000",
+        ],
+    );
+    write(&xd, "doc.md", b"CONFLICT X\n");
+    ok(
+        &proj,
+        &[
+            "snapshot",
+            "-w",
+            "agent-x",
+            "-m",
+            "X conflict",
+            "--time",
+            "3001",
+        ],
+    );
+    let r = ng(&proj, &["integrate", "ws:agent-y", "-w", "agent-x"]);
+    assert_eq!(r.code, 5, "conflict exit code; err={}", r.err);
+    assert!(r.err.contains("doc.md"));
+    // merge-tree dry run: exit 5 + conflict detail
+    let r = ng(&proj, &["merge-tree", "ws:agent-x", "ws:agent-y", "--json"]);
+    assert_eq!(r.code, 5);
+    let v: serde_json::Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v["data"]["clean"], false);
+    let c = &v["data"]["conflicts"][0];
+    assert_eq!(c["kind"], "content");
+    assert_eq!(c["path"], "doc.md");
+    // the merged-with-markers blob is inspectable
+    let merged_oid = c["merged_oid"].as_str().unwrap();
+    let raw = Command::new(newgit_bin())
+        .current_dir(&proj)
+        .args(["cat", merged_oid, "--raw"])
+        .output()
+        .unwrap();
+    let merged = String::from_utf8(raw.stdout).unwrap();
+    assert!(merged.contains("<<<<<<< ours"));
+    assert!(merged.contains(">>>>>>> theirs"));
+
+    // rollback agent-x past its last snapshot
+    let out = ok(&proj, &["rollback", "-w", "agent-x", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["data"]["oid"].is_string());
+    let doc = std::fs::read(xd.join("doc.md")).unwrap();
+    assert!(
+        doc.starts_with(b"# Title (X edit)"),
+        "rollback restored tree: {doc:?}"
+    );
+
+    // checkout resync
+    let out = ok(&proj, &["checkout", "-w", "agent-x", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["data"]["files"].as_u64().unwrap() > 0);
+    let out = ok(&proj, &["status", "-w", "agent-x"]);
+    assert!(out.contains("clean"));
+}
+
+#[test]
 fn debug_logging_goes_to_stderr_jsonl() {
     let (_d, dir) = tmp();
     let proj = dir.join("p6");

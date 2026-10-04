@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 4 COMPLETE — diff engine (Myers, renames, binary, unified+JSON).
-- **Classification:** NOT PRODUCTION READY (no merge/goals yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **142/142** ✓ (87 unit + 8 cli-e2e + 4 concurrency + 8 diff + 13 ops + 11 property + 10 txn-recovery + 1 version).
+- **Phase:** Iteration 5 COMPLETE — merge/integration engine (3-way merge, integrate/rollback/checkout).
+- **Classification:** NOT PRODUCTION READY (no goals/evidence/verify yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **176/176** ✓ (101 unit + 9 cli-e2e + 4 concurrency + 8 diff + 18 merge + 13 ops + 12 property + 10 txn-recovery + 1 version).
 
 ## Environment / how to resume
 
@@ -36,10 +36,12 @@ src/
   repo/{ignore,index,walk,workspace}.rs  # .newgitignore engine, NGIX cache, safe walk, workspaces
   ops/{tree,snapshot,checkout,status,history}.rs  # core operations
   diff/{myers,render,mod}.rs     # line diff, tree diff, rename detection, unified+JSON render
+  merge/{diff3,base,mod}.rs      # 3-way content merge, LCA/ancestry, tree merge
+  ops/integrate.rs               # atomic integrate, rollback, checkout_position
   cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
-tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,cli_e2e}.rs
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,cli_e2e}.rs
 docs/{STORAGE_FORMAT,CLI}.md
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
@@ -132,24 +134,49 @@ None.
   symlink diff test; regression-tested).
 - capture_tree(save_index=false): read-only worktree capture for diff/status.
 
+
+## What iteration 5 added (verified)
+
+- 3-way tree merge with exact-rename tracking, mode combining, and honest
+  conflict taxonomy (content/opaque/modify-delete/rename-rename/
+  rename-delete/mode/dir-file); conflict blobs with diff3 markers stored
+  for inspection (merged_oid).
+- diff3 content merge on Myers anchors + property tests (determinism,
+  trivial-case agreement).
+- Bounded deterministic ancestry: is_ancestor, merge_base (LCA by
+  (ts DESC, oid DESC); criss-cross documented limitation #14).
+- ops: integrate (atomic up-to-date/fast-forward/merge; conflict ⇒ nothing
+  written), rollback (new snapshot + old tree; merge_ours-aware),
+  checkout_position (resync + stale-tracked-file removal + empty-dir prune).
+- CLI: integrate, merge-tree (exit 5 on conflicts, text+JSON), rollback,
+  checkout; help texts updated.
+- Crash tests: integ:before_txn ⇒ position unchanged; integ:after_txn ⇒
+  ref durable, status honestly dirty, `checkout` repairs.
+- Concurrency test: same-target integrates serialize on the workspace lock
+  (lock acquired BEFORE position read); exactly one merge snapshot; reflog
+  length asserted.
+- Merge roles in extras (merge_ours/merge_theirs) because parents is a
+  canonically sorted set (D-004/D-012).
+
 ## Current task (next iteration)
 
-**Iteration 5: merge/integration engine.**
+**Iteration 6: goals, changes, evidence, evaluations, proposals.**
 Completion condition:
-1. 3-way tree merge (base/ours/theirs) with rename awareness; diff3-style
-   content merge for text; conflicts recorded deterministically.
-2. `newgit integrate` (atomic: merged snapshot + ref CAS txn; fast-forward
-   detection), `newgit merge-tree` dry-run, `newgit rollback` for workspaces.
-3. Conflict output: unified+JSON, stable ordering, exit code 5 on conflicts
-   for integrate --dry-run style commands.
-4. Crash tests: integrate killed before/after txn (reuse faultlab).
-5. Property tests: merge(ours==theirs)==ours; ff-merge identity;
-   determinism; reconstruct merged content from conflict-free cases.
-6. Docs + state updates; commit.
+1. Ops + CLI: `goal create/show/list`, `change create/list/attach`,
+   `evidence add` (command/output/exit/duration captured BY NEWGIT — never
+   "trust me" text), `evaluate` (deterministic vs ai kinds, honest
+   provenance), `proposal create/show/list/decide`.
+2. Status rules enforced: goal/change/proposal state machines from
+   STORAGE_FORMAT (e.g. proposal applies only from proposed; evidence
+   attaches to changes; goal status transitions validated).
+3. snapshot --goal/--change wiring already exists — verify + test links;
+   `history --goal` filtering.
+4. JSON output + e2e tests for the two-agent workflow (same goal, two
+   changes, evidence on both, proposal integrate, evaluation compares).
+5. Docs (agent workflow example) + state updates; commit.
 
 ## Next tasks (ordered)
 
-5. Merge engine (3-way tree + diff3 content merge, conflicts, integrate/rollback).
 6. Goals/Changes/Actors/Evidence/Evaluations/Proposals ops + CLI.
 7. verify (fsck) + gc + reflog + chaos/failure-injection suite.
 8. Git import/export via fast-export/fast-import + compatibility tests.

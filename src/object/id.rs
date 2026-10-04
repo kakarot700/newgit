@@ -16,7 +16,7 @@ impl ObjectId {
     pub const LEN: usize = 32;
     pub const HEX_LEN: usize = 64;
 
-    pub fn from_bytes(b: [u8; 32]) -> Self {
+    pub const fn from_bytes(b: [u8; 32]) -> Self {
         ObjectId(b)
     }
 

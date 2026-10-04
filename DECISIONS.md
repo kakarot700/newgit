@@ -134,3 +134,38 @@ can never report stale content as current.
 **Consequences.** Deterministic, memory-bounded diffs; correctness of
 status/diff under coarse filesystem clocks; slight extra hashing for files
 touched in the same tick as the last snapshot (acceptable, git-identical).
+
+## D-012 · Merge semantics: atomic integrate, honest conflicts, no history rewriting (Iteration 5)
+
+**Context.** Multiple actors (human + agents) must be able to work
+concurrently and combine results without silent data loss or fake success.
+
+**Decision.**
+1. `integrate` is all-or-nothing at the position level: conflicts abort with
+   exit 5 BEFORE any ref move or file change. (Merged-with-markers conflict
+   blobs may be stored for inspection — content-addressed, unreachable,
+   GC-able; they never affect semantics.)
+2. Merge base = best common ancestor by (timestamp DESC, oid DESC) traversal;
+   criss-cross histories with multiple maximal common ancestors pick one
+   deterministically instead of git's recursive base-merge (documented
+   limitation #15).
+3. `parents` stays a canonically sorted set (D-004); merge ROLES live in
+   `extras.merge_ours/merge_theirs` so rollback can undo "to our side"
+   unambiguously.
+4. Rollback never rewrites history: it creates a new snapshot with the old
+   tree. Auditable, revertable, crash-safe like any snapshot.
+5. Fast-forward moves the ref to the existing snapshot object (no empty
+   merge commit), matching the "position" model.
+6. Workspace file checkout after the durable commit is NOT journaled; a
+   crash in between leaves the position ahead of the files — `status`
+   reports it honestly and `newgit checkout` repairs it (tested with fault
+   injection at integ:after_txn).
+7. Content merge: diff3 over Myers anchors; symlinks and binaries never
+   auto-merge; add/add uses an empty virtual base (git-compatible outcome);
+   modify/delete and rename/delete always conflict. Exact-content rename
+   tracking only (no similarity renames in merge v1).
+8. Concurrent integrates on one workspace serialize on the workspace lock
+   (lock acquired before reading the position); CAS remains the final guard.
+
+**Consequences.** No silent conflict resolution, no lost work, deterministic
+outputs, git-familiar semantics with explicitly documented deviations.

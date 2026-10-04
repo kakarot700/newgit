@@ -52,9 +52,9 @@ cargo test --release                # same suites, optimized (chaos uses this)
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (iteration 4)
-- `cargo test`: **142 passed; 0 failed** (87 lib unit, 8 cli_e2e,
-  4 concurrency_refs, 8 diff_engine, 13 ops_snapshot, 11 property_core,
-  10 txn_recovery, 1 version)
+- Date: 2026-10-04 (iteration 5)
+- `cargo test`: **176 passed; 0 failed** (101 lib unit, 9 cli_e2e,
+  4 concurrency_refs, 8 diff_engine, 18 merge_integrate, 13 ops_snapshot,
+  12 property_core, 10 txn_recovery, 1 version)
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo fmt --check`: clean

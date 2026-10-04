@@ -4,6 +4,7 @@
 
 pub mod checkout;
 pub mod history;
+pub mod integrate;
 pub mod snapshot;
 pub mod status;
 pub mod tree;

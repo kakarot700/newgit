@@ -31,10 +31,21 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - Property tests: reconstruction + determinism; 21 new tests (total 141). ✅
 - Found & fixed: racily-clean index race (D-011). ✅
 
-## Iteration 5 — Merge/integration engine  [ ]
-- 3-way tree merge; diff3 content merge; conflict records; integrate/rollback.
-- Atomic integration via transactions; interrupted-integration recovery tests.
-- Concurrency/race tests (parallel integrates on same ref).
+## Iteration 5 — Merge/integration engine  [x]
+- 3-way tree merge: per-path resolution, exact rename tracking, mode
+  combining, modify/delete + rename/rename + rename/delete + dir/file
+  conflicts; diff3 content merge with marker blobs stored for inspection. ✅
+- Ancestry: is_ancestor + deterministic merge_base (bounded traversal). ✅
+- `integrate` (atomic; up-to-date/fast-forward/merge; conflict ⇒ exit 5,
+  nothing written), `merge-tree` dry run (exit 5 on conflicts), `rollback`
+  (new snapshot with old tree; merge-role aware), `checkout` (repair/resync
+  with tracked-file removal). ✅
+- Crash tests: integ:before_txn (nothing changes), integ:after_txn (ref
+  durable, stale files visible to status, checkout repairs). ✅
+- Concurrency: same-target integrates serialize on workspace lock; exactly
+  one merge snapshot; reflog counted. ✅
+- 35 new tests (total 176). ✅
+
 
 ## Iteration 6 — Goals, changes, evidence, evaluations, proposals  [ ]
 - Ops + CLI for the agent-native objects; relationships (goal→changes→evidence).

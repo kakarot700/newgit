@@ -201,4 +201,44 @@ proptest! {
             prop_assert_eq!(newgit::diff::myers::reconstruct(&a, &b, ops), b);
         }
     }
+
+    // ── diff3 merge: deterministic + trivial cases agree ──
+    #[test]
+    fn diff3_deterministic_and_trivial_cases(
+        vb in prop::collection::vec("[ab]\n", 0..20),
+        vo in prop::collection::vec("[ab]\n", 0..20),
+        vt in prop::collection::vec("[ab]\n", 0..20),
+    ) {
+        let base: Vec<&[u8]> = vb.iter().map(|s| s.as_bytes()).collect();
+        let ours: Vec<&[u8]> = vo.iter().map(|s| s.as_bytes()).collect();
+        let theirs: Vec<&[u8]> = vt.iter().map(|s| s.as_bytes()).collect();
+        let r1 = newgit::merge::diff3::merge_lines(&base, &ours, &theirs, 512);
+        let r2 = newgit::merge::diff3::merge_lines(&base, &ours, &theirs, 512);
+        let m1 = newgit::merge::diff3::render_merged(&r1.chunks, true);
+        let m2 = newgit::merge::diff3::render_merged(&r2.chunks, true);
+        prop_assert_eq!(&m1, &m2);
+        prop_assert_eq!(r1.conflicted, r2.conflicted);
+        // trivial semantics
+        let concat = |lines: &[&[u8]]| -> Vec<u8> {
+            let mut x: Vec<u8> = Vec::new();
+            for l in lines {
+                x.extend_from_slice(l);
+            }
+            x
+        };
+        let want_ours = concat(&ours);
+        let want_theirs = concat(&theirs);
+        if ours == theirs {
+            prop_assert!(!r1.conflicted);
+            prop_assert_eq!(&m1, &want_ours);
+        }
+        if theirs == base {
+            prop_assert!(!r1.conflicted);
+            prop_assert_eq!(&m1, &want_ours);
+        }
+        if ours == base {
+            prop_assert!(!r1.conflicted);
+            prop_assert_eq!(&m1, &want_theirs);
+        }
+    }
 }

@@ -46,6 +46,15 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     only for the chosen pair) and is capped at 1000 candidate pairs; beyond
     that only exact-content renames are detected.
 
+## Merge (arrives iteration 5)
+14. Merge base selection picks the maximal common ancestor by
+    (timestamp, oid) — criss-cross merges with several merge bases do not
+    get git's "recursive" virtual-base treatment. Rename tracking in merges
+    is exact-content only (no similarity-based rename detection during
+    merge; the diff engine has it for display). Conflict resolution is
+    manual: NewGit stores the marker-annotated blob and expects a human or
+    agent to edit + snapshot it (no rerere-style reuse yet).
+
 ## Process
-14. Benchmarks are measured on modest hardware (2 vCPU / 2 GB) — relative
+15. Benchmarks are measured on modest hardware (2 vCPU / 2 GB) — relative
     numbers, not marketing numbers (docs/BENCHMARKS.md).

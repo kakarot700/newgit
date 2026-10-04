@@ -130,6 +130,10 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "hash-object" => cmd_hash_object(ctx, tail),
         "workspace" | "ws" => cmd_workspace(ctx, tail),
         "diff" => cmd_diff(ctx, tail),
+        "integrate" | "merge" => cmd_integrate(ctx, tail),
+        "merge-tree" => cmd_merge_tree(ctx, tail),
+        "rollback" => cmd_rollback(ctx, tail),
+        "checkout" => cmd_checkout(ctx, tail),
         "actor" => cmd_actor(ctx, tail),
         "config" => cmd_config(ctx, tail),
         other => Err(Error::Invalid(format!(
@@ -187,6 +191,13 @@ Core:
   history [--from <ref|oid>] [-n <N>]   walk snapshot history (alias: log)
   cat <oid> [--raw]            inspect an object (JSON; --raw dumps blobs)
   hash-object <file> [--write] compute (and optionally store) a blob id
+
+Diff & merge:
+  diff [<a> [<b>]] [--name-only|--json|--context N|--no-renames|--exit-code]
+  integrate <snapshot|ref|ws:name> [-w <ws>] [-m <msg>] [--no-renames]
+  merge-tree <ours> <theirs> [--base <b>] [--json]   (dry run; exit 5 on conflicts)
+  rollback [-w <ws>] [--to <snapshot>] [-m <msg>]    (new snapshot, old tree)
+  checkout [-w <ws>]                                 (resync files from position)
 
 Workspaces:
   workspace create <name> [--base <ref|oid>]
@@ -804,6 +815,235 @@ fn cmd_diff(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         std::process::exit(1);
     }
     Ok(Output::Text(out.trim_end().to_string()))
+}
+
+fn merge_opts_from(a: &Args) -> Result<crate::merge::MergeOpts> {
+    let mut opts = crate::merge::MergeOpts::default();
+    if a.flag("no-renames") {
+        opts.track_renames = false;
+    }
+    if let Some(d) = a.opt("max-edit-distance") {
+        opts.max_edit_distance = d
+            .parse()
+            .map_err(|_| Error::Invalid(format!("bad --max-edit-distance {d:?}")))?;
+    }
+    Ok(opts)
+}
+
+fn cmd_integrate(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(
+        tail,
+        &[
+            "workspace",
+            "message",
+            "time",
+            "author",
+            "author-name",
+            "max-edit-distance",
+        ],
+        COMMON_ALIASES,
+    )?;
+    a.reject_unknown(&[
+        "workspace",
+        "message",
+        "time",
+        "author",
+        "author-name",
+        "no-renames",
+        "max-edit-distance",
+        "json",
+        "debug",
+        "repo",
+    ])?;
+    let repo = open_repo(ctx)?;
+    let other_spec = a.pos_req(0, "snapshot-or-ref")?;
+    let other = crate::repo::workspace::resolve_base(&repo, Some(other_spec))?
+        .ok_or_else(|| Error::Invalid(format!("cannot resolve {other_spec:?}")))?;
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN).to_string();
+    let author = resolve_actor(&repo, &a)?;
+    let req = crate::ops::integrate::IntegrateRequest {
+        workspace: ws.clone(),
+        other,
+        message: a.opt("message").map(String::from),
+        author,
+        timestamp_ms: a
+            .opt("time")
+            .map(|v| {
+                v.parse::<i64>()
+                    .map_err(|_| Error::Invalid(format!("bad --time {v:?}")))
+            })
+            .transpose()?,
+        merge_opts: merge_opts_from(&a)?,
+    };
+    let _span = obs::span("integrate");
+    let out = crate::ops::integrate::integrate(&repo, &req)?;
+    obs::event(
+        "integrated",
+        &[("workspace", json!(ws)), ("other", json!(other.to_hex()))],
+    );
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&out).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let t = match &out {
+        crate::ops::integrate::IntegrateOutcome::UpToDate { position } => {
+            format!("already up to date ({})", position.short())
+        }
+        crate::ops::integrate::IntegrateOutcome::FastForward { from, to } => format!(
+            "fast-forward {} → {} on {ws}",
+            from.map(|f| f.short()).unwrap_or_else(|| "unborn".into()),
+            to.short()
+        ),
+        crate::ops::integrate::IntegrateOutcome::Merged {
+            oid,
+            entries,
+            renames,
+            ..
+        } => format!(
+            "merged {} into {ws} ({entries} files, {} renames)",
+            oid.short(),
+            renames.len()
+        ),
+    };
+    Ok(Output::Text(t))
+}
+
+fn cmd_merge_tree(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &["base", "max-edit-distance"], COMMON_ALIASES)?;
+    a.reject_unknown(&[
+        "base",
+        "no-renames",
+        "max-edit-distance",
+        "json",
+        "debug",
+        "repo",
+    ])?;
+    let repo = open_repo(ctx)?;
+    let ours = a.pos_req(0, "ours")?;
+    let theirs = a.pos_req(1, "theirs")?;
+    let opts = merge_opts_from(&a)?;
+    let _span = obs::span("merge_tree");
+    let out = crate::ops::integrate::merge_tree_dry(&repo, ours, theirs, a.opt("base"), &opts)?;
+    if !out.clean {
+        // deterministic exit code for scripts: 5 = conflicts (both formats)
+        if ctx.json {
+            let v = serde_json::to_value(&out).map_err(|e| Error::Bug(e.to_string()))?;
+            println!("{}", json!({ "ok": true, "data": v }));
+        } else {
+            let mut t = String::new();
+            t.push_str(&format!(
+                "merge {} × {} — NOT CLEAN ({} conflicts)\n  tree: {}\n",
+                ours,
+                theirs,
+                out.conflicts.len(),
+                out.root
+            ));
+            for (from, to) in &out.renames {
+                t.push_str(&format!("  rename: {from} → {to}\n"));
+            }
+            for c in &out.conflicts {
+                t.push_str(&format!(
+                    "  conflict: {}\n",
+                    serde_json::to_string(c).unwrap_or_default()
+                ));
+            }
+            print!("{t}");
+        }
+        std::process::exit(exit_code::CONFLICT);
+    }
+    if ctx.json {
+        return Ok(Output::Json(
+            serde_json::to_value(&out).map_err(|e| Error::Bug(e.to_string()))?,
+        ));
+    }
+    let mut t = String::new();
+    t.push_str(&format!(
+        "merge {} × {}\n  clean: true\n  tree: {}\n  entries: {}\n",
+        ours, theirs, out.root, out.entries
+    ));
+    for (from, to) in &out.renames {
+        t.push_str(&format!("  rename: {from} → {to}\n"));
+    }
+    Ok(Output::Text(t.trim_end().to_string()))
+}
+
+fn cmd_rollback(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(
+        tail,
+        &[
+            "workspace",
+            "to",
+            "message",
+            "time",
+            "author",
+            "author-name",
+        ],
+        COMMON_ALIASES,
+    )?;
+    a.reject_unknown(&[
+        "workspace",
+        "to",
+        "message",
+        "time",
+        "author",
+        "author-name",
+        "json",
+        "debug",
+        "repo",
+    ])?;
+    let repo = open_repo(ctx)?;
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN).to_string();
+    let author = resolve_actor(&repo, &a)?;
+    let target = a
+        .opt("to")
+        .map(|s| {
+            crate::repo::workspace::resolve_base(&repo, Some(s))?
+                .ok_or_else(|| Error::Invalid(format!("cannot resolve --to {s:?}")))
+        })
+        .transpose()?;
+    let req = crate::ops::integrate::RollbackRequest {
+        workspace: ws.clone(),
+        target,
+        message: a.opt("message").map(String::from),
+        author,
+        timestamp_ms: a
+            .opt("time")
+            .map(|v| {
+                v.parse::<i64>()
+                    .map_err(|_| Error::Invalid(format!("bad --time {v:?}")))
+            })
+            .transpose()?,
+    };
+    let _span = obs::span("rollback");
+    let oid = crate::ops::integrate::rollback(&repo, &req)?;
+    if ctx.json {
+        return Ok(Output::Json(json!({ "oid": oid, "workspace": ws })));
+    }
+    Ok(Output::Text(format!(
+        "rolled back {ws} to a new snapshot {oid}"
+    )))
+}
+
+fn cmd_checkout(ctx: &Ctx, tail: &[String]) -> Result<Output> {
+    let a = Args::parse(tail, &["workspace"], COMMON_ALIASES)?;
+    a.reject_unknown(&["workspace", "json", "debug", "repo"])?;
+    let repo = open_repo(ctx)?;
+    let ws = a.opt("workspace").unwrap_or(workspace::MAIN).to_string();
+    let _span = obs::span("checkout");
+    let rep = crate::ops::integrate::checkout_position(&repo, &ws)?;
+    if ctx.json {
+        return Ok(Output::Json(json!({
+            "workspace": ws,
+            "files": rep.files,
+            "symlinks": rep.symlinks,
+            "bytes": rep.bytes,
+        })));
+    }
+    Ok(Output::Text(format!(
+        "checked out {ws}: {} files, {} symlinks, {} bytes",
+        rep.files, rep.symlinks, rep.bytes
+    )))
 }
 
 fn cmd_actor(ctx: &Ctx, tail: &[String]) -> Result<Output> {

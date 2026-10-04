@@ -63,6 +63,38 @@ position vs live workspace.
 Renames: exact-content first, then ≥50% similarity (deterministic greedy).
 Binary files (NUL in first 8000 bytes) diff at metadata level only.
 
+### `newgit integrate <spec> [-w <ws>] [-m <msg>] [--time <ms>] [--author <id>] [--no-renames]`
+Atomically integrate another snapshot into a workspace position:
+* target already contained ⇒ `up_to_date` (exit 0),
+* position is an ancestor of target ⇒ **fast-forward** (ref moves, files
+  checked out),
+* otherwise a **3-way merge** (base = best common ancestor): clean merges
+  create a two-parent merge snapshot (roles recorded in `extras.merge_ours` /
+  `extras.merge_theirs` because `parents` is a canonically sorted set) and
+  check the merged tree out into the workspace; conflicts ⇒ **exit 5**,
+  no ref move and no file changes. Conflict details: use `merge-tree`.
+
+### `newgit merge-tree <ours> <theirs> [--base <b>] [--json] [--no-renames]`
+Dry-run merge. Prints the merged tree id, applied renames, and conflicts
+(text or JSON). **Exit 0 when clean, 5 when conflicted** (script-friendly).
+Content conflicts include `merged_oid`: a stored blob with diff3-style
+markers (`<<<<<<< ours` / `||||||| base` / `=======` / `>>>>>>> theirs`)
+ready to inspect with `newgit cat <merged_oid> --raw`, edit, and snapshot
+as the resolution.
+
+### `newgit rollback [-w <ws>] [--to <spec>] [-m <msg>]`
+Rollback = a NEW snapshot carrying an OLD tree; history is never rewritten
+(the rollback itself is auditable: parents, message, `extras.op=rollback`).
+Default target: `extras.merge_ours` for merge snapshots (undo the merge),
+otherwise the sole parent. Files are re-checked-out.
+
+### `newgit checkout [-w <ws>]`
+Resynchronize workspace files with the position snapshot. Removes files
+NewGit previously materialized that the target tree no longer contains
+(tracked-file removal, like git switch); never touches files NewGit has not
+tracked. Also the repair path after a crash between an integrate commit and
+its file checkout.
+
 ### `newgit workspace <create|list|show|discard>`
 See `newgit help workspace`. Workspaces are isolated concurrent work areas;
 `main` is the repository root. Non-main workspaces live in
@@ -81,7 +113,7 @@ Repository configuration and resource limits (`key = value` format).
 
 ## Coming in later iterations
 
-`integrate`/`rollback`/merge (it5) · `goal`/`change`/`evidence`/
+`goal`/`change`/`evidence`/
 `proposal`/`verify`/`gc` (it6–7) · `import-git`/`export-git` (it8) ·
 `remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
 

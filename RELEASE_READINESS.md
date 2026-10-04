@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 4 of 12 complete).
+**Current classification: NOT PRODUCTION READY** (iteration 5 of 12 complete).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -15,7 +15,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] diff engine (line + tree, renames, binary, mode, unified + JSON) — iteration 4 ✅ (8 suites + property reconstruct)
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
 - [ ] changes / goals / evidence / proposals — iteration 6
-- [ ] integration (merge) + rollback — iteration 5
+- [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
 - [ ] verification (fsck) — iteration 7
 - [ ] Git compatibility path — iteration 8
 
@@ -23,7 +23,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] crash-safe object writes (tmp→fsync→rename→dir fsync) + fault hooks — iteration 1
 - [x] crash recovery for transactions (forward recovery, quarantine, dedup) — iteration 2 ✅ (5 abort scenarios)
 - [x] corruption detection (digest, misfiling, truncation, bombs) — iteration 1
-- [x→partial] concurrency testing: refs/txn races ✅ iteration 2; integration races due iteration 5
+- [x→partial] concurrency testing: refs/txn races ✅ it2; integrate serialization ✅ it5; remote races due it9
 - [ ] failure injection suite end-to-end — iterations 2–7
 - [ ] recovery verification (chaos) — iteration 7
 
@@ -35,7 +35,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [ ] access control (remote authn/authz) tested — iteration 9
 
 ## QUALITY
-- [x] unit tests (87) + integration (31) + e2e (8) + property (11) — iterations 1–4
+- [x] unit tests (101) + integration (49) + e2e (9) + property (12) — iterations 1–5
 - [x→partial] integration/E2E/property suites ✅ it2–3; fuzz + chaos due it7; regression discipline active
 
 ## PERFORMANCE
