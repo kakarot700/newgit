@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: detached-HEAD import/export (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: exact tested UTF-8 commit-message payloads plus explicit refusal of messages outside NewGit's text model (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -14,12 +14,38 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git compatibility milestone — detached `HEAD` and ref integrity (2026-10-04)
+## Previous Git compatibility milestone — detached `HEAD` and ref integrity (2026-10-04)
 
 - **Evidence and defects:** real Git 2.43.0 probes showed `git fast-export --all` emits a pseudo-ref named exactly `HEAD` for detached checkouts. The importer previously persisted it as a regular NewGit ref, while export could omit detached-only history or fail to reproduce detached state. Adversarial review also confirmed that `main` and `refs/main` can alias one Git ref and one source ref was silently overwritten.
 - **Implementation:** import treats the exact stream label as pseudo-ref-only while mapping detached `HEAD` directly in its atomic transaction. Export roots detached history at a temporary ref, checks out the target with `git checkout --detach`, and deletes the temporary ref. Its allocator avoids exact and slash-delimited ancestor/descendant collisions on every suffix attempt. Export now rejects multiple NewGit names mapping to the same Git ref before initializing the target.
 - **Regression evidence:** real-Git tests cover detached-only history, a detached tip ahead of a branch, two successive nested temporary-ref candidates, and a valid redundant-ancestor merge whose ordered parents survive export. The mapped-ref alias test asserts the two mappings, validates the destination with `git check-ref-format`, and checks that export refuses before creating partial output. The suspected topological-sort failure was not reproduced; no sorter change was made.
 - **Local verification:** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, full `cargo test --locked` (283 passed), `cargo build --release --locked`, full `cargo test --release --locked` (283 passed), SBOM drift check, and `git diff --check` all pass. The focused `tests/git_compat.rs` suite contains 14 passing tests. The exact implementation SHA, push state, and hosted conclusions are recorded above.
+
+## Current Git compatibility milestone — exact tested UTF-8 messages and control-byte refusal (2026-10-04)
+
+- **Evidence gap and attack:** the previous interoperability fixture compared
+  messages with `trim_end()`, so it did not prove byte-exact preservation of
+  significant leading/trailing whitespace or newline framing. An independent
+  review also found that Git accepts U+0001 in a commit message while NewGit's
+  snapshot text model rejects it; the generic validation error did not explain
+  the Git boundary.
+- **Regression:** `tests/git_compat.rs::commit_message_roundtrip_preserves_exact_utf8_bytes`
+  creates commits through the Git CLI with leading/trailing blank lines,
+  trailing spaces, CRLF, no final LF, and an empty message. It compares raw
+  `git cat-file commit` message bytes to the fixture bytes, imported
+  `Snapshot.message` bytes, and exported raw commit-object payloads. It does
+  not use `%B` pretty-format output or normalize whitespace.
+- **Implementation:** valid UTF-8 bytes are preserved for the tested message
+  cases. Rather than relaxing core text validation or exposing control bytes to
+  consumers, import now returns an explicit error containing the source commit
+  and U+XXXX code point for C0 controls other than LF/CR/TAB and DEL. It refuses
+  before the import ref transaction; a real Git U+0001 fixture confirms zero
+  refs moved and a healthy repository.
+- **Local verification:** all 16 `tests/git_compat.rs` cases pass with Git
+  2.43.0; `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D
+  warnings`, full debug and release suites (285 passed each), release build,
+  SBOM drift check, and `git diff --check` all pass. Hosted CI and CodeQL checks
+  for this milestone are pending until the implementation is pushed.
 
 ## Local development setup
 

@@ -14,6 +14,16 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   NewGit refs that map to one Git ref rather than silently dropping one; a
   redundant-ancestor merge-parent round-trip pins parent ordering.
 
+### Added
+- A real-Git regression compares raw commit-object message payloads before and
+  after import/export and the imported `Snapshot.message`. It pins exact UTF-8
+  bytes for leading/trailing blank lines, trailing spaces, CRLF, no final LF,
+  and an empty message instead of relying on trimmed pretty-format output.
+- Git messages containing unsupported control characters now fail with a
+  commit-specific error naming the code point and explaining that refs have
+  not been updated. A real Git commit containing U+0001 verifies the refusal is
+  atomic and the NewGit repository remains verifiable.
+
 ## [0.1.0] - 2026-10-04
 
 ### Changed / Fixed (iteration 12 — final audit, 2026-10-04)

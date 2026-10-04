@@ -169,6 +169,16 @@ fn git_blob(dir: &Path, sha: &str) -> Vec<u8> {
     git(dir, &["cat-file", "blob", sha]).stdout
 }
 
+fn git_commit_message(dir: &Path, rev: &str) -> Vec<u8> {
+    let raw = git(dir, &["cat-file", "commit", rev]).stdout;
+    let body = raw
+        .windows(2)
+        .position(|pair| pair == b"\n\n")
+        .expect("Git commit header/body separator")
+        + 2;
+    raw[body..].to_vec()
+}
+
 fn mode_str(m: EntryMode) -> &'static str {
     match m {
         EntryMode::File => "100644",
@@ -496,6 +506,125 @@ fn export_roundtrip_matches_git() {
         .unwrap()
         .file_type()
         .is_symlink());
+}
+
+#[test]
+fn commit_message_roundtrip_preserves_exact_utf8_bytes() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "seed.txt", b"seed\n");
+    commit(&gdir, "seed");
+
+    let expected = vec![
+        b"seed\n".to_vec(),
+        "\n\nleading blank lines; Unicode: λ\nbody with trailing spaces  \n\n"
+            .as_bytes()
+            .to_vec(),
+        b"no final newline, but trailing spaces  ".to_vec(),
+        b"CRLF line one\r\nline two\r\n".to_vec(),
+        Vec::new(),
+    ];
+    for (index, message) in expected.iter().skip(1).enumerate() {
+        let message_file = d.path().join(format!("message-{index}"));
+        std::fs::write(&message_file, message).unwrap();
+        git(
+            &gdir,
+            &[
+                "-c",
+                "commit.cleanup=verbatim",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "--allow-empty-message",
+                "-F",
+                message_file.to_str().unwrap(),
+            ],
+        );
+    }
+
+    let source_revs: Vec<String> =
+        git_out(&gdir, &["rev-list", "--reverse", "--first-parent", "HEAD"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+    assert_eq!(source_revs.len(), expected.len());
+    for (rev, message) in source_revs.iter().zip(&expected) {
+        assert_eq!(
+            git_commit_message(&gdir, rev),
+            *message,
+            "source Git fixture"
+        );
+    }
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    assert_eq!(report.commits, expected.len());
+    let by_sha = snapshots_by_git_sha(&repo);
+    for (rev, message) in source_revs.iter().zip(&expected) {
+        let snapshot_oid = by_sha.get(rev).expect("imported source commit");
+        let snapshot = match repo.objects.get(snapshot_oid).unwrap() {
+            Object::Snapshot(snapshot) => snapshot,
+            _ => panic!("imported commit did not map to a snapshot"),
+        };
+        assert_eq!(snapshot.message.as_bytes(), message, "imported {rev}");
+    }
+
+    let outdir = d.path().join("out");
+    let export = export_git(&repo, &outdir).unwrap();
+    assert_eq!(export.commits, expected.len());
+    let output_revs: Vec<String> = git_out(
+        &outdir,
+        &["rev-list", "--reverse", "--first-parent", "HEAD"],
+    )
+    .lines()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(output_revs.len(), expected.len());
+    for (rev, message) in output_revs.iter().zip(&expected) {
+        assert_eq!(git_commit_message(&outdir, rev), *message, "exported {rev}");
+    }
+}
+
+#[test]
+fn git_control_character_commit_message_is_refused_atomically() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "seed.txt", b"seed\n");
+    commit(&gdir, "seed");
+
+    let message = b"valid UTF-8 with an unsupported control: \x01\n";
+    let message_file = d.path().join("control-message");
+    std::fs::write(&message_file, message).unwrap();
+    git(
+        &gdir,
+        &[
+            "-c",
+            "commit.cleanup=verbatim",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-F",
+            message_file.to_str().unwrap(),
+        ],
+    );
+    let git_tip = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    assert_eq!(git_commit_message(&gdir, &git_tip), message);
+
+    let (_nd, repo) = temp_repo();
+    let error = import_git(&repo, &gdir).unwrap_err().to_string();
+    assert!(error.contains(&git_tip), "missing commit id: {error}");
+    assert!(error.contains("U+0001"), "missing code point: {error}");
+    assert!(
+        error.contains("before updating refs"),
+        "not explicit: {error}"
+    );
+
+    let mut names = Vec::new();
+    newgit::ops::verify::collect_ref_files(&repo.ng().join("refs"), "", &mut names);
+    assert!(names.is_empty(), "failed import moved refs: {names:?}");
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
 }
 
 #[test]

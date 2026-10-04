@@ -94,10 +94,16 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     operations; there is no fetch/pull negotiation against git remotes.
     NewGit-native remotes with negotiation arrive in iteration 9.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
-    (`extras.git_message_lossy`); git ref names violating NewGit's stricter
-    ref grammar are skipped and reported. Export refuses distinct NewGit ref
-    names that map to the same Git ref (for example, `main` and `refs/main`)
-    rather than silently overwriting one.
+    (`extras.git_message_lossy`). Valid UTF-8 message payloads are preserved
+    byte-for-byte for the tested cases (including leading/trailing whitespace,
+    CRLF, missing final LF, and empty messages; see
+    `tests/git_compat.rs::commit_message_roundtrip_preserves_exact_utf8_bytes`).
+    Import refuses commit messages containing C0 control characters other than
+    LF/CR/TAB or DEL because the NewGit text model does not permit them; the
+    U+0001 case is regression-tested and confirms no refs move. Git ref names
+    violating NewGit's stricter ref grammar are skipped and reported. Export
+    refuses distinct NewGit ref names that map to the same Git ref (for
+    example, `main` and `refs/main`) rather than silently overwriting one.
 26. Git interop requires a **system git ≥ ~2.20** on PATH (the recorded
     compatibility suite runs against Git 2.43.0). Everything else in NewGit
     works without git installed.

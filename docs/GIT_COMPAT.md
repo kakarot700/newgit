@@ -18,7 +18,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | blob | `Blob` object, byte-exact | exact |
 | tree | `Tree` objects (built per commit) | exact |
 | commit | `Snapshot` object | exact (see timestamps) |
-| commit message | `Snapshot.message` (UTF-8) | exact; non-UTF-8 → lossy + `extras.git_message_lossy=1` |
+| commit message | `Snapshot.message` (UTF-8) | valid UTF-8 payload bytes are preserved exactly in tested cases, including leading/trailing whitespace, CRLF, and no final LF; C0 controls other than LF/CR/TAB and DEL are refused before refs move; non-UTF-8 → lossy + `extras.git_message_lossy=1` |
 | author `Name <email>` | `Actor` object: `display_name=Name`, `extras.email`, `id="git:<email>"`, kind Human | exact; same person ⇒ same Actor oid |
 | author date + tz | `timestamp_ms` (seconds×1000), `tz_offset_min` | exact to the second |
 | committer (when ≠ author) | `extras.git_committer_{name,email,ts_ms,tz}` | exact (restored on export) |
@@ -73,12 +73,20 @@ that no named ref reaches; NewGit checks out the target commit in detached mode
 and deletes that temporary ref before returning.
 
 **Round-trip guarantee (tested):** git repo → import → export → git repo
-preserves: commit count, every ref's full tree (paths, modes, **blob SHAs**),
-all commit messages, author AND committer identities and timestamps, and
-first-parent lineage (`export_roundtrip_matches_git`). Re-importing the
-exported repo produces identical trees and messages (`reimport_after_export_
-is_stable`); snapshot oids differ because `git_sha1`/committer metadata
-necessarily reference the new git objects.
+preserves the tested commit count, ref trees (paths, modes, **blob SHAs**),
+author/committer identities and timestamps, and first-parent lineage
+(`export_roundtrip_matches_git`). Message content is compared in that fixture;
+the separate `commit_message_roundtrip_preserves_exact_utf8_bytes` test checks
+raw Git commit-object payload bytes at source and export, plus the imported
+`Snapshot.message`, for leading/trailing blank lines, trailing spaces, CRLF, no
+final LF, and an empty message. The companion
+`git_control_character_commit_message_is_refused_atomically` case proves the
+tested U+0001 message is rejected with no ref updates. These tests do not
+establish lossless handling of non-UTF-8 messages, which are converted lossily
+and flagged. Re-importing the
+exported repo produces identical tested trees and messages
+(`reimport_after_export_is_stable`); snapshot oids differ because
+`git_sha1`/committer metadata necessarily reference the new git objects.
 
 Detached-`HEAD` semantics are separately covered by real-Git tests for a
 detached-only repository, a detached successor while a named branch remains at
@@ -115,6 +123,10 @@ parent is already an ancestor of its first.
 7. `git` binary must be available and modern enough for `fast-export
    --full-tree --show-original-ids` (git ≥ 2.20; this suite runs against Git
    2.43.0 in the recorded environment).
+8. Git commit messages containing C0 control characters other than LF/CR/TAB,
+   or DEL, are refused: NewGit's text model does not permit them. The refusal
+   includes the source commit id and code point and occurs before ref updates;
+   U+0001 is regression-tested.
 
 ## CLI details
 

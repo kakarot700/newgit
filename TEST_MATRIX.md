@@ -27,7 +27,7 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | Fuzz-like | `tests/fuzz_parsers.rs` | 150k seeded prefix-anchored garbage inputs vs envelope/canonical/index/journal/config/hex/base64/ref-grammar/fast-export + **HTTP request framing, percent-decoding and all remote wire structs** (no panics, no OOM) | ✅ iter 7–9 (8 suites) |
 | E2E (UI/MCP) | lib (`ui::tests`, `cli::mcp::tests`) + `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | UI self-containment & XSS discipline (asserted against shipped bytes); UI served only with `--ui`, data-free shell, no-auth static vs role-gated data; `/v1/object` shapes (snapshot/tree/blob-b64/goal/change/evidence/proposal) + not-found/malformed; `/v1/diff` vs CLI rendering + spec forms + content cap; goals/changes(?goal)/proposals listings; MCP handshake/catalog(13)/ping, JSON-RPC error codes (-32700/-32600/-32601/-32602), argv mapping table, isError envelope, real child processes (`newgit ui` announcement + HTML over TCP; `newgit mcp` full session incl. snapshot-through-MCP and clean EOF exit) | ✅ iter 10 (4 lib + 2 remote + 2 cli suites) |
 | E2E (remote) | `tests/remote_e2e.rs` + 2 in `tests/cli_e2e.rs` | REAL in-process server + REAL TCP client (no mocks): info/healthz anonymous, refs gating, role matrix (read/write/admin ⇒ 401/403 boundaries), bad token never downgrades, push→pull oid + object-universe equality, incremental push (0 objects on re-push), non-fast-forward refusal + wire CAS (one winner), dependency-order + corrupt-envelope rejection on put, batch/body limits, internal namespaces never cross, audit content + ordering, concurrent pushes to different refs, crash-mid-push leaves server clean and retry reuses orphans, negotiate superset + post-order, protocol-version and URL validation. CLI: `serve` port-0 announcement line, `token add/list` (no leaks), `remote add/list/remove`, `push`/`pull`/`audit` `--json` envelopes, exit codes 2/3/5/7, bind-conflict and not-a-repo errors | ✅ iter 9 (14 + 2 suites) |
-| Compatibility | `tests/git_compat.rs` | REAL system-git repos (branches, merges, annotated+light tags, binary, symlink, exec bit, unicode, renames, empty commits, distinct author/committer, remotes+notes refs): import equality vs `ls-tree`/`cat-file`/`log`, import determinism, export round-trip (byte-identical blob SHAs + identity multiset + clean worktree), submodule refusal atomicity, empty repo, ref-move atomicity, export refusals, reimport stability | ✅ iter 8 (9 suites) |
+| Compatibility | `tests/git_compat.rs` | REAL system-Git repos (branches, merges, annotated+light tags, binary, symlink, exec bit, Unicode, renames, empty commits, distinct author/committer, remotes+notes refs): import equality vs `ls-tree`/`cat-file`/`log`, import determinism, export round-trip (byte-identical blob SHAs + identity multiset + clean worktree), exact tested UTF-8 commit-message payloads via raw commit objects, U+0001 message refusal with zero refs moved + deep verify, submodule refusal atomicity, empty repo, ref-move atomicity, export refusals, reimport stability | ✅ iter 8 + compatibility continuation (16 tests) |
 | Final audit (it12) | code review of it10/11 seams + README quickstart verbatim run | Findings→fixes→regressions: (1) /v1/diff internal-spec probe (`ws:`/`workspaces/*` resolvable remotely) → FIXED `check_wire_spec` 400-invalid + regression inside `internal_namespaces_never_cross_the_wire` (8 probe calls, both sides; honest ref+oid specs still work); (2) unbounded /v1/goals·changes·proposals responses → FIXED cap at `limits.max_batch_objects` + `truncated` flag (asserted false on small listings); (3) MCP positional values shaped like flags → FIXED `--` separator before every bare positional + dash-value cases (`--raw` oid, `--force` title/spec) in `argv_building_matches_cli_syntax`; (4) UI hash-route params traced: tampered `?ref=` is inert (matched against fetched refs only), goal-filter oids are hex-gated server-side; (5) README quickstart transcript executed VERBATIM end-to-end (goal→workspace→snapshot --goal→change→evidence record→tested gate→proposal→approve→integrate→achieved→verify 0 errors→history --goal) ✅ |
 | Release/supply-chain | `scripts/dist.sh`, `scripts/sbom.py`, cargo-audit, dual-target rebuild | dist packaging + `sha256sum -c` over every file (RUN: 27/27 OK); SBOM determinism (`sbom.py \| diff SBOM.md -` RUN: clean); cargo-audit live DB (RUN 2026-10-04: 1290 advisories × 63 crates → 0 findings); reproducibility: two clean release builds, different target dirs (RUN: bit-identical, sha256 abcd51c8…); build.rs review of all 8 runtime crates w/ scripts (RUN: rustc probes only, no network) | ✅ iter 11 (commands recorded, not test-fns — rerun via CHANGELOG it11) |
 | Performance | `src/bin/newgit-bench.rs` + docs/BENCHMARKS.md | put_blob / snapshot 1k+5k cold+warm / status cached+uncached / diff / history / integrate / verify / gc — real recorded numbers + regression policy | ✅ iter 7 (release re-check: iter 11) |
@@ -51,7 +51,7 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | I13 | integration atomic; failure leaves no partial state | `integrate_conflict_writes_nothing`, `integrate_three_way_merge_atomic_and_checked_out`, `integrate_concurrent_same_target_serializes` ✅ |
 | I14 | verify detects every injected corruption class | `corrupt_object_detected`, `truncated_object_detected`, `misfiled_object_detected`, `bad_layout_detected`, `reflog_malformed_detected`, `ref_target_missing_detected`, `chain_tampering_detected`, `verify_never_modifies_the_repository` ✅ |
 | I15 | evidence honesty flags survive roundtrip; claims ≠ facts | `change_lifecycle_honesty_gates`, evidence/proposal tests in `tests/ops_snapshot.rs` ✅ |
-| I16 | git import/export preserves trees, history, modes | `import_matches_git_content_exactly`, `export_roundtrip_matches_git` ✅ |
+| I16 | git import/export preserves tested trees, history, modes, and valid UTF-8 commit-message payloads; unsupported message controls are refused before ref movement | `import_matches_git_content_exactly`, `export_roundtrip_matches_git`, `commit_message_roundtrip_preserves_exact_utf8_bytes`, `git_control_character_commit_message_is_refused_atomically` ✅ |
 | I17 | git import is deterministic (same repo ⇒ same oids) | `import_is_deterministic` ✅ |
 | I18 | unsupported git content (submodules) fails loudly and atomically — zero refs move | `submodule_import_is_refused_atomically` ✅ |
 | I19 | export→reimport is a fixpoint on trees/messages | `reimport_after_export_is_stable` ✅ |
@@ -63,19 +63,17 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 
 ## Latest recorded run
 
-- Date: 2026-10-04 (iteration 12 — FINAL audit re-run)
-- `cargo test --locked` (debug): **278 passed; 0 failed** (128 lib unit,
+- Date: 2026-10-04 (Git compatibility continuation; Git 2.43.0)
+- `cargo test --locked` (debug): **285 passed; 0 failed** (128 lib unit,
   6 chaos, 16 cli_e2e, 4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers,
-  9 git_compat, 18 merge_integrate, 13 ops_snapshot, 12 property_core,
+  16 git_compat, 18 merge_integrate, 13 ops_snapshot, 12 property_core,
   16 remote_e2e, 10 txn_recovery, 20 verify_gc, 1 version, 9 workflow)
-- `cargo test --release --locked`: **278 passed; 0 failed** (same suites)
-- `cargo clippy --all-targets -- -D warnings`: clean
+- `cargo test --release --locked`: **285 passed; 0 failed** (same suites)
+- Focused `cargo test --locked --test git_compat`: **16 passed; 0 failed**
 - `cargo fmt --check`: clean
+- `cargo clippy --all-targets --locked -- -D warnings`: clean
+- `cargo build --release --locked`: clean
 - `python3 scripts/sbom.py | diff -u SBOM.md -`: clean (no dependency drift)
-- `cargo audit`: 0 findings (1290-advisory DB); `cargo deny check
-  advisories bans licenses sources`: all ok, zero warnings
-- release binary sha256 `30714184e3e4c9a2d4d28821b7cc1995171c259b07fc9ac7c98c5c7b822a4858`,
-  bit-identical across two clean target dirs; dist tarball `bbafe611…` with
-  28/28 `sha256sum -c` OK
-- README quickstart: executed VERBATIM against the built binary, end to end
-  (verify clean, 19 objects)
+- `git diff --check`: clean
+- Hosted CI and CodeQL are run after push; record their exact commit/run links in
+  `PROJECT_STATE.md` when results are available.

@@ -10,10 +10,12 @@
 //!   repos yields identical object ids (git timestamps, timezones, messages
 //!   and identities are preserved; committer is carried in extras when it
 //!   differs from author).
-//! * **Loud about losses**: submodules (gitlinks) abort the import with a
-//!   clear error; annotated-tag messages are stripped (refs are kept) and
-//!   listed in the report; refs/remotes/*, refs/stash, refs/notes/*,
-//!   refs/replace/* are skipped and listed.
+//! * **Loud about losses/refusals**: submodules (gitlinks) abort the import
+//!   with a clear error; annotated-tag messages are stripped (refs are kept)
+//!   and listed in the report; commit-message control characters that the
+//!   NewGit text model cannot represent are refused before refs move;
+//!   refs/remotes/*, refs/stash, refs/notes/*, refs/replace/* are skipped and
+//!   listed.
 //!
 //! Memory: commit tree states are cached per commit mark so incremental
 //! (non-full-tree) streams and parent inheritance work; with the default
@@ -303,6 +305,20 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                         String::from_utf8_lossy(&c.message).into_owned()
                     }
                 };
+                if let Some(control) = message.chars().find(|ch| {
+                    let code = *ch as u32;
+                    (code < 0x20 && !matches!(*ch, '\n' | '\r' | '\t')) || code == 0x7f
+                }) {
+                    let commit = c
+                        .git_sha
+                        .as_deref()
+                        .map(|sha| format!(" {sha}"))
+                        .unwrap_or_default();
+                    return Err(Error::Invalid(format!(
+                        "Git commit{commit} message contains unsupported control character U+{:04X}; NewGit messages allow LF, CR, and TAB only, so import is refused before updating refs",
+                        control as u32
+                    )));
+                }
 
                 let snap = Snapshot {
                     parents: parent_oids,
