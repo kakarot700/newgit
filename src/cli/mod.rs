@@ -9,6 +9,7 @@
 //!   are handled in iteration 9 with the same rule).
 
 pub mod args;
+pub mod workflow_cmds;
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ pub struct Ctx {
     pub repo: Option<PathBuf>,
 }
 
-enum Output {
+pub(crate) enum Output {
     Text(String),
     Json(Value),
     Raw(Vec<u8>),
@@ -136,13 +137,16 @@ fn dispatch(ctx: &Ctx, argv: &[String]) -> Result<Output> {
         "checkout" => cmd_checkout(ctx, tail),
         "actor" => cmd_actor(ctx, tail),
         "config" => cmd_config(ctx, tail),
+        "goal" | "change" | "evidence" | "evaluation" | "proposal" => {
+            workflow_cmds::dispatch(ctx, cmd, tail)
+        }
         other => Err(Error::Invalid(format!(
             "unknown command {other:?}; try `newgit help`"
         ))),
     }
 }
 
-fn open_repo(ctx: &Ctx) -> Result<Repo> {
+pub(crate) fn open_repo(ctx: &Ctx) -> Result<Repo> {
     match &ctx.repo {
         Some(p) => Repo::open(p),
         None => {
@@ -202,6 +206,18 @@ Diff & merge:
 Workspaces:
   workspace create <name> [--base <ref|oid>]
   workspace list | show <name> | discard <name> [--force]
+
+Workflow (goals / changes / evidence / evaluations / proposals):
+  goal create <title> [--description D] | show <id> | list | set-status <id> <s>
+  change create <title> --base <spec> --result <spec> [--goal <id>] [--description D]
+  change show <id> | list [--goal <id>] | set-status <id> <s> | attach-evidence <id> <oid>
+  evidence record [--kind K] [--target id] [-w ws] -- <cmd> [args…]
+  evidence add --kind K --verdict V [--deterministic] [--target id] [--output f] [--metric k=v,…]
+  evidence show <oid>
+  evaluation create --target id --verdict V [--ai] [--dimension n=v:note;…]
+  evaluation from-evidence <change-id> | show <oid>
+  proposal create <title> --change <id> [--rationale R] [--base s] [--evidence oids] [--depends ids]
+  proposal show <id> | list | approve <id> | reject <id> | close <id> | integrate <id> [-w ws]
 
 Identity:
   actor show                   show the default actor
@@ -331,7 +347,7 @@ fn cmd_status(ctx: &Ctx, tail: &[String]) -> Result<Output> {
     Ok(Output::Text(out.trim_end().to_string()))
 }
 
-fn resolve_actor(repo: &Repo, a: &Args) -> Result<ObjectId> {
+pub(crate) fn resolve_actor(repo: &Repo, a: &Args) -> Result<ObjectId> {
     match a.opt("author") {
         None => repo.default_actor(),
         Some(id) => {
@@ -356,7 +372,7 @@ fn resolve_actor(repo: &Repo, a: &Args) -> Result<ObjectId> {
     }
 }
 
-fn resolve_oid_arg(repo: &Repo, s: &str, what: &str) -> Result<ObjectId> {
+pub(crate) fn resolve_oid_arg(repo: &Repo, s: &str, what: &str) -> Result<ObjectId> {
     ObjectId::from_hex(s).or_else(|_| {
         repo.objects
             .resolve_prefix(s)
@@ -413,11 +429,17 @@ fn cmd_snapshot(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         .unwrap_or(0);
     let goal = a
         .opt("goal")
-        .map(|g| resolve_oid_arg(&repo, g, "goal"))
+        .map(|g| {
+            workflow_cmds::resolve_entity(&repo, g, crate::object::types::ObjectType::Goal)
+                .map_err(|e| Error::Invalid(format!("--goal {g:?}: {e}")))
+        })
         .transpose()?;
     let change = a
         .opt("change")
-        .map(|c| resolve_oid_arg(&repo, c, "change"))
+        .map(|c| {
+            workflow_cmds::resolve_entity(&repo, c, crate::object::types::ObjectType::Change)
+                .map_err(|e| Error::Invalid(format!("--change {c:?}: {e}")))
+        })
         .transpose()?;
     let req = snap_op::SnapshotRequest {
         workspace: ws,
@@ -460,8 +482,20 @@ fn cmd_snapshot(ctx: &Ctx, tail: &[String]) -> Result<Output> {
 }
 
 fn cmd_history(ctx: &Ctx, tail: &[String]) -> Result<Output> {
-    let a = Args::parse(tail, &["from", "limit", "workspace"], COMMON_ALIASES)?;
-    a.reject_unknown(&["from", "limit", "workspace", "json", "debug", "repo"])?;
+    let a = Args::parse(
+        tail,
+        &["from", "limit", "workspace", "goal"],
+        COMMON_ALIASES,
+    )?;
+    a.reject_unknown(&[
+        "from",
+        "limit",
+        "workspace",
+        "goal",
+        "json",
+        "debug",
+        "repo",
+    ])?;
     let repo = open_repo(ctx)?;
     let limit = a
         .opt("limit")
@@ -479,7 +513,14 @@ fn cmd_history(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         },
     };
     let _span = obs::span("history");
-    let entries = history::history(&repo, from, limit)?;
+    let entries = match a.opt("goal") {
+        Some(g) => {
+            let id =
+                workflow_cmds::resolve_entity(&repo, g, crate::object::types::ObjectType::Goal)?;
+            crate::ops::workflow::history_for_goal(&repo, from, id, limit)?
+        }
+        None => history::history(&repo, from, limit)?,
+    };
     if ctx.json {
         return Ok(Output::Json(
             serde_json::to_value(&entries).map_err(|e| Error::Bug(e.to_string()))?,
@@ -575,8 +616,8 @@ fn cmd_workspace(ctx: &Ctx, tail: &[String]) -> Result<Output> {
     let repo = open_repo(ctx)?;
     match sub {
         "create" => {
-            let a = Args::parse(rest, &["base"], COMMON_ALIASES)?;
-            a.reject_unknown(&["base", "json", "debug", "repo"])?;
+            let a = Args::parse(rest, &["base", "author", "author-name"], COMMON_ALIASES)?;
+            a.reject_unknown(&["base", "author", "author-name", "json", "debug", "repo"])?;
             let name = a.pos_req(0, "workspace-name")?.to_string();
             workspace::check_workspace_name(&name)?;
             let base = workspace::resolve_base(&repo, a.opt("base"))?;

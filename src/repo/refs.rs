@@ -18,6 +18,15 @@ pub fn check_ref_name_system(name: &str) -> Result<()> {
             return check_workspace_segment(rest);
         }
     }
+    // entity version chains (goals/changes/proposals): chains/<64-hex root>
+    if let Some(rest) = name.strip_prefix("chains/") {
+        if rest.len() == 64 && rest.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(());
+        }
+        return Err(Error::InvalidRef(format!(
+            "chain ref must be chains/<64-hex>: {name:?}"
+        )));
+    }
     check_ref_name(name)
 }
 

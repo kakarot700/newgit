@@ -169,3 +169,39 @@ concurrently and combine results without silent data loss or fake success.
 
 **Consequences.** No silent conflict resolution, no lost work, deterministic
 outputs, git-familiar semantics with explicitly documented deviations.
+
+## D-013 · Mutable entities as CAS-guarded version chains (Iteration 6)
+
+**Context.** Goals, Changes, and Proposals have lifecycles (status/state
+transitions, growing evidence/approval lists), but the object store is
+immutable and content-addressed.
+
+**Decision.**
+1. Entity identity = oid of its FIRST version (the chain root). The ref
+   `chains/<root-hex>` points at the latest version and moves only via the
+   txn engine with `Cas::Exactly(previous head)` — concurrent updates race
+   safely (loser gets exit 4). Ref namespace added to the system grammar.
+2. Every non-root version carries `extras["prev"] = <previous version>` —
+   the full audit trail is reconstructible from the head alone; no version
+   is ever edited or deleted in place.
+3. State machines are validated at transition time (goal: open ⇄
+   in_progress → achieved/abandoned with explicit reopen paths; change:
+   draft→tested→proposed→integrated, any→abandoned; proposal:
+   open→approved/rejected/closed, approved→integrated ONLY via
+   `proposal integrate`).
+4. Honesty gates: `change → tested` requires ≥1 attached Evidence object;
+   `proposal integrate` requires state=approved; Evidence.deterministic is
+   set true only by `evidence record` (runner-captured exit/output/
+   duration); `evaluation from-evidence` aggregation is deterministic and
+   always ai_generated=false; AI opinions must pass `--ai`.
+5. `proposal integrate` commits position ref + proposal chain + change
+   chain in ONE transaction (all-or-nothing); the merge itself is computed
+   before the txn so conflicts abort with zero writes. Post-commit file
+   checkout follows the integrate contract (status-visible, repairable via
+   `newgit checkout`).
+6. Evidence/Evaluation objects are append-only facts with NO chains —
+   they are immutable observations, never edited.
+
+**Consequences.** Full auditability (who changed a status, when, from what
+to what — via chain + reflogs), safe concurrency, and machine-checkable
+honesty rules without a database.

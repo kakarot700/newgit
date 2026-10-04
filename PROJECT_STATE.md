@@ -5,9 +5,9 @@
 
 ## Current status
 
-- **Phase:** Iteration 5 COMPLETE — merge/integration engine (3-way merge, integrate/rollback/checkout).
-- **Classification:** NOT PRODUCTION READY (no goals/evidence/verify yet; see RELEASE_READINESS.md).
-- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **176/176** ✓ (101 unit + 9 cli-e2e + 4 concurrency + 8 diff + 18 merge + 13 ops + 12 property + 10 txn-recovery + 1 version).
+- **Phase:** Iteration 6 COMPLETE — goals/changes/evidence/evaluations/proposals + two-agent workflow.
+- **Classification:** NOT PRODUCTION READY (no verify/gc/remotes yet; see RELEASE_READINESS.md).
+- **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **186/186** ✓ (101 unit + 10 cli-e2e + 4 concurrency + 8 diff + 18 merge + 13 ops + 12 property + 10 txn-recovery + 1 version + 9 workflow).
 
 ## Environment / how to resume
 
@@ -38,11 +38,13 @@ src/
   diff/{myers,render,mod}.rs     # line diff, tree diff, rename detection, unified+JSON render
   merge/{diff3,base,mod}.rs      # 3-way content merge, LCA/ancestry, tree merge
   ops/integrate.rs               # atomic integrate, rollback, checkout_position
+  ops/workflow.rs                # goals/changes/evidence/evaluations/proposals (chains)
+  cli/workflow_cmds.rs           # workflow CLI command families
   cli/{mod,args}.rs + main.rs      # newgit binary: --json, stable exit codes
   obs.rs                            # structured stderr diagnostics
   bin/newgit-faultlab.rs           # crash-test harness child process
-tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,cli_e2e}.rs
-docs/{STORAGE_FORMAT,CLI}.md
+tests/{common,txn_recovery,concurrency_refs,property_core,version,ops_snapshot,diff_engine,merge_integrate,workflow,cli_e2e}.rs
+docs/{STORAGE_FORMAT,CLI,AGENT_WORKFLOW}.md
 docs/                 # STORAGE_FORMAT.md (normative)
 .github/workflows/ci.yml
 ```
@@ -158,27 +160,55 @@ None.
 - Merge roles in extras (merge_ours/merge_theirs) because parents is a
   canonically sorted set (D-004/D-012).
 
+
+## What iteration 6 added (verified)
+
+- Mutable entities as CAS-guarded version chains (D-013): chains/<root-hex>
+  refs, extras.prev audit links, validated state machines for goal/change/
+  proposal lifecycles.
+- Honesty gates (tested): tested-requires-evidence; approve-before-integrate;
+  integrated only via proposal integrate.
+- Evidence: `evidence record` runs commands itself (exit code → verdict,
+  capped output blob, duration metric, truncation flag, signal →
+  inconclusive); `evidence add` for opinions (deterministic=false default).
+- Evaluations: deterministic aggregation (from-evidence; all-pass/any-fail/
+  worst-per-dimension; opinion-labeled notes) vs explicit --ai opinions.
+- proposal integrate: one txn moves position ref + proposal chain + change
+  chain; conflict ⇒ exit 5 zero writes; ff detection; post-commit checkout.
+- CLI: goal/change/evidence/evaluation/proposal families, history --goal
+  (respects -w/--from), workspace create --author.
+- docs/AGENT_WORKFLOW.md: REAL transcript of two agents on one goal
+  (qwen-coder multiplication vs claude-coder addition), evidence-recorded,
+  AI opinion flagged, proposal approved+integrated, goal achieved.
+- Tests: 9 workflow suites (incl. chain-linearity concurrency, crash
+  atomicity at proposal:before/after_txn, evidence truncation/signal,
+  honesty gates) + two-agent e2e.
+
 ## Current task (next iteration)
 
-**Iteration 6: goals, changes, evidence, evaluations, proposals.**
+**Iteration 7: verify (fsck) + gc + chaos/failure-injection suite.**
 Completion condition:
-1. Ops + CLI: `goal create/show/list`, `change create/list/attach`,
-   `evidence add` (command/output/exit/duration captured BY NEWGIT — never
-   "trust me" text), `evaluate` (deterministic vs ai kinds, honest
-   provenance), `proposal create/show/list/decide`.
-2. Status rules enforced: goal/change/proposal state machines from
-   STORAGE_FORMAT (e.g. proposal applies only from proposed; evidence
-   attaches to changes; goal status transitions validated).
-3. snapshot --goal/--change wiring already exists — verify + test links;
-   `history --goal` filtering.
-4. JSON output + e2e tests for the two-agent workflow (same goal, two
-   changes, evidence on both, proposal integrate, evaluation compares).
-5. Docs (agent workflow example) + state updates; commit.
+1. `newgit verify [--deep] [--json]`: object digests, envelope integrity,
+   ref targets exist + type-correct, chain heads resolvable + prev-links
+   walk, tree acyclicity + entry validation, snapshot parent existence,
+   workspace meta/index/ref consistency, orphan workspace debris, leftover
+   journals/locks, quarantine inventory; exit 3 on any problem; repair
+   suggestions in messages (no silent auto-repair except documented sweeps).
+2. `newgit gc [--dry-run]`: reachability from refs + chains + workspace
+   positions + reflogs (bounded window) + HEAD; unreachable objects
+   removed atomically (mark-sweep with grace period); never runs during
+   active txns; quarantine dir compacted only when empty-of-active.
+3. Chaos suite: randomized op sequences (snapshot/integrate/discard/
+   rollback) × random fault points × child-process kills, then verify +
+   status consistency assertions (property-style, seeded, reproducible).
+4. Benchmarks scaffold (criterion-free: `newgit-bench` bin or #[ignore]
+   tests recording to docs/BENCHMARKS.md) for: snapshot 1k/10k files,
+   status cached/uncached, diff sizes, integrate throughput.
+5. Docs + state updates; commit.
 
 ## Next tasks (ordered)
 
-6. Goals/Changes/Actors/Evidence/Evaluations/Proposals ops + CLI.
-7. verify (fsck) + gc + reflog + chaos/failure-injection suite.
+7. verify (fsck) + gc + chaos/failure-injection suite.
 8. Git import/export via fast-export/fast-import + compatibility tests.
 9. Remote protocol (HTTP/1.1, JSON v1) server+client, auth, audit.
 10. Web UI served by remote server; MCP/agent-API docs.

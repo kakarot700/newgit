@@ -8,3 +8,4 @@ pub mod integrate;
 pub mod snapshot;
 pub mod status;
 pub mod tree;
+pub mod workflow;

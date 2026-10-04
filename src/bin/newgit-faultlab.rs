@@ -152,6 +152,22 @@ fn run(args: &[String]) -> Result<()> {
             println!("OK {:?}", out);
             Ok(())
         }
+        "proposal-integrate" => {
+            // proposal-integrate <root> <workspace> <proposal-oid-hex>
+            let root = std::path::Path::new(&args[2]);
+            let repo = Repo::open(root)?;
+            let actor = repo.default_actor()?;
+            let pid = ObjectId::from_hex(&args[4])?;
+            let rep = newgit::ops::workflow::proposal_integrate(
+                &repo,
+                pid,
+                &args[3],
+                actor,
+                Some(1_700_000_002_000),
+            )?;
+            println!("OK {} {}", rep.proposal_version, rep.change_version);
+            Ok(())
+        }
         "workspace-create" => {
             // workspace-create <root> <name>
             let root = std::path::Path::new(&args[2]);

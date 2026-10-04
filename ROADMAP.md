@@ -47,10 +47,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - 35 new tests (total 176). ✅
 
 
-## Iteration 6 — Goals, changes, evidence, evaluations, proposals  [ ]
-- Ops + CLI for the agent-native objects; relationships (goal→changes→evidence).
-- Compare changes; evaluation aggregation; proposal approval state machine.
-- Honesty invariants: deterministic vs claimed evidence distinguished everywhere.
+## Iteration 6 — Goals, Changes, Evidence, Evaluations, Proposals  [x]
+- Version chains (chains/ refs, CAS, prev-links) + validated state
+  machines + honesty gates (tested-requires-evidence, approve-before-
+  integrate). ✅
+- Evidence: runner-recorded (deterministic, exit-code verdicts, capped
+  output) vs opinions (flagged); Evaluations: aggregation vs --ai. ✅
+- Atomic proposal integrate (position + 2 chains in one txn) with
+  conflict-abort and crash tests. ✅
+- CLI families + history --goal; docs/AGENT_WORKFLOW.md real two-agent
+  transcript; 20 new tests (total 186). ✅
+
 
 ## Iteration 7 — verify + gc + chaos  [ ]
 - `newgit verify` (fsck): objects, refs, relationships, indexes, workspaces.

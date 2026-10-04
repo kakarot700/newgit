@@ -523,6 +523,304 @@ fn integrate_merge_tree_rollback_cli() {
 }
 
 #[test]
+fn two_agent_goal_workflow_e2e() {
+    // The flagship scenario: two agents address the SAME goal with different
+    // changes; each collects runner-recorded evidence; evaluations compare
+    // them; the better one is proposed, approved, and atomically integrated.
+    let (_d, dir) = tmp();
+    let proj = dir.join("agents");
+    std::fs::create_dir(&proj).unwrap();
+    ok(&proj, &["init"]);
+    write(&proj, "app.py", b"def solve(x):\n    return None\n");
+    ok(&proj, &["snapshot", "-m", "skeleton", "--time", "1000"]);
+
+    // goal
+    let out = ok(
+        &proj,
+        &[
+            "goal",
+            "create",
+            "Implement solve()",
+            "--description",
+            "return x*2",
+            "--json",
+        ],
+    );
+    let goal_id = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["goal"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(&proj, &["goal", "set-status", &goal_id, "in_progress"]);
+
+    // two agent workspaces
+    ok(
+        &proj,
+        &["workspace", "create", "agent-1", "--author", "agent:one"],
+    );
+    ok(
+        &proj,
+        &["workspace", "create", "agent-2", "--author", "agent:two"],
+    );
+    let w1 = proj.join(".newgit/workspaces/agent-1/files");
+    let w2 = proj.join(".newgit/workspaces/agent-2/files");
+    write(&w1, "app.py", b"def solve(x):\n    return x * 2\n");
+    write(&w2, "app.py", b"def solve(x):\n    return x + x\n");
+    let out = ok(
+        &proj,
+        &[
+            "snapshot",
+            "-w",
+            "agent-1",
+            "-m",
+            "agent-1 impl",
+            "--time",
+            "2000",
+            "--author",
+            "agent:one",
+            "--goal",
+            &goal_id,
+            "--json",
+        ],
+    );
+    let s_a1 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["oid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = ok(
+        &proj,
+        &[
+            "snapshot",
+            "-w",
+            "agent-2",
+            "-m",
+            "agent-2 impl",
+            "--time",
+            "2001",
+            "--author",
+            "agent:two",
+            "--goal",
+            &goal_id,
+            "--json",
+        ],
+    );
+    let s_a2 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["oid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // changes referencing base + result snapshots
+    let out = ok(&proj, &["history", "--json", "-n", "10"]);
+    let hist = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    let base_snap = hist["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["snapshot"]["message"] == "skeleton")
+        .unwrap()["oid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = ok(
+        &proj,
+        &[
+            "change",
+            "create",
+            "agent-1 solve",
+            "--base",
+            &base_snap,
+            "--result",
+            &s_a1,
+            "--goal",
+            &goal_id,
+            "--json",
+        ],
+    );
+    let ch1 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["change"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = ok(
+        &proj,
+        &[
+            "change",
+            "create",
+            "agent-2 solve",
+            "--base",
+            &base_snap,
+            "--result",
+            &s_a2,
+            "--goal",
+            &goal_id,
+            "--json",
+        ],
+    );
+    let ch2 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["change"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // honesty gate: cannot mark tested without evidence
+    let r = ng(&proj, &["change", "set-status", &ch1, "tested"]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("no evidence"), "{}", r.err);
+
+    // runner-recorded evidence (real commands, deterministic)
+    let out = ok(
+        &proj,
+        &[
+            "evidence",
+            "record",
+            "--kind",
+            "unit_test",
+            "--target",
+            &ch1,
+            "-w",
+            "agent-1",
+            "--",
+            "sh",
+            "-c",
+            "grep -qF 'x * 2' app.py",
+        ],
+    );
+    assert!(out.contains("verdict=pass"));
+    let ev1 = out.split_whitespace().nth(1).unwrap().to_string();
+    let out = ok(
+        &proj,
+        &[
+            "evidence",
+            "record",
+            "--kind",
+            "unit_test",
+            "--target",
+            &ch2,
+            "-w",
+            "agent-2",
+            "--",
+            "sh",
+            "-c",
+            "grep -qF 'x + x' app.py",
+        ],
+    );
+    let ev2 = out.split_whitespace().nth(1).unwrap().to_string();
+    // evidence show: deterministic flag visible
+    let out = ok(&proj, &["evidence", "show", &ev1, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"]["evidence"]["deterministic"], true);
+    assert_eq!(v["data"]["evidence"]["verdict"], "pass");
+
+    ok(&proj, &["change", "attach-evidence", &ch1, &ev1]);
+    ok(&proj, &["change", "attach-evidence", &ch2, &ev2]);
+    ok(&proj, &["change", "set-status", &ch1, "tested"]);
+    ok(&proj, &["change", "set-status", &ch2, "tested"]);
+
+    // deterministic evaluations aggregated from evidence
+    let out = ok(&proj, &["evaluation", "from-evidence", &ch1, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"]["data"]["verdict"], "pass");
+    assert_eq!(v["data"]["data"]["ai_generated"], false);
+    // AI-style opinion evaluation is flagged, never passes as deterministic
+    let out = ok(
+        &proj,
+        &[
+            "evaluation",
+            "create",
+            "--target",
+            &ch2,
+            "--verdict",
+            "pass",
+            "--ai",
+            "--dimension",
+            "elegance=pass:adds are neat",
+            "--json",
+        ],
+    );
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    let ai_eval = v["data"]["evaluation"].as_str().unwrap().to_string();
+    let out = ok(&proj, &["evaluation", "show", &ai_eval, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"]["evaluation"]["ai_generated"], true);
+
+    // proposal for change 1 (agent-1's implementation wins the comparison)
+    let out = ok(
+        &proj,
+        &[
+            "proposal",
+            "create",
+            "Integrate agent-1 solve",
+            "--change",
+            &ch1,
+            "--rationale",
+            "passes deterministic test; simpler",
+            "--evidence",
+            &ev1,
+            "--json",
+        ],
+    );
+    let prop = serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["proposal"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // cannot integrate before approval
+    let r = ng(&proj, &["proposal", "integrate", &prop]);
+    assert_eq!(r.code, 2);
+    assert!(r.err.contains("approved"), "{}", r.err);
+    ok(
+        &proj,
+        &[
+            "proposal",
+            "approve",
+            &prop,
+            "--author",
+            "human:reviewer",
+            "--author-name",
+            "Rev",
+        ],
+    );
+    let out = ok(&proj, &["proposal", "integrate", &prop, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert!(v["data"]["integration"]["result"].is_string());
+    // main now contains agent-1's implementation
+    let app = std::fs::read(proj.join("app.py")).unwrap();
+    assert!(
+        app.windows(5).any(|w| w == b"x * 2"),
+        "{:?}",
+        String::from_utf8_lossy(&app)
+    );
+    // entity states after integration
+    let out = ok(&proj, &["proposal", "show", &prop, "--json"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["proposal"]["state"],
+        "integrated"
+    );
+    let out = ok(&proj, &["change", "show", &ch1, "--json"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["data"]["change"]["status"],
+        "integrated"
+    );
+    // history filtered by goal: the integration was a FAST-FORWARD (main had
+    // not diverged), so main's history contains exactly one goal-tagged
+    // snapshot — agent-1's. agent-2's snapshot lives on its own workspace
+    // ref (visible via `history -w agent-2 --goal ...`), not in main's.
+    let out = ok(&proj, &["history", "--goal", &goal_id, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"].as_array().unwrap().len(), 1);
+    let out = ok(
+        &proj,
+        &["history", "-w", "agent-2", "--goal", &goal_id, "--json"],
+    );
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"].as_array().unwrap().len(), 1);
+    // goal can be achieved now
+    ok(&proj, &["goal", "set-status", &goal_id, "achieved"]);
+    let out = ok(&proj, &["goal", "list"]);
+    assert!(out.contains("achieved"));
+    // agent-2's change remains tested (alternative implementation preserved)
+    let out = ok(&proj, &["change", "list", "--goal", &goal_id, "--json"]);
+    let v = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(v["data"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn debug_logging_goes_to_stderr_jsonl() {
     let (_d, dir) = tmp();
     let proj = dir.join("p6");

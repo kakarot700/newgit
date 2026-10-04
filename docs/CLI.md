@@ -95,6 +95,45 @@ NewGit previously materialized that the target tree no longer contains
 tracked. Also the repair path after a crash between an integrate commit and
 its file checkout.
 
+### Workflow entities (goals / changes / evidence / evaluations / proposals)
+Full worked example: **docs/AGENT_WORKFLOW.md**. Entity ids are the oid of
+the first version; updates create new versions on a CAS-protected chain
+(`chains/<id>` ref) — concurrent updates fail with exit 4 (retry). Prefixes
+≥4 hex chars resolve when unambiguous.
+
+* `goal create <title> [--description D] [--time ms]` · `goal show|list` ·
+  `goal set-status <id> open|in_progress|achieved|abandoned`
+  (transitions validated: achieved/abandoned only reopen via
+  in_progress/open respectively).
+* `change create <title> --base <spec> --result <spec> [--goal <id>]` ·
+  `change show <id>` · `change list [--goal <id>]` ·
+  `change set-status <id> draft|tested|proposed|integrated|abandoned`
+  (**honesty gate:** `tested` requires attached evidence) ·
+  `change attach-evidence <id> <evidence-oid>`.
+* `evidence record [--kind K] [--target <id>] [-w ws] -- <cmd> [args…]` —
+  NewGit runs the command itself and records exit code, capped combined
+  output (blob), duration; `deterministic=true`, verdict from exit status.
+* `evidence add --kind K --verdict pass|fail|inconclusive|not_applicable
+  [--deterministic] [--target id] [--output file] [--metric k=v,…]` —
+  manual/opinion evidence (`deterministic` defaults false; claim it only
+  for tool-verified facts).
+* `evidence show <oid>`.
+* `evaluation create --target <id> --verdict V [--ai]
+  [--dimension name=verdict[:note];…]` — `--ai` marks AI-generated opinion
+  (never silently mixed with deterministic verdicts).
+* `evaluation from-evidence <change-id>` — deterministic aggregation:
+  all pass ⇒ pass, any fail ⇒ fail, else inconclusive; one dimension per
+  evidence kind (worst verdict wins; opinions labeled).
+* `evaluation show <oid>`.
+* `proposal create <title> --change <id> [--rationale R] [--base <spec>]
+  [--evidence oid,…] [--depends id,…]` (change must be tested/proposed) ·
+  `proposal show|list` · `proposal approve|reject|close <id>` ·
+  `proposal integrate <id> [-w ws]` — requires `approved`; moves position
+  ref + proposal chain + change chain in ONE transaction; conflicts ⇒
+  exit 5 with nothing written.
+* `history --goal <id>` filters history to goal-tagged snapshots (combine
+  with `-w`/`--from`).
+
 ### `newgit workspace <create|list|show|discard>`
 See `newgit help workspace`. Workspaces are isolated concurrent work areas;
 `main` is the repository root. Non-main workspaces live in
@@ -113,8 +152,7 @@ Repository configuration and resource limits (`key = value` format).
 
 ## Coming in later iterations
 
-`goal`/`change`/`evidence`/
-`proposal`/`verify`/`gc` (it6–7) · `import-git`/`export-git` (it8) ·
+`verify`/`gc` (it7) · `import-git`/`export-git` (it8) ·
 `remote`/`serve`/`push`/`pull` (it9) · `ui` (it10).
 
 ## Agent usage notes

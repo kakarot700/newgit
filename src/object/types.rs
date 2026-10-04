@@ -1323,6 +1323,21 @@ impl Object {
         }
     }
 
+    /// Validate the inner struct's invariants (Blob is always valid).
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Object::Blob(_) => Ok(()),
+            Object::Tree(t) => t.validate(),
+            Object::Snapshot(s) => s.validate(),
+            Object::Actor(a) => a.validate(),
+            Object::Goal(g) => g.validate(),
+            Object::Change(c) => c.validate(),
+            Object::Evidence(e) => e.validate(),
+            Object::Evaluation(e) => e.validate(),
+            Object::Proposal(p) => p.validate(),
+        }
+    }
+
     /// Canonical bytes: type_tag || varint(body_len) || body.
     pub fn canonical(&self) -> Vec<u8> {
         let mut body = Vec::new();

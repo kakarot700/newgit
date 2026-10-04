@@ -4,6 +4,27 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 6 — 2026-10-04)
+- Workflow entities on CAS-guarded version chains (`chains/<root>` refs,
+  `extras.prev` audit links): goals, changes, proposals.
+- Honesty gates: `tested` requires evidence; `proposal integrate` requires
+  approval; state machines validated at every transition.
+- Evidence: runner-recorded (`evidence record` executes the command,
+  captures exit/output/duration; deterministic=true; verdict from exit
+  status; output capped + truncation-flagged) and manual/opinion
+  (`evidence add`, deterministic defaults false).
+- Evaluations: deterministic aggregation from attached evidence
+  (`evaluation from-evidence`, never AI-flagged) and explicit AI opinions
+  (`evaluation create --ai`, dimensions supported).
+- `proposal integrate`: position ref + proposal chain + change chain in ONE
+  transaction; conflict ⇒ exit 5 with zero writes; fast-forward detection.
+- CLI: goal/change/evidence/evaluation/proposal command families;
+  `history --goal`; `workspace create --author`; docs/AGENT_WORKFLOW.md
+  (real two-agent transcript).
+- Crash tests: proposal-integrate killed before/after commit point; chain
+  update concurrency (linearity invariant); evidence limits/signals.
+- 20 new tests (total 186).
+
 ### Added (iteration 5 — 2026-10-04)
 - Three-way merge engine: per-path resolution on flattened trees; exact
   rename tracking (rename+edit merges cleanly; rename/rename and

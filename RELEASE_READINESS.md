@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 5 of 12 complete).
+**Current classification: NOT PRODUCTION READY** (iteration 6 of 12 complete).
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -14,7 +14,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] snapshots / status / history / workspaces — iteration 3 ✅ (13 ops + 7 e2e suites)
 - [x] diff engine (line + tree, renames, binary, mode, unified + JSON) — iteration 4 ✅ (8 suites + property reconstruct)
 - [x→partial] object model + store + corruption detection — iteration 1 ✅ (37 tests)
-- [ ] changes / goals / evidence / proposals — iteration 6
+- [x] changes / goals / evidence / evaluations / proposals — iteration 6 ✅ (9 workflow suites + two-agent e2e)
 - [x] integration (merge) + rollback — iteration 5 ✅ (18 suites + crash + race tests)
 - [ ] verification (fsck) — iteration 7
 - [ ] Git compatibility path — iteration 8
