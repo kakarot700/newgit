@@ -93,6 +93,7 @@ Each threat: vector → impact → mitigation → test that proves it.
 
 | Threat | Mitigation |
 |---|---|
-| Dependency CVEs / typosquats | 5 runtime deps, all mainstream; Cargo.lock committed; cargo-audit + cargo-deny in CI (it11); SBOM generated |
-| Malicious build scripts | none of the runtime deps run postinstall-equivalents beyond standard build.rs of flate2/sha2 (no network); reviewed in it11 audit |
-| Toolchain drift | rust-toolchain.toml pins exact version |
+| Dependency CVEs / typosquats | 5 direct runtime deps (21-crate runtime closure), all mainstream; Cargo.lock committed; **cargo-audit RUN in-sandbox 2026-10-04: 1290 RustSec advisories vs 63 locked crates → zero findings**; `cargo audit --deny warnings` + cargo-deny 0.20.2 BOTH RUN in-sandbox (deny: advisories/bans/licenses/sources all ok, zero warnings; deny.toml: license allow-list = exact SBOM set, crates.io-only sources, framework/git-crate ban list) and gate CI; SBOM.md committed with a CI drift check |
+| Malicious build scripts | all 8 runtime-closure crates with build.rs AUDITED by reading the vendored sources (2026-10-04): crc32fast, generic-array, libc, serde, serde_core, serde_json, thiserror, zmij — every process invocation is `rustc --version`/feature probing (libc additionally probes freebsd-version/emcc on non-Linux targets); NO network access in any build script |
+| Toolchain drift | rust-toolchain.toml pins exact version (1.99.0); release builds verified bit-identical across clean target dirs on same host+toolchain (sha256 abcd51c8…, 2026-10-04) |
+| Artifact tampering | dist tarball + SHA256SUMS.txt over every packaged file; CI verifies checksums post-package and attaches artifacts to tag releases |

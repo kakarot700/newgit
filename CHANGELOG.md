@@ -4,6 +4,41 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+### Added (iteration 11 — 2026-10-04)
+- **Release engineering**: `scripts/dist.sh` (dist dir + tarball +
+  SHA256SUMS over every packaged file; verified with `sha256sum -c`),
+  `scripts/sbom.py` → committed **SBOM.md** (deterministic, dateless;
+  runtime/build-time/dev closures classified by where each crate actually
+  runs: 21 / 7 / 34 crates; CI fails on drift), LICENSE-MIT +
+  LICENSE-APACHE (Apache text fetched from apache.org, checksum matches the
+  canonical `cfc7749b…`).
+- **Reproducibility (real, same-host)**: two clean release builds in
+  different target dirs → BIT-IDENTICAL binary (sha256 `abcd51c8…` twice);
+  toolchain pinned (rust-toolchain.toml 1.99.0 = rustc in use); honest
+  scope in KNOWN_LIMITATIONS #37.
+- **Supply-chain audit (real, in-sandbox)**: `cargo audit` against the live
+  RustSec DB — 1290 advisories, 63 locked crates, ZERO findings; every
+  build.rs in the runtime closure (8 crates) read and classified (rustc
+  probes only, no network) — recorded in THREAT_MODEL §G. `cargo deny
+  check advisories bans licenses sources` — ALL OK, zero warnings
+  (deny.toml committed: allow-list = exact SBOM license set, crates.io-only,
+  ban list for git2/openssl/tokio/hyper/axum… per D-002/D-007).
+- **CI hardened** (`.github/workflows/ci.yml` — defined; cannot execute on
+  a hosted runner from this sandbox, recorded honestly): removed the FAKE
+  `NEWGIT_CHAOS_ITERATIONS` knob (chaos is fixed-seed by design), SBOM
+  drift gate, prebuilt cargo-audit (`--deny warnings`), cargo-deny action,
+  dist job with in-CI reproducibility check + checksum verification +
+  tag-release attachment via GITHUB_TOKEN (zero-rupee).
+- **Benchmarks re-run** on the full it10 code base (release): all medians
+  within 1.41× of the it7 baseline (shared-vCPU noise band; below the 2×
+  gate) — new table recorded, old table ARCHIVED (never overwritten).
+- **Docs completed**: docs/DEPLOYMENT.md (systemd unit with hardening,
+  nginx/caddy TLS termination, honest client-side-TLS story — v1 CLI is
+  http://-only, use an ssh tunnel, KL #27 expanded), docs/TESTING.md
+  (layers, fault injection, the no-fake rules), docs/TROUBLESHOOTING.md
+  (exit codes + symptom→fix, all claims source-verified),
+  docs/CONTRIBUTING.md (change contract + code map); README index complete.
+
 ### Added (iteration 10 — 2026-10-04)
 - **Web UI — embedded, single-file, read-only explorer (`newgit ui`,
   `serve --ui`)**: dashboard (info/limits/capabilities/refs), first-parent

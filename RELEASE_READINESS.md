@@ -1,6 +1,6 @@
 # RELEASE_READINESS.md
 
-**Current classification: NOT PRODUCTION READY** (iteration 10 of 12 complete — Git compatibility, remote protocol/auth, Web UI and agent APIs (HTTP read endpoints + MCP) landed; release engineering, CI-on-a-hosted-runner and the final audit remain — iterations 11–12).
+**Current classification: NOT PRODUCTION READY** (iteration 11 of 12 complete — everything through release engineering has landed; what remains is iteration 12's final forensic audit and the readiness decision itself. Current blockers are listed per-gate below — most notably CI has never executed on a hosted runner from this environment.)
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -32,7 +32,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 ## SECURITY
 - [x] threat model — THREAT_MODEL.md (surfaces A–G + §E2 UI/MCP; it9 pending rows resolved it10)
 - [x] path safety + parser hardening tests — iteration 1
-- [ ] dependency review + SBOM + cargo-audit/deny — iteration 11
+- [x] dependency review + SBOM + cargo-audit/deny — iteration 11 ✅ (SBOM.md committed w/ CI drift gate; cargo-audit RUN: 1290 advisories × 63 crates → zero findings; cargo-deny 0.20.2 RUN: advisories/bans/licenses/sources all ok, zero warnings; all 8 runtime build.rs scripts read — rustc probes only, no network; KL #38: snapshots vs that day's DB, CI re-runs both)
 - [x] no unsafe code (`#![forbid(unsafe_code)]`), no implicit execution — DESIGN + iteration 1
 - [x] access control (remote authn/authz) tested — iteration 9 ✅ (bearer tokens hashed at rest, roles read<write<admin, invalid-token-never-anonymous, authz before every mutation, audit log of every request incl. failures; tested in remote_e2e + cli_e2e exit-code contracts)
 
@@ -41,16 +41,16 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] integration/E2E/property/fuzz/chaos suites ✅ it2–7; regression discipline active (chaos seeds grow per bug found)
 
 ## PERFORMANCE
-- [x] representative benchmarks — iteration 7 ✅ (src/bin/newgit-bench.rs + docs/BENCHMARKS.md real numbers; release re-check due it11)
+- [x] representative benchmarks — iteration 7 ✅ + iteration 11 re-check ✅ (src/bin/newgit-bench.rs + docs/BENCHMARKS.md real numbers for the full code base; worst median drift 1.41× — inside the documented shared-vCPU noise band, below the 2× gate; it7 table archived, not overwritten)
 
 ## OPERABILITY
-- [x→partial] structured diagnostics/logs (obs JSONL stderr, `--debug`), health checks (`/healthz`, `verify`) ✅ it1–9; audit log + `/v1/audit` ✅ it9; deployment docs — iteration 11
+- [x] structured diagnostics/logs (obs JSONL stderr via `--debug`/`NEWGIT_LOG=1`), health checks (`/healthz`, `verify`) ✅ it1–9; audit log + `/v1/audit` ✅ it9; deployment docs ✅ it11 (docs/DEPLOYMENT.md: systemd + hardening, TLS reverse proxy, ssh-tunnel pattern for the http-only v1 client, backup/restore/limits/upgrade)
 
 ## DOCUMENTATION
 - [x] README, ARCHITECTURE, STORAGE_FORMAT, SECURITY_MODEL, THREAT_MODEL — iteration 1
-- [x→partial] CLI reference ✅ it3 (remote it9, ui/mcp it10); protocol reference ✅ it9 (+read endpoints/UI route it10, docs/PROTOCOL.md); git compat/migration ✅ it8 (docs/GIT_COMPAT.md); agent guide ✅ it10 (docs/AGENT_GUIDE.md — API/MCP/recipes; docs/AGENT_WORKFLOW.md — narrated two-agent example); contributor/testing/troubleshooting/deployment — iteration 11
+- [x] full docs set ✅ it11 — CLI reference (it3/9/10), protocol (it9/10), git compat (it8), agent guide (it10), DEPLOYMENT/TESTING/TROUBLESHOOTING/CONTRIBUTING (it11), SBOM (it11), benchmarks re-run (it11); README index complete
 
 ## RELEASE
-- [ ] clean reproducible build + artifacts + checksums — iteration 11
+- [x→partial] clean reproducible build + artifacts + checksums — iteration 11 ✅ (two clean release builds bit-identical same-host, sha256 recorded; scripts/dist.sh tarball + SHA256SUMS verified with `sha256sum -c`; cross-host reproducibility NOT claimed — KL #37)
 - [x] CI workflow defined — iteration 1 (`.github/workflows/ci.yml`)
-- [ ] CI green on hosted runner — iteration 11
+- [ ] CI green on hosted runner — BLOCKED from sandbox (no GitHub remote); workflow hardened it11 (fake knob removed, SBOM-drift/audit/deny/dist/repro jobs); EVERY gate the CI runs has been executed locally in-sandbox (fmt, clippy, tests debug+release, cargo-audit, cargo-deny, SBOM drift, dual-target repro build, dist+`sha256sum -c`) — only the Actions glue (cache/artifacts/gh-release) is unexercised (KL #38)

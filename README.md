@@ -122,7 +122,12 @@ All commands support `--json` for agents and scripts; exit codes are stable
 | [docs/GIT_COMPAT.md](docs/GIT_COMPAT.md) | git import/export mapping + guarantees + limits |
 | [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) | two-agent goal workflow, real transcript |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | recorded real benchmark runs |
-| docs/AGENT_GUIDE.md, docs/TESTING.md, docs/DEPLOYMENT.md, docs/CONTRIBUTING.md, docs/TROUBLESHOOTING.md | land with iterations 10–11 |
+| [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) | agent interfaces: HTTP API recipes, MCP, UI |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | single-node production deployment ($0) |
+| [docs/TESTING.md](docs/TESTING.md) | test layers, fault injection, testing rules |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | symptom → diagnosis → fix |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | the change contract + code map |
+| [SBOM.md](SBOM.md) | generated bill of materials (runtime/build/dev closures) |
 
 ## Building
 
@@ -135,4 +140,5 @@ cargo clippy --all-targets -- -D warnings
 
 ## License
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE). Dependency licenses: [SBOM.md](SBOM.md).

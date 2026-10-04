@@ -101,7 +101,12 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 27. Remote protocol v1 is **plain HTTP** — no TLS, no request signing.
     Deploy behind a TLS-terminating reverse proxy (documented); tokens
     travel as bearer credentials, so an unencrypted network exposes them.
-    Loopback-only default bind reflects this.
+    Loopback-only default bind reflects this. The CLI client accepts
+    `http://host[:port]` URLs ONLY — `validate_url` rejects `https://`
+    outright rather than pretending to verify a certificate it cannot;
+    cross-host CLI usage goes through a tunnel (docs/DEPLOYMENT.md §2.3).
+    The TLS proxy terminates for browser/API clients; the built-in server
+    never sees encrypted traffic.
 28. Wire encoding is JSON + base64 (~33% payload inflation, JSON parse
     cost). Fine at v1 scale; binary framing is a v2 candidate. No
     keep-alive/pipelining: one request per connection.
@@ -137,3 +142,16 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     as the CLI). Run one `newgit mcp` per agent under that agent's OS user.
     No MCP resources/prompts primitives (tools only); protocol version
     2024-11-05; batches unsupported.
+37. Build reproducibility is verified **same-host, same-toolchain** (two
+    clean release builds → bit-identical binary, sha256 recorded in
+    THREAT_MODEL §G). Cross-host byte-equality is NOT claimed: it would
+    require pinned rustc AND identical source paths AND a controlled
+    environment (nix/buildinfo) — checksums published per release are the
+    verification story instead.
+38. `cargo audit` / `cargo deny` results (zero findings, all four checks
+    ok — 2026-10-04) are SNAPSHOTS against that day's advisory DB (1290
+    advisories). Advisories are published continuously; CI re-runs both on
+    every push. The CI WORKFLOW itself still has never executed on a hosted
+    runner from this sandbox — every gate it runs (fmt/clippy/test/audit/
+    deny/sbom-drift/repro/dist+checksums) has been executed locally except
+    the GitHub-Actions-specific glue (artifacts, gh release).

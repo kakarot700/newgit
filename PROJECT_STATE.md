@@ -5,8 +5,8 @@
 
 ## Current status
 
-- **Phase:** Iteration 10 COMPLETE — Web UI + agent API/MCP: `src/ui/` (embedded single-file UI, `newgit ui` / `serve --ui`), agent read endpoints (`/v1/object`, `/v1/diff`, `/v1/goals|changes|proposals`), `newgit mcp` (stdio JSON-RPC 2.0, 13 tools over `cli::call_json`), docs/AGENT_GUIDE.md, D-018 (on top of iteration 9: remote protocol v1 server/client/push/pull/auth/audit).
-- **Classification:** NOT PRODUCTION READY (release engineering, CI-on-runner, and final audit remain — iterations 11–12; see RELEASE_READINESS.md).
+- **Phase:** Iteration 11 COMPLETE — release engineering: dist.sh (tarball+SHA256SUMS, verified), SBOM.md (generator, deterministic, 21/7/34 closures), LICENSE-MIT/APACHE, bit-identical rebuild check (abcd51c8…), cargo-audit run CLEAN (1290 advisories × 63 crates), build.rs audit (8 crates, no network), deny.toml, CI hardened (fake knob removed), benchmarks re-run (≤1.41× drift, it7 archived), DEPLOYMENT/TESTING/TROUBLESHOOTING/CONTRIBUTING docs (on top of iteration 10: Web UI + agent API/MCP; iteration 9: remote protocol v1).
+- **Classification:** NOT PRODUCTION READY — pending iteration 12 final audit + readiness decision; standing honest blocker: CI never executed on a hosted runner from this sandbox.
 - **Last full verification:** `cargo fmt --check` ✓, `cargo clippy --all-targets -- -D warnings` ✓, `cargo test` **278/278** ✓ (128 unit + 6 chaos + 16 cli-e2e + 4 concurrency + 8 diff + 8 fuzz + 9 git-compat + 18 merge + 13 ops + 12 property + 16 remote-e2e + 10 txn-recovery + 20 verify-gc + 1 version + 9 workflow). Benchmarks in docs/BENCHMARKS.md (real runs, release; re-run due it11).
 
 ## Environment / how to resume
@@ -446,39 +446,82 @@ None.
   on `&[String]` clones the REFERENCE (use to_vec); cmd_init takes the dir
   as a POSITIONAL (ignores --repo for creation).
 
+## Iteration 11 outcome (facts for resume)
+
+- dist: `bash scripts/dist.sh [--skip-build]` → dist/newgit-0.1.0-x86_64-unknown-linux-gnu{,.tar.gz};
+  SHA256SUMS.txt covers every packaged file (27 verified OK); tarball hash
+  3578f85b…; dist.sh FAILS if LICENSE files missing; /dist/ gitignored.
+- SBOM: `python3 scripts/sbom.py > SBOM.md` — deterministic (no date);
+  classification via host-context walk of cargo metadata resolve graph
+  (proc-macro crates + build-edge deps = build-time): 21 runtime, 7
+  build-time (proc-macro2/quote/syn/unicode-ident/version_check/serde_derive/
+  thiserror-impl), 34 dev-only. Drift gate: `sbom.py | diff -u SBOM.md -`.
+- Reproducibility: sha256 abcd51c89b717d00dec8cce561504626e415fb3f2278f4936f349e0b8ae0ae3d
+  for BOTH target/release/newgit and CARGO_TARGET_DIR=/var/tmp/ng-target2 clean
+  rebuild; rustc 1.99.0 = rust-toolchain.toml pin; profile: lto=thin,
+  debug=false, strip=true.
+- cargo-audit 0.22.2 installed to /var/tmp/cargo/bin (4.5 min compile);
+  `cargo audit` → 1290 advisories, 63 locked crates, ZERO findings, exit 0.
+  Advisory DB cached at /var/tmp/cargo/advisory-db (github reachable).
+- build.rs audit (vendored sources read): crc32fast(35L), generic-array(5L),
+  libc(605L), serde(69L), serde_core(113L), serde_json(30L), thiserror(195L),
+  zmij(45L) — all Command::new uses are rustc probes; libc also
+  freebsd-version/emcc (non-Linux paths); NO TcpStream/reqwest/http anywhere.
+- cargo-deny 0.20.2 installed + RUN: `check advisories bans licenses sources`
+  → all ok, zero warnings (after trimming allow-list to exact SBOM set:
+  MIT/Apache-2.0/0BSD/Unicode-3.0/Zlib/Unlicense).
+- CI (rewritten): checks (fmt/clippy/test/test-release/build/artifact),
+  security (SBOM drift, taiki-e/install-action@cargo-audit prebuilt,
+  `cargo audit --deny warnings`, cargo-deny-action@v2), dist (repro check
+  two target dirs, dist.sh, checksum verify, artifacts, tag → gh release
+  via GITHUB_TOKEN). REMOVED fake NEWGIT_CHAOS_ITERATIONS env (chaos.rs has
+  no such knob — fixed seeds by design). deny.toml: license allow-list
+  (MIT/Apache/BSD/0BSD/Zlib/Unlicense/Unicode), version_check clarify
+  (non-SPDX "MIT/Apache-2.0"), bans: git2/gix/libgit2-sys/openssl(-sys)/
+  ring/tokio/hyper/axum/actix-web, sources: crates.io only, wildcards deny.
+- Benchmarks it11 re-run (docs/BENCHMARKS.md): put_blob 0.10 / snapshot-1k
+  cold 61.35 med (min 50.17) / warm 2.30 / status 1.83 cached / diff 1.43 /
+  history 4.27 / integrate 7.34 / verify-deep 43.19 / gc 21.28 — worst
+  drift 1.41× vs it7 (noise band; <2× gate); it7 table ARCHIVED below.
+- Docs NEW: DEPLOYMENT.md (systemd hardening unit, nginx/caddy TLS, client
+  is http://-ONLY — validate_url REJECTS https (client.rs:127) → ssh
+  tunnel pattern; ops table: verify/gc/audit/backup=rsync-or-push/limits),
+  TESTING.md (layers table, fault injection, 5 no-fake rules),
+  TROUBLESHOOTING.md (exit codes, symptom→fix; locks are <path>.lock files,
+  tokens.json = {"tokens":[{id,sha256,role}]}), CONTRIBUTING.md (rules,
+  gates, code map). KL #37 (repro scope), #38 (audit snapshot/cargo-deny
+  unexecuted); KL #27 expanded (client-side TLS). THREAT_MODEL §G rewritten
+  with run data + artifact-tampering row. README index complete + license
+  files linked.
+- NEWGIT_LOG=1 is the obs env var (NOT NEWGIT_DEBUG).
+
 ## Current task (next iteration)
 
-**Iteration 11: Release engineering + benchmark re-run + docs completion.**
+**Iteration 12: Final forensic audit + production-readiness decision.**
 Completion condition:
-1. `scripts/dist.sh` (or Rust xtask-free plain shell): release build →
-   `dist/newgit-<version>-<target>/` with binary + README + LICENSE + docs/,
-   sha256sums file; run it in-sandbox and RECORD real outputs.
-2. SBOM: `cargo metadata`-derived inventory (name/version/source/license per
-   dep) committed as `SBOM.md` (or .json) + dependency count check against
-   D-002 budget (5 runtime deps).
-3. Supply-chain: `cargo audit` if the advisory DB is reachable from the
-   sandbox (crates.io index IS reachable — try); if not installable,
-   document honestly in RELEASE_READINESS (CI-only gate) — NO fake claim.
-4. Reproducibility: two clean release builds → compare sha256 of the binary;
-   record result honestly (likely differs via debug-info/paths — document
-   what WAS achieved, e.g. same source+toolchain ⇒ same hash or not).
-5. CI hardening (.github/workflows/ci.yml): add release profile build,
-   `cargo audit` (continue-on-error=false where possible), dist+checksum job
-   artifacts; cannot RUN on a hosted runner from sandbox — keep the
-   "defined, not executed" honesty note.
-6. Benchmarks: re-run `newgit-bench` in release with the it10 code; update
-   docs/BENCHMARKS.md numbers (never reuse stale figures).
-7. Deployment docs: docs/DEPLOYMENT.md — reverse-proxy TLS (nginx/caddy
-   config snippets), systemd unit, token bootstrap, backups (= copy .newgit
-   or push to a second server), resource-limit tuning.
-8. README doc index + RELEASE_READINESS/TEST_MATRIX/CHANGELOG/ROADMAP/[x]11
-   + PROJECT_STATE; gates; commit.
+1. Hostile review passes over each subsystem (store/txn/refs/ops/diff/merge/
+   workflow/verify/gc/gitio/remote/cli/ui/mcp): read code as an adversary;
+   every finding gets EITHER a fix+regression test OR a KNOWN_LIMITATIONS
+   entry with severity — no silent ignores.
+2. Re-verify claimed invariants: run every gate fresh; spot-check doc claims
+   against code (the loop's own no-fake rule applied to the docs themselves).
+3. Fuzz sweep re-run (fuzz_parsers 150k inputs); chaos all seeds; full
+   release test suite; benchmarks if any code changed.
+4. Fill RELEASE_READINESS.md gate-by-gate with evidence pointers; decide
+   classification honestly: PRODUCTION READY / PRODUCTION-CANDIDATE / NOT
+   PRODUCTION READY (with reasons) — the decision must follow the evidence,
+   not the desire to be done.
+5. Final docs sweep (README quickstart transcript re-run against the real
+   binary; CHANGELOG 0.1.0 section; ROADMAP close-out; PROJECT_STATE final
+   status); gates; commit.
+6. Deliver the completion report: architecture summary, feature/test
+   inventories, security findings, benchmark results, compatibility status,
+   deployment instructions, known limitations, readiness decision, exact
+   test commands + results (the user's final-output requirement).
 
 ## Next tasks (ordered)
 
-11. Release engineering, SBOM/audit, benchmark re-run, DEPLOYMENT.md. ← CURRENT
-12. Final forensic audit; hostile review passes; production-readiness gate
-    decision (PRODUCTION READY / CANDIDATE / NOT READY with reasons).
+12. Final forensic audit + readiness decision + completion report. ← CURRENT
 
 ## Important decisions (full log in DECISIONS.md)
 

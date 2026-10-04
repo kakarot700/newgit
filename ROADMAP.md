@@ -121,10 +121,21 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   endpoint shapes/gates/filters vs real servers, MCP handshake/catalog/argv
   mapping/error contract, `newgit ui` + `newgit mcp` as real child processes.
 
-## Iteration 11 — Performance, release engineering, docs completion  [ ]
-- Benchmark harness + docs/BENCHMARKS.md (init/snapshot/status/diff/verify/gc/import).
-- Reproducible-ish releases: dist script, sha256 checksums, SBOM (cargo metadata).
-- Full docs set (see README index), CI hardening, cargo-audit/deny in CI.
+## Iteration 11 — Performance, release engineering, docs completion  [x] ✅ 2026-10-04
+- DONE: benchmark re-run on full code base (release): worst median drift 1.41× vs it7
+  baseline — inside noise band, below 2× gate; new table recorded, it7 table archived.
+- DONE: dist script (tarball + SHA256SUMS over every file, `sha256sum -c` verified);
+  SBOM generator + committed SBOM.md (21 runtime / 7 build-time / 34 dev crates,
+  deterministic — CI drift gate); LICENSE-MIT + LICENSE-APACHE added.
+- DONE: reproducibility check — two clean release builds, bit-identical binary
+  (sha256 abcd51c8…; same-host scope, KL #37).
+- DONE: cargo-audit RUN in-sandbox: 1290 advisories × 63 crates → zero findings;
+  cargo-deny RUN: advisories/bans/licenses/sources all ok; all 8 runtime
+  build.rs scripts read & classified (no network); deny.toml committed.
+- DONE: CI hardened (fake chaos knob removed; SBOM drift + audit + deny + dist +
+  reproducibility jobs) — defined, not runner-executed (honest note kept).
+- DONE: docs set complete — DEPLOYMENT.md (systemd/nginx/caddy/tunnel), TESTING.md,
+  TROUBLESHOOTING.md, CONTRIBUTING.md; README index updated.
 
 ## Iteration 12 — Final forensic audit + readiness gate  [ ]
 - Hostile review passes 2–8 per subsystem; security regression tests for all findings.

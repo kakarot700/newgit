@@ -1,23 +1,67 @@
-# cargo-deny configuration — supply-chain policy (see SECURITY_MODEL.md §G)
+# cargo-deny configuration — supply-chain gates (D-002 budget enforcement).
+# Runs in CI (`cargo deny check advisories bans licenses sources`).
+# Verified locally with cargo-deny 0.20.2 (2026-10-04): all four checks ok,
+# zero warnings. Allow-list matches SBOM.md exactly — any dependency change
+# must regenerate the SBOM and keep this file green.
+
 [graph]
-targets = [{ triple = "x86_64-unknown-linux-gnu" }]
+# Shipped target(s). Dev-dependency subtrees for other platforms (wasm,
+# windows-only deps of getrandom etc.) are excluded from license checks —
+# they never touch the shipped binary or its build.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+]
 
 [advisories]
 version = 2
-db-path = "~/.cargo/advisory-db"
+# fail on any RustSec advisory affecting the dependency graph
 yanked = "deny"
+ignore = [
+    # (none — keep this list empty; entries require a linked justification
+    #  comment and a KNOWN_LIMITATIONS entry)
+]
 
 [licenses]
 version = 2
-allow = ["MIT", "Apache-2.0", "Unicode-3.0", "BSD-3-Clause", "ISC", "Zlib"]
+# everything in SBOM.md is permissive; this allow-list is the gate — a new
+# transitive dep with another license FAILS CI until reviewed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "0BSD",
+    "Unicode-3.0",
+    "Zlib",
+    "Unlicense",
+]   # minimal set matching SBOM.md exactly; a new license FAILS CI until reviewed
 confidence-threshold = 0.8
 
+[[licenses.clarify]]
+# version_check 0.9.x publishes "MIT/Apache-2.0" (non-SPDX slash form);
+# upstream intends the standard dual license.
+name = "version_check"
+expression = "MIT OR Apache-2.0"
+license-files = []
+
 [bans]
-multiple-versions = "warn"
-wildcards = "deny"
-deny = []
+multiple-versions = "warn"   # duplicates are noise, not policy violations
+wildcards = "deny"           # no "*" version requirements anywhere
+deny = [
+    # keep git-reimplementation and heavy-framework crates OUT (D-002/D-007)
+    { name = "git2" },
+    { name = "gix" },
+    { name = "libgit2-sys" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "ring" },
+    { name = "tokio" },
+    { name = "hyper" },
+    { name = "axum" },
+    { name = "actix-web" },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
