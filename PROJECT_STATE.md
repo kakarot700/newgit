@@ -5,11 +5,14 @@
 
 ## Current status
 
-- **Phase:** The 12 implementation iterations are complete. Public-repository setup and hosted validation are in progress.
-- **Classification:** **PRODUCTION-CANDIDATE**, not Production Ready. Local checks pass; hosted GitHub Actions, CodeQL, repository security settings, and the mandatory clean-clone run remain release gates.
+- **Phase:** The 12 implementation iterations are complete; the public publication evidence and v0.1.0 release notes are recorded below.
+- **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
+- **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
+- **Hosted verification:** GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) both passed on Ubuntu 24.04 commit `afa94c4`.
+- **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
 - **Local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check all pass on the pinned Rust 1.99.0 toolchain.
-- **Secret and workflow checks:** Gitleaks v8.30.1 found 0 findings in the worktree and in 14 commits reachable via refs/reflogs; actionlint v1.7.12 reports no errors in the two Actions workflows.
-- **Final deliverable:** the preserved development history plus the public GitHub repository, release decision, and updated completion/readiness report.
+- **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
+- **Final deliverable:** the preserved development history, public repository, release decision, and updated completion/readiness report.
 
 ## Local development setup
 
@@ -501,17 +504,23 @@ None.
   (action words stay raw-first: family dispatch uses split_first, NOT Args).
 - Final binary sha256 30714184e3e4c9a2d4d28821b7cc1995171c259b07fc9ac7c98c5c7b822a4858
   (bit-identical dual-target); dist bbafe61150867e5209576e8e4dd0e6dd9d34da2dae41fc230f6367b20ac26bba.
-- Classification decided: PRODUCTION-CANDIDATE (single blocked gate: hosted CI).
+- Classification at implementation completion: PRODUCTION-CANDIDATE; hosted evidence was added during publication and is recorded in RELEASE_READINESS.md.
 - 11 commits on main so far (one per iteration); this final commit makes 12.
 
-## Current task (publication)
+## Publication record (2026-10-04)
 
-Local verification and pre-push security scanning are complete. Remaining
-steps are to publish the preserved `main` history, observe the real hosted CI
-and CodeQL results, enable the appropriate GitHub security settings, update
-the readiness record with those results, tag only after the final commit is
-verified, then test a clean clone of the published repository and its release
-artifacts.
+The preserved NewGit history is published at
+https://github.com/kakarot700/newgit. The hosted preflight CI and CodeQL runs
+listed above passed on the runner-pinned source-bearing commit. The independent
+clean-clone checks exercised the built CLI, the documented install path, the
+human-approved agent workflow, and real Git import/export.
+
+Repository settings enable issues, read-only-by-default Actions tokens,
+secret scanning with push protection, Dependabot alerts/security updates, and
+private vulnerability reporting. The CI release job is tag-only and depends
+on the checks, security, and distribution jobs; the versioned notes are in
+docs/releases/v0.1.0.md. Consult the public Releases and Actions pages for the
+current tag and artifact status.
 
 Future product work should start from the post-1.0 candidates in ROADMAP.md
 (client-side TLS/protocol v2, UI mutations, packed objects, and horizontal

@@ -29,10 +29,16 @@ the contract for any change, human or agent.
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                       # plus: cargo test --release for crash/chaos work
-python3 scripts/sbom.py | diff -u SBOM.md -   # if Cargo.toml/lock changed
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo test --release --locked
+python3 scripts/sbom.py | diff -u SBOM.md -   # when Cargo.toml/lock changes
 ```
+
+When `Cargo.toml` or `Cargo.lock` changes, regenerate the committed inventory
+with `python3 scripts/sbom.py > SBOM.md`, review the resulting diff, and include
+`SBOM.md` with the dependency update. The final command above verifies that the
+committed inventory matches the lockfile.
 
 ## Code layout orientation
 

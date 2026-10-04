@@ -4,6 +4,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.1.0] - 2026-10-04
+
 ### Changed / Fixed (iteration 12 — final audit, 2026-10-04)
 - **Audit finding FIXED (security)**: `POST /v1/diff` accepted specs that
   resolved internal namespaces (`workspaces/*`, `chains/*`) and the local
@@ -31,11 +35,18 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   fmt/clippy clean, SBOM drift clean, cargo-audit 0 findings, cargo-deny
   all-ok, dual-target rebuild bit-identical (sha256 `30714184…`), dist
   tarball `bbafe611…` 28/28 checksums OK.
-- **Readiness decision: PRODUCTION-CANDIDATE** — all gates pass with
-  evidence except "CI green on hosted runner" (unsatisfiable from this
-  sandbox; every underlying check run locally) and same-host-only
-  reproducibility scope (KL #37). docs/COMPLETION_REPORT.md is the final
-  deliverable report.
+- **Hosted validation (2026-10-04, pre-tag commit `afa94c4`):** [CI run
+  37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247)
+  and [CodeQL run
+  37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239)
+  both passed on Ubuntu 24.04. CI passed format/lint, debug and release
+  tests/build, dependency and SBOM checks, the second clean release build,
+  distribution packaging, and checksum verification. The PR-only dependency
+  review and tag-only release jobs did not run on this push event.
+- **Readiness decision: PRODUCTION-CANDIDATE.** Hosted checks remove the
+  former unexecuted-CI gate for this tested commit, but do not certify every
+  production deployment; same-host reproducibility and platform/protocol
+  limits remain. See RELEASE_READINESS.md and docs/COMPLETION_REPORT.md.
 
 ### Added (iteration 11 — 2026-10-04)
 - **Release engineering**: `scripts/dist.sh` (dist dir + tarball +

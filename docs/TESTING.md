@@ -3,19 +3,32 @@
 The test pyramid, how to run each layer, and what each layer is allowed to
 prove. Test-count and invariant registry: TEST_MATRIX.md (source of truth).
 
-## Gates (run all three before any commit)
+## Gates (run before any commit)
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                      # debug profile: full suite (~30 s)
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked             # debug profile: full suite
+cargo test --release --locked   # includes timing/crash-sensitive suites
 ```
 
-Timing/crash-sensitive suites additionally run in release in CI:
+## Hosted verification
 
-```bash
-cargo test --release --locked
-```
+On 2026-10-04, the public main-branch preflight on commit `afa94c4` passed
+[CI run 37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247)
+and [CodeQL run 37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239)
+on Ubuntu 24.04. CI passed formatting, Clippy, debug/release tests and build,
+the committed-SBOM drift check, RustSec and cargo-deny checks, a second clean
+release build with matching hashes, package creation, and archive checksums.
+The PR-only dependency-review job and tag-only release job were skipped on
+this push event; a version tag invokes a separate release workflow gated on
+the functional, security, and distribution jobs.
+
+An independent clean clone at commit `b648079` also passed the locked build,
+all 278 debug and release tests, the README install/CLI quick start, an agent
+workflow through human approval and integration, and a real-Git import/export
+smoke test. These are results for the tested Linux x86_64 environment, not a
+claim that every operating system or deployment is verified.
 
 ## Layers
 

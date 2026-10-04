@@ -1,21 +1,36 @@
 # RELEASE_READINESS.md
 
-**Current classification: PRODUCTION-CANDIDATE** (iteration 12 of 12 complete — 2026-10-04)
+**Current classification: PRODUCTION-CANDIDATE** (pre-1.0; 2026-10-04).
 
-**Decision (evidence-based, per the gate rule "PRODUCTION READY only when
-ALL gates pass"):** every gate in this file passes with recorded evidence
-EXCEPT one: *"CI green on hosted runner"* — unsatisfiable from this
-environment (no GitHub remote exists; the workflow is defined and every
-check it runs has been executed locally: fmt, clippy -D warnings, 278/278
-tests in debug AND release, cargo-audit 0 findings, cargo-deny all-ok,
-SBOM drift clean, dual-target bit-identical rebuild, dist + 28/28
-checksums). A second honest qualifier: build reproducibility is proven
-same-host only (KL #37). The final forensic audit (it12) found 3 real
-issues in the newest code — all 3 were FIXED with regression tests before
-this decision (TEST_MATRIX "Final audit" row). To convert CANDIDATE →
-READY: push to any GitHub repo, watch the CI workflow pass once, and
-re-run `scripts/dist.sh` on the runner artifacts. Everything else is
-done, tested, and documented.
+**Hosted publication preflight:** The runner-pinned source-bearing commit
+`afa94c4` (`afa94c427d5530374422dd40c46ddb6fbe87c32c`) passed [GitHub CI run
+37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247)
+and [CodeQL run
+37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239)
+on Ubuntu 24.04. Applicable CI jobs passed formatting, Clippy, debug and
+release tests/build, SBOM drift, RustSec and cargo-deny checks, a second clean
+release build with matching hashes, distribution packaging, and archive
+checksum verification. The PR-only dependency review and tag-only release jobs
+did not run on that push event.
+
+An independent clean clone at `b648079` passed the locked build, all 278 debug
+and 278 release tests, README install/CLI quick start, a full agent workflow
+through human approval and integration, and real-Git import/export smoke
+checks. The pre-publication Gitleaks scan found zero findings. GitHub secret
+scanning and push protection, Dependabot alerts/security updates, private
+vulnerability reporting, and read-only-by-default Actions token permissions
+are enabled.
+
+**Decision:** Keep NewGit classified as **PRODUCTION-CANDIDATE**, not
+Production Ready. Passing checks apply to the tested commits and Linux x86_64
+runner; they do not certify every deployment. The project remains pre-1.0,
+reproducibility is verified same-host only, and the self-hosted protocol v1 is
+plain HTTP. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md),
+[THREAT_MODEL.md](THREAT_MODEL.md), and the [versioned release notes](docs/releases/v0.1.0.md).
+Each pushed commit and version tag has its own Actions run; consult the live
+[Actions](https://github.com/kakarot700/newgit/actions) and
+[Releases](https://github.com/kakarot700/newgit/releases) pages for current
+commit/tag and artifact status.
 
 Honest gate checklist; `[x]` only with evidence (test/command reference).
 
@@ -67,5 +82,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## RELEASE
 - [x→partial] clean reproducible build + artifacts + checksums — iteration 11 ✅ (two clean release builds bit-identical same-host, sha256 recorded; scripts/dist.sh tarball + SHA256SUMS verified with `sha256sum -c`; cross-host reproducibility NOT claimed — KL #37)
-- [x] CI workflow defined — iteration 1 (`.github/workflows/ci.yml`)
-- [ ] CI green on hosted runner — BLOCKED from sandbox (no GitHub remote); workflow hardened it11 (fake knob removed, SBOM-drift/audit/deny/dist/repro jobs); EVERY gate the CI runs has been executed locally in-sandbox (fmt, clippy, tests debug+release, cargo-audit, cargo-deny, SBOM drift, dual-target repro build, dist+`sha256sum -c`) — only the Actions glue (cache/artifacts/gh-release) is unexercised (KL #38)
+- [x] CI workflow defined — `.github/workflows/ci.yml`; actions pinned, least-privilege job permissions, Ubuntu 24.04 runner
+- [x] CI green on hosted runner — CI run 37182199247 on commit `afa94c4`, with applicable check, security, and reproducible-distribution jobs successful
+- [x] CodeQL analysis — run 37182199239 completed successfully on the same commit
+- [x] tag-release workflow is configured to publish only on `v*` tags after the `dist` job; main-push preflight is not itself a test of tag publication

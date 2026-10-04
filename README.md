@@ -1,5 +1,8 @@
 # NewGit
 
+[![CI](https://github.com/kakarot700/newgit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kakarot700/newgit/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/kakarot700/newgit/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/kakarot700/newgit/actions/workflows/codeql.yml)
+
 **Agent-native version control for software built collaboratively by people and AI agents.** NewGit makes goals, competing changes, evidence, evaluations, and integration decisions explicit and auditable alongside source history.
 
 > **Status: Production Candidate (pre-1.0); not labeled Production Ready.** The project is under active development. See [release readiness](RELEASE_READINESS.md), [known limitations](KNOWN_LIMITATIONS.md), and the [roadmap](ROADMAP.md) for the evidence and boundaries behind this classification.
@@ -67,6 +70,8 @@ install -m 0755 target/release/newgit "$HOME/.local/bin/newgit"
 export PATH="$HOME/.local/bin:$PATH"
 newgit --help
 ```
+
+Prebuilt Linux x86_64 GNU archives and SHA-256 sidecars are published on [GitHub Releases](https://github.com/kakarot700/newgit/releases). Verify the downloaded archive against its sidecar before extracting it.
 
 The pinned toolchain is installed by `rustup` when Cargo first runs in the checkout. To verify the exact toolchain explicitly, run `rustup toolchain install 1.99.0 --component rustfmt --component clippy` first. The current CI and clean-checkout validation target Linux x86_64; other operating systems and architectures are not claimed as verified yet.
 

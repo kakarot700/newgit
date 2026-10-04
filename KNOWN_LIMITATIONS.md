@@ -149,9 +149,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     environment (nix/buildinfo) — checksums published per release are the
     verification story instead.
 38. `cargo audit` / `cargo deny` results (zero findings, all four checks
-    ok — 2026-10-04) are SNAPSHOTS against that day's advisory DB (1290
-    advisories). Advisories are published continuously; CI re-runs both on
-    every push. The CI WORKFLOW itself still has never executed on a hosted
-    runner from this sandbox — every gate it runs (fmt/clippy/test/audit/
-    deny/sbom-drift/repro/dist+checksums) has been executed locally except
-    the GitHub-Actions-specific glue (artifacts, gh release).
+    ok — local preflight 2026-10-04) are SNAPSHOTS against the advisory DB at
+    that time; advisories are published continuously. GitHub-hosted CI now
+    reruns the SBOM, advisory, ban, license, and source checks on pushes. CI
+    run 37182199247 on commit `afa94c4` passed those gates plus format, lint,
+    debug/release tests, a second clean release build, package creation, and
+    checksum verification. CodeQL run 37182199239 on that commit completed
+    successfully. These results apply to the tested commit/platform; see the
+    Actions page for current status and do not infer future advisory coverage.
