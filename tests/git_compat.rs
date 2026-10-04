@@ -1418,6 +1418,54 @@ fn reimport_after_export_is_stable() {
     }
 }
 
+#[test]
+fn non_head_symbolic_refs_are_reported_and_not_imported() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "file.txt", b"content\n");
+    commit(&gdir, "root");
+    for alias in ["refs/heads/alias", "refs/heads/other-alias"] {
+        git(&gdir, &["symbolic-ref", alias, "refs/heads/master"]);
+        assert_eq!(
+            git_out(&gdir, &["symbolic-ref", alias]).trim(),
+            "refs/heads/master"
+        );
+    }
+    let stream = git_out(&gdir, &["fast-export", "--all"]);
+    assert!(stream.contains("commit refs/heads/master\n"));
+    for alias in ["refs/heads/alias", "refs/heads/other-alias"] {
+        assert!(
+            !stream.contains(alias),
+            "Git fast-export omits non-HEAD symbolic ref {alias}"
+        );
+    }
+
+    let (_nd, repo) = temp_repo();
+    let report = import_git(&repo, &gdir).unwrap();
+    for alias in ["refs/heads/alias", "refs/heads/other-alias"] {
+        assert!(
+            report.refs_skipped.iter().any(|name| name == alias),
+            "unsupported symbolic ref {alias} must be reported: {report:?}"
+        );
+        assert!(repo.refs.read_opt(alias).unwrap().is_none());
+    }
+    assert!(matches!(
+        repo.read_head().unwrap(),
+        newgit::repo::Head::Symbolic(name) if name == "refs/heads/master"
+    ));
+    let main = repo.refs.read("refs/heads/master").unwrap();
+    let snapshot = match repo.objects.get(&main).unwrap() {
+        Object::Snapshot(snapshot) => snapshot,
+        other => panic!("expected snapshot, got {}", other.type_tag().name()),
+    };
+    assert_eq!(
+        snapshot.extras.get("git_sha1").map(String::as_str),
+        Some(git_out(&gdir, &["rev-parse", "refs/heads/master"]).trim())
+    );
+    assert!(verify(&repo, &VerifyOpts { deep: true }).ok());
+}
+
 fn snapshot_req(
     ws: &str,
     msg: &str,

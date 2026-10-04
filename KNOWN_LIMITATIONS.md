@@ -32,9 +32,13 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 ## Interop
 10. Git interop requires the **system git binary** (fast-export/fast-import).
     Annotated/signed-tag metadata and Git notes are not preserved; skipped refs
-    and reported tag-metadata loss are surfaced by the import report. Git LFS
-    service semantics are not implemented. Non-UTF-8 paths are rejected by
-    NewGit's UTF-8 path model (limitation 1), not silently converted.
+    and reported tag-metadata loss are surfaced by the import report. Symbolic
+    refs outside `HEAD` are unsupported by NewGit's direct-ref model; import
+    discovers and reports them because `fast-export --all` omits them. Git LFS
+    service semantics are not implemented. Symbolic-ref discovery and
+    `fast-export` are separate commands, so concurrent source-ref changes are
+    not synchronized. Non-UTF-8 paths are rejected by NewGit's UTF-8 path model
+    (limitation 1), not silently converted.
 11. No GitHub/GitLab protocol compatibility (smart HTTP) — NewGit speaks its
     own documented protocol (iteration 9).
 

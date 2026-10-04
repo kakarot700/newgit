@@ -14,15 +14,15 @@
 //!   with a clear error; annotated-tag messages are stripped (refs are kept)
 //!   and listed in the report; commit-message control characters that the
 //!   NewGit text model cannot represent are refused before refs move;
-//!   refs/remotes/*, refs/stash, refs/notes/*, refs/replace/* are skipped and
-//!   listed.
+//!   refs/remotes/*, refs/stash, refs/notes/*, refs/replace/*, and symbolic
+//!   refs outside HEAD are skipped and listed.
 //!
 //! Memory: commit tree states are cached per commit mark so incremental
 //! (non-full-tree) streams and parent inheritance work; with the default
 //! `--full-tree` request each commit is self-contained. Very large histories
 //! are bounded by RAM — a documented limitation (KNOWN_LIMITATIONS #20).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -45,7 +45,8 @@ pub struct ImportReport {
     pub actors: usize,
     /// (ref name, snapshot oid hex) actually moved by the import txn.
     pub refs_imported: Vec<(String, String)>,
-    /// Refs present in the stream but deliberately not imported.
+    /// Source refs deliberately not imported, including refs omitted by Git's
+    /// fast-export stream (such as symbolic refs outside HEAD).
     pub refs_skipped: Vec<String>,
     /// Annotated tags whose message/tagger metadata was stripped (the ref
     /// itself IS imported, pointing at its target snapshot).
@@ -62,6 +63,48 @@ fn skip_ref(name: &str) -> bool {
         || name == "refs/stash"
         || name.starts_with("refs/bisect/")
         || name.starts_with("refs/worktree/")
+}
+
+/// `git fast-export --all` omits symbolic refs outside HEAD. Discover them
+/// separately so import reports the loss and never reconstructs one as an
+/// ordinary direct ref if a Git version happens to emit it in the stream.
+fn list_symbolic_refs(git_dir: &Path) -> Result<HashSet<String>> {
+    let output = Command::new("git")
+        .args(["-C"])
+        .arg(git_dir)
+        .args(["for-each-ref", "--format=%(refname)%00%(symref)"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| Error::io(git_dir, e))?;
+    if !output.status.success() {
+        return Err(Error::Invalid(format!(
+            "git for-each-ref failed while checking symbolic refs: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let mut refs = HashSet::new();
+    for record in output.stdout.split(|byte| *byte == b'\n') {
+        if record.is_empty() {
+            continue;
+        }
+        let Some(separator) = record.iter().position(|byte| *byte == 0) else {
+            return Err(Error::Invalid(
+                "git for-each-ref returned a malformed ref listing".into(),
+            ));
+        };
+        let (name, target) = record.split_at(separator);
+        if target.len() > 1 {
+            let name = String::from_utf8(name.to_vec()).map_err(|_| {
+                Error::Invalid(
+                    "Git symbolic ref name is not valid UTF-8; import is refused before refs move"
+                        .into(),
+                )
+            })?;
+            refs.insert(name);
+        }
+    }
+    Ok(refs)
 }
 
 pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
@@ -109,6 +152,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
     } else {
         None
     };
+    let symbolic_ref_names = list_symbolic_refs(git_dir)?;
 
     // ── stream fast-export ──
     let mut child = Command::new("git")
@@ -132,7 +176,12 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
         .take()
         .ok_or_else(|| Error::Bug("fast-export child spawned without stdout".into()))?;
 
-    let mut rep = ImportReport::default();
+    let mut skipped_symbolic_refs: Vec<String> = symbolic_ref_names.iter().cloned().collect();
+    skipped_symbolic_refs.sort();
+    let mut rep = ImportReport {
+        refs_skipped: skipped_symbolic_refs,
+        ..Default::default()
+    };
     let mut marks: HashMap<u64, ObjectId> = HashMap::new();
     let mut sha_to_oid: HashMap<String, ObjectId> = HashMap::new();
     let mut tips: BTreeMap<String, ObjectId> = BTreeMap::new();
@@ -343,7 +392,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 if let Some(sha) = c.git_sha {
                     sha_to_oid.insert(sha, oid);
                 }
-                if skip_ref(&c.ref_name) {
+                if skip_ref(&c.ref_name) || symbolic_ref_names.contains(&c.ref_name) {
                     if !rep.refs_skipped.contains(&c.ref_name) {
                         rep.refs_skipped.push(c.ref_name.clone());
                     }
@@ -352,7 +401,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 }
             }
             Event::Tag(t) => {
-                if skip_ref(&t.ref_name) {
+                if skip_ref(&t.ref_name) || symbolic_ref_names.contains(&t.ref_name) {
                     if !rep.refs_skipped.contains(&t.ref_name) {
                         rep.refs_skipped.push(t.ref_name.clone());
                     }
@@ -368,7 +417,7 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
                 tips.insert(t.ref_name, oid);
             }
             Event::Reset(r) => {
-                if skip_ref(&r.ref_name) {
+                if skip_ref(&r.ref_name) || symbolic_ref_names.contains(&r.ref_name) {
                     if !rep.refs_skipped.contains(&r.ref_name) {
                         rep.refs_skipped.push(r.ref_name.clone());
                     }

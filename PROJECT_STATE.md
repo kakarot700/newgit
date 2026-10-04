@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: prove empty-tree Git histories survive semantic import/export/reimport (recorded below).
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: make Git non-`HEAD` symbolic-ref omission explicit and regression-tested (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -82,7 +82,7 @@
   both completed successfully on implementation SHA
   `b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`.
 
-## Current Git compatibility milestone — empty Git trees (2026-10-04)
+## Previous Git compatibility milestone — empty Git trees (2026-10-04)
 
 - **Evidence gap:** the matrix distinguished an empty Git repository (no
   commits) from a commit whose tree is empty, but the latter was marked NOT
@@ -110,6 +110,41 @@
   passed on the exact pushed implementation SHA and on the documentation-only
   validation head listed above; this final state-record commit is rechecked on
   its own pushed SHA before completion.
+
+## Current Git compatibility milestone — non-`HEAD` symbolic refs (2026-10-04)
+
+- **Evidence gap and reproduction:** Git 2.43.0 `for-each-ref` listed two
+  ordinary branch aliases pointing to `refs/heads/master`, while
+  `git fast-export --all` emitted only `refs/heads/master`. Before the fix,
+  import returned success with an empty `refs_skipped` list, silently omitting
+  both source refs.
+- **Implementation:** import now enumerates symbolic refs with Git's
+  NUL-delimited `for-each-ref` format before starting `fast-export`. Non-`HEAD`
+  symbolic refs are pre-populated in the sorted `refs_skipped` report and are
+  filtered from commit, tag, and reset events rather than being reconstructed
+  as ordinary direct refs. Existing symbolic and detached `HEAD` handling is
+  unchanged. Malformed listing output or a non-UTF-8 symbolic-ref name fails
+  before ref updates.
+- **Regression:** `tests/git_compat.rs::non_head_symbolic_refs_are_reported_and_not_imported`
+  uses Git CLI to create two symbolic branch aliases; checks both `symbolic-ref`
+  targets; proves both aliases are absent from Git's `fast-export --all`
+  stream; imports and asserts both exact names appear in `refs_skipped` and
+  neither exists as a NewGit ref; verifies the target branch's original Git
+  commit id, ordinary symbolic `HEAD`, and deep repository integrity.
+- **Independent adversarial review:** no material findings. Review covered the
+  NUL field framing, empty/multiple ref listings, event filtering, and ref
+  transaction boundary. The test covers two aliases but does not exercise all
+  symbolic-ref namespaces or targets.
+- **Boundary:** non-`HEAD` symbolic refs remain **UNSUPPORTED** because NewGit
+  refs are direct object pointers. Evidence is limited to Git 2.43.0 on Linux.
+  Symbolic-ref discovery and `fast-export` are separate Git commands; concurrent
+  mutation of the source refs is not synchronized or tested.
+- **Local verification:** Git interoperability suite **19 passed**; complete
+  debug and release suites **288 passed each**; `cargo fmt --check`,
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `cargo build --release --locked`, SBOM drift check, and `git diff --check`
+  all pass. Hosted CI and CodeQL are checked on the pushed implementation head
+  and final state-record head before completion.
 
 ## Local development setup
 
