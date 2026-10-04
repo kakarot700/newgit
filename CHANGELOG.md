@@ -4,7 +4,15 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+- `import-git` no longer persists `git fast-export --all`'s detached-HEAD
+  pseudo-ref as an ordinary NewGit ref. `export-git` now preserves detached
+  HEAD, including histories not reachable from any named ref, and deletes its
+  temporary Git ref after checkout. Real-Git integration tests cover detached-
+  only history, a detached tip ahead of a branch, and nested refs that collide
+  with successive temporary-ref candidates. Export also refuses distinct
+  NewGit refs that map to one Git ref rather than silently dropping one; a
+  redundant-ancestor merge-parent round-trip pins parent ordering.
 
 ## [0.1.0] - 2026-10-04
 

@@ -391,6 +391,12 @@ pub fn import_git(repo: &Repo, git_dir: &Path) -> Result<ImportReport> {
     // ── atomic ref switch (+ HEAD in the same txn) ──
     let mut ops: Vec<TxnOp> = Vec::new();
     for (name, oid) in &tips {
+        // `git fast-export --all` emits a pseudo-ref named exactly `HEAD`
+        // when the source repository is detached. It is a stream label for
+        // the detached tip, not a Git ref (real refs are fully qualified).
+        if name == "HEAD" {
+            continue;
+        }
         if crate::repo::refs::check_ref_name(name).is_err() {
             rep.refs_skipped.push(name.clone());
             continue;

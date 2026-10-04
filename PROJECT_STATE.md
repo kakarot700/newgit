@@ -5,14 +5,21 @@
 
 ## Current status
 
-- **Phase:** The 12 implementation iterations are complete; the public publication evidence and v0.1.0 release notes are recorded below.
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. Current bounded milestone: detached-HEAD import/export (recorded below).
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
-- **Hosted verification:** GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) both passed on Ubuntu 24.04 commit `afa94c4`.
+- **Publication hosted verification:** GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) both passed on Ubuntu 24.04 commit `afa94c4`; the later detached-HEAD milestone's exact pushed-commit runs are to be recorded after hosted verification.
 - **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
-- **Local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check all pass on the pinned Rust 1.99.0 toolchain.
+- **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
-- **Final deliverable:** the preserved development history, public repository, release decision, and updated completion/readiness report.
+- **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
+
+## Current Git compatibility milestone — detached `HEAD` and ref integrity (2026-10-04)
+
+- **Evidence and defects:** real Git 2.43.0 probes showed `git fast-export --all` emits a pseudo-ref named exactly `HEAD` for detached checkouts. The importer previously persisted it as a regular NewGit ref, while export could omit detached-only history or fail to reproduce detached state. Adversarial review also confirmed that `main` and `refs/main` can alias one Git ref and one source ref was silently overwritten.
+- **Implementation:** import treats the exact stream label as pseudo-ref-only while mapping detached `HEAD` directly in its atomic transaction. Export roots detached history at a temporary ref, checks out the target with `git checkout --detach`, and deletes the temporary ref. Its allocator avoids exact and slash-delimited ancestor/descendant collisions on every suffix attempt. Export now rejects multiple NewGit names mapping to the same Git ref before initializing the target.
+- **Regression evidence:** real-Git tests cover detached-only history, a detached tip ahead of a branch, two successive nested temporary-ref candidates, and a valid redundant-ancestor merge whose ordered parents survive export. The mapped-ref alias test asserts the two mappings, validates the destination with `git check-ref-format`, and checks that export refuses before creating partial output. The suspected topological-sort failure was not reproduced; no sorter change was made.
+- **Local verification:** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, full `cargo test --locked` (283 passed), `cargo build --release --locked`, full `cargo test --release --locked` (283 passed), SBOM drift check, and `git diff --check` all pass. The focused `tests/git_compat.rs` suite contains 14 passing tests. Hosted Actions verification and the resulting commit/push record are pending.
 
 ## Local development setup
 

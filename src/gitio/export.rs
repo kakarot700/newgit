@@ -91,10 +91,41 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
             }
         }
         let g = map_ref_name(n);
+        if let Some(previous) = git_to_newgit.get(&g) {
+            return Err(Error::Invalid(format!(
+                "NewGit refs {previous:?} and {n:?} both map to Git ref {g:?}; refusing lossy export"
+            )));
+        }
         tips.insert(g.clone(), oid);
         git_to_newgit.insert(g.clone(), n.clone());
         rep.refs_exported.push((n.clone(), g));
     }
+    let export_head = repo.read_head()?;
+    // Git fast-import needs a ref on which to emit the detached history. Use
+    // a temporary ref, then detach HEAD and delete it after import; it must
+    // never leak into the exported repository's visible refs.
+    let detached_export_ref = if let crate::repo::Head::Detached(oid) = &export_head {
+        match repo.objects.get(oid)? {
+            Object::Snapshot(_) => {}
+            other => {
+                return Err(Error::Invalid(format!(
+                    "detached HEAD points at {} — only snapshot histories can be exported to git",
+                    other.type_tag().name()
+                )))
+            }
+        }
+        let base = "refs/heads/newgit-export-detached-head";
+        let mut candidate = base.to_string();
+        let mut suffix = 0usize;
+        while tips.keys().any(|name| ref_names_conflict(name, &candidate)) {
+            suffix += 1;
+            candidate = format!("{base}-{suffix}");
+        }
+        tips.insert(candidate.clone(), *oid);
+        Some(candidate)
+    } else {
+        None
+    };
     if tips.is_empty() {
         return Err(Error::Invalid(
             "nothing to export: repository has no snapshot refs (workspaces/chains are internal)"
@@ -222,7 +253,7 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
     // ── HEAD + working tree materialization ──
     let marks_by_mark = read_marks_file(&marks_file)?;
     let _ = std::fs::remove_file(&marks_file);
-    match repo.read_head()? {
+    match export_head {
         crate::repo::Head::Symbolic(name) => {
             let g = if tips.contains_key(&map_ref_name(&name)) {
                 map_ref_name(&name)
@@ -243,13 +274,15 @@ pub fn export_git(repo: &Repo, target: &Path) -> Result<ExportReport> {
                 .get(&mark)
                 .cloned()
                 .ok_or_else(|| Error::Bug(format!("mark :{mark} missing from git export-marks")))?;
-            run_git(target, &["reset", "--hard", "--quiet", &sha])?;
+            run_git(target, &["checkout", "--detach", "--quiet", &sha])?;
+            if let Some(temp_ref) = &detached_export_ref {
+                run_git(target, &["update-ref", "-d", temp_ref])?;
+            }
             rep.head = Some(format!("detached:{sha}"));
         }
     }
     // map report refs back for clarity
     rep.refs_exported.sort();
-    let _ = git_to_newgit;
     Ok(rep)
 }
 
@@ -492,6 +525,14 @@ pub fn map_ref_name(name: &str) -> String {
     } else {
         format!("refs/heads/{name}")
     }
+}
+
+/// Git cannot store both a ref and another ref below it (for example,
+/// `refs/heads/topic` and `refs/heads/topic/child`).
+fn ref_names_conflict(a: &str, b: &str) -> bool {
+    a == b
+        || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
+        || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// Parse git's `--export-marks` output: `:<mark> <git-sha>` per line.

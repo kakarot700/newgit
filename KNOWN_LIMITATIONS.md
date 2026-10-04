@@ -95,9 +95,12 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     NewGit-native remotes with negotiation arrive in iteration 9.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
     (`extras.git_message_lossy`); git ref names violating NewGit's stricter
-    ref grammar are skipped and reported.
-26. Git interop requires a **system git ≥ ~2.20** on PATH (tested against
-    2.47). Everything else in NewGit works without git installed.
+    ref grammar are skipped and reported. Export refuses distinct NewGit ref
+    names that map to the same Git ref (for example, `main` and `refs/main`)
+    rather than silently overwriting one.
+26. Git interop requires a **system git ≥ ~2.20** on PATH (the recorded
+    compatibility suite runs against Git 2.43.0). Everything else in NewGit
+    works without git installed.
 27. Remote protocol v1 is **plain HTTP** — no TLS, no request signing.
     Deploy behind a TLS-terminating reverse proxy (documented); tokens
     travel as bearer credentials, so an unencrypted network exposes them.

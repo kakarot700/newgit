@@ -547,6 +547,192 @@ fn export_native_newgit_repo() {
 }
 
 #[test]
+fn detached_head_only_history_roundtrips_without_pseudo_refs() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "only.txt", b"detached-only\n");
+    commit(&gdir, "detached-only root");
+    let git_tip = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&gdir, &["checkout", "--quiet", "--detach", "HEAD"]);
+    git(&gdir, &["branch", "-D", "master"]);
+    assert!(git_out(&gdir, &["for-each-ref", "--format=%(refname)"]).is_empty());
+
+    let (_nd, repo) = temp_repo();
+    let rep = import_git(&repo, &gdir).unwrap();
+    assert!(rep.refs_imported.is_empty(), "pseudo HEAD leaked: {rep:?}");
+    assert!(repo.refs.list(None).unwrap().is_empty());
+    let detached_oid = match repo.read_head().unwrap() {
+        newgit::repo::Head::Detached(oid) => oid,
+        other => panic!("expected detached HEAD, got {other:?}"),
+    };
+    let snap = match repo.objects.get(&detached_oid).unwrap() {
+        Object::Snapshot(s) => s,
+        _ => panic!("detached HEAD is not a snapshot"),
+    };
+    assert_eq!(
+        snap.extras.get("git_sha1").map(String::as_str),
+        Some(git_tip.as_str())
+    );
+
+    let outdir = d.path().join("out");
+    export_git(&repo, &outdir).unwrap();
+    assert_eq!(
+        git_out(&outdir, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "HEAD"
+    );
+    assert!(git_out(&outdir, &["for-each-ref", "--format=%(refname)"]).is_empty());
+    assert_eq!(
+        git(&outdir, &["show", "HEAD:only.txt"]).stdout,
+        b"detached-only\n"
+    );
+    assert_eq!(
+        git_out(&outdir, &["log", "-1", "--format=%s", "HEAD"]).trim(),
+        "detached-only root"
+    );
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn detached_head_ahead_of_branch_roundtrips_without_moving_branch() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "base.txt", b"base\n");
+    commit(&gdir, "branch base");
+    let branch_tip = git_out(&gdir, &["rev-parse", "refs/heads/master"])
+        .trim()
+        .to_string();
+    git(&gdir, &["checkout", "--quiet", "--detach", "HEAD"]);
+    write(&gdir, "detached.txt", b"detached change\n");
+    commit(&gdir, "detached successor");
+
+    let (_nd, repo) = temp_repo();
+    let rep = import_git(&repo, &gdir).unwrap();
+    assert_eq!(rep.refs_imported.len(), 1, "pseudo HEAD leaked: {rep:?}");
+    assert_eq!(rep.refs_imported[0].0, "refs/heads/master");
+    assert!(repo.refs.read_opt("HEAD").unwrap().is_none());
+    let detached_oid = match repo.read_head().unwrap() {
+        newgit::repo::Head::Detached(oid) => oid,
+        other => panic!("expected detached HEAD, got {other:?}"),
+    };
+    let snap = match repo.objects.get(&detached_oid).unwrap() {
+        Object::Snapshot(s) => s,
+        _ => panic!("detached HEAD is not a snapshot"),
+    };
+    assert_ne!(
+        snap.extras.get("git_sha1").map(String::as_str),
+        Some(branch_tip.as_str())
+    );
+
+    let outdir = d.path().join("out");
+    export_git(&repo, &outdir).unwrap();
+    assert_eq!(
+        git_out(&outdir, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "HEAD"
+    );
+    assert_eq!(
+        git_out(&outdir, &["log", "-1", "--format=%s", "refs/heads/master"]).trim(),
+        "branch base"
+    );
+    assert_eq!(
+        git_out(&outdir, &["log", "-1", "--format=%s", "HEAD"]).trim(),
+        "detached successor"
+    );
+    assert_eq!(
+        git(&outdir, &["show", "HEAD:detached.txt"]).stdout,
+        b"detached change\n"
+    );
+    let refs = git_out(&outdir, &["for-each-ref", "--format=%(refname)"]);
+    assert_eq!(refs.lines().collect::<Vec<_>>(), vec!["refs/heads/master"]);
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn detached_head_export_avoids_nested_named_ref_collision() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "base.txt", b"base\n");
+    commit(&gdir, "branch base");
+    git(
+        &gdir,
+        &[
+            "checkout",
+            "--quiet",
+            "-b",
+            "newgit-export-detached-head/topic",
+        ],
+    );
+    write(&gdir, "topic.txt", b"topic branch\n");
+    commit(&gdir, "topic branch commit");
+    git(&gdir, &["checkout", "--quiet", "master"]);
+    git(
+        &gdir,
+        &[
+            "checkout",
+            "--quiet",
+            "-b",
+            "newgit-export-detached-head-1/topic",
+        ],
+    );
+    write(&gdir, "topic-one.txt", b"second nested topic\n");
+    commit(&gdir, "second nested topic commit");
+    git(
+        &gdir,
+        &["checkout", "--quiet", "--detach", "refs/heads/master"],
+    );
+    write(&gdir, "detached.txt", b"detached successor\n");
+    commit(&gdir, "detached successor");
+
+    let (_nd, repo) = temp_repo();
+    import_git(&repo, &gdir).unwrap();
+    let outdir = d.path().join("out");
+    export_git(&repo, &outdir).unwrap();
+
+    assert_eq!(
+        git_out(&outdir, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "HEAD"
+    );
+    assert_eq!(
+        git(&outdir, &["show", "HEAD:detached.txt"]).stdout,
+        b"detached successor\n"
+    );
+    assert_eq!(
+        git(
+            &outdir,
+            &[
+                "show",
+                "refs/heads/newgit-export-detached-head/topic:topic.txt"
+            ]
+        )
+        .stdout,
+        b"topic branch\n"
+    );
+    assert_eq!(
+        git(
+            &outdir,
+            &[
+                "show",
+                "refs/heads/newgit-export-detached-head-1/topic:topic-one.txt"
+            ]
+        )
+        .stdout,
+        b"second nested topic\n"
+    );
+    let refs = git_out(&outdir, &["for-each-ref", "--format=%(refname)"]);
+    assert_eq!(
+        refs.lines().collect::<Vec<_>>(),
+        vec![
+            "refs/heads/master",
+            "refs/heads/newgit-export-detached-head-1/topic",
+            "refs/heads/newgit-export-detached-head/topic"
+        ]
+    );
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
 fn submodule_import_is_refused_atomically() {
     let d = tempfile::tempdir().unwrap();
     // upstream repo to act as the submodule source
@@ -665,6 +851,113 @@ fn export_refuses_dirty_targets_and_non_snapshot_refs() {
     let out2 = d.path().join("out2");
     let err = export_git(&repo, &out2).unwrap_err();
     assert!(err.to_string().contains("only snapshot histories"), "{err}");
+}
+
+#[test]
+fn export_refuses_colliding_git_ref_names_without_partial_output() {
+    let (_nd, repo) = temp_repo();
+    let author = repo.default_actor().unwrap();
+    write(repo.root(), "x.txt", b"same target\n");
+    let snap = newgit::ops::snapshot::snapshot(
+        &repo,
+        &snapshot_req("main", "same target", author, 1_600_000_000_000),
+    )
+    .unwrap();
+    // Both `refs/main` and `main` map to `refs/heads/main` on export.
+    newgit::repo::txn::execute(
+        repo.ng(),
+        vec![newgit::repo::txn::TxnOp::Ref {
+            name: "main".into(),
+            cas: newgit::repo::txn::Cas::Any,
+            new: Some(snap.oid),
+            log: newgit::repo::txn::RefLogEntry::system("collision regression"),
+        }],
+        repo.limits(),
+    )
+    .unwrap();
+
+    let d = tempfile::tempdir().unwrap();
+    let git_dir = d.path().join("git-check");
+    init_git(&git_dir);
+    assert_eq!(
+        newgit::gitio::export::map_ref_name("main"),
+        "refs/heads/main"
+    );
+    assert_eq!(
+        newgit::gitio::export::map_ref_name("refs/main"),
+        "refs/heads/main"
+    );
+    git(&git_dir, &["check-ref-format", "refs/heads/main"]);
+    let outdir = d.path().join("out");
+    let err = export_git(&repo, &outdir).unwrap_err();
+    assert!(err.to_string().contains("both map to Git ref"), "{err}");
+    assert!(
+        !outdir.exists(),
+        "ref collision must be detected before git init"
+    );
+}
+
+#[test]
+fn merge_with_redundant_ancestor_parent_exports_in_topological_order() {
+    let d = tempfile::tempdir().unwrap();
+    let gdir = d.path().join("g");
+    init_git(&gdir);
+    write(&gdir, "history.txt", b"A\n");
+    commit(&gdir, "commit A");
+    let a = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    write(&gdir, "history.txt", b"B\n");
+    commit(&gdir, "commit B");
+    let b = git_out(&gdir, &["rev-parse", "HEAD"]).trim().to_string();
+    let tree = git_out(&gdir, &["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_string();
+    git(&gdir, &["branch", "-m", "master", "z-history"]);
+
+    // Git permits an unusual but valid merge whose second parent is already
+    // an ancestor of its first parent.
+    let merge = Command::new("git")
+        .arg("-C")
+        .arg(&gdir)
+        .args([
+            "commit-tree",
+            &tree,
+            "-p",
+            &b,
+            "-p",
+            &a,
+            "-m",
+            "redundant parent",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        merge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    let merge_oid = String::from_utf8_lossy(&merge.stdout).trim().to_string();
+    git(&gdir, &["update-ref", "refs/heads/a-merge", &merge_oid]);
+
+    let (_nd, repo) = temp_repo();
+    import_git(&repo, &gdir).unwrap();
+    let outdir = d.path().join("out");
+    export_git(&repo, &outdir).unwrap();
+
+    let output = git_out(
+        &outdir,
+        &["rev-list", "--parents", "-n", "1", "refs/heads/a-merge"],
+    );
+    let fields = output.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 3, "expected two ordered parents: {output:?}");
+    assert_eq!(
+        git_out(&outdir, &["show", "-s", "--format=%s", fields[1]]).trim(),
+        "commit B"
+    );
+    assert_eq!(
+        git_out(&outdir, &["show", "-s", "--format=%s", fields[2]]).trim(),
+        "commit A"
+    );
+    assert!(git_out(&outdir, &["status", "--porcelain"]).is_empty());
 }
 
 #[test]

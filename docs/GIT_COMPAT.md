@@ -30,7 +30,8 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | lightweight tag | ref → target snapshot | exact |
 | annotated tag | ref → target snapshot; **tagger + message stripped**, listed in the import report | lossy (documented) |
 | signed tag | signature stripped (`--signed-tags=strip`), then as annotated | lossy (documented) |
-| HEAD (symbolic / detached) | NewGit HEAD, moved **in the same transaction** as the refs | exact |
+| Symbolic `HEAD` | NewGit symbolic HEAD, moved **in the same transaction** as refs | tested for an ordinary branch HEAD |
+| Detached `HEAD` | NewGit direct snapshot HEAD, moved **in the same transaction** as refs | the `fast-export` pseudo-ref `HEAD` is not imported as a named ref; tested for detached-only and detached-ahead-of-branch histories |
 
 **Atomicity.** Objects are written first (content-addressed, idempotent);
 then ALL refs + HEAD move in ONE transaction. A crash or any error mid-import
@@ -54,18 +55,22 @@ are never exported.
 | `refs/heads/*`, `refs/tags/*` | pass through | annotated tags cannot be rebuilt (metadata was stripped at import) → lightweight |
 | `refs/X` (other) | `refs/heads/X` | e.g. `refs/main` → `refs/heads/main` |
 | bare ref names | `refs/heads/<name>` | |
+| distinct names mapping to one Git ref | refused before target initialization | avoids silently overwriting one exported ref; error names both source refs and the mapped ref |
 | Actor | `author`/`committer` lines | email from `extras.email`, else `exported@newgit.local`; empty display name → `NewGit User` |
 | `timestamp_ms`, `tz_offset_min` | author date/tz | **sub-second precision is lost** (git stores whole seconds) |
 | `git_committer_*` extras | committer lines | restored exactly when present; otherwise committer = author |
 | `git_parents_ordered` extra | `from` + `merge` lines | git first-parent lineage preserved exactly |
 | trees/blobs | byte-exact | round-tripped blob **git SHAs are identical** — tested |
-| HEAD symbolic/detached | `symbolic-ref` / detached checkout | working tree materialized via `reset --hard`; exported repo is clean |
+| Symbolic `HEAD` | `symbolic-ref` | working tree materialized with `reset --hard` |
+| Detached `HEAD` | detached checkout of its snapshot | a temporary fast-import ref carries otherwise-unreferenced history and is deleted after checkout; tested output has no leaked temporary ref |
 
 Export streams (no full-repo buffering of blob data) and is deterministic:
 same repository ⇒ same marks, same stream bytes. `feature done`/`done`
 framing makes a truncated stream a loud fast-import error. Ref tips are
 finally pinned with `reset` commands, so fully-shared branch histories are
-correct.
+correct. For detached HEAD, a temporary ref lets `fast-import` emit commits
+that no named ref reaches; NewGit checks out the target commit in detached mode
+and deletes that temporary ref before returning.
 
 **Round-trip guarantee (tested):** git repo → import → export → git repo
 preserves: commit count, every ref's full tree (paths, modes, **blob SHAs**),
@@ -74,6 +79,20 @@ first-parent lineage (`export_roundtrip_matches_git`). Re-importing the
 exported repo produces identical trees and messages (`reimport_after_export_
 is_stable`); snapshot oids differ because `git_sha1`/committer metadata
 necessarily reference the new git objects.
+
+Detached-`HEAD` semantics are separately covered by real-Git tests for a
+detached-only repository, a detached successor while a named branch remains at
+its earlier tip, and nested branch refs that force multiple temporary-ref
+candidate rejections. These tests check NewGit's ref set, the exported Git ref
+set, detached state, commit messages, file contents, and clean working trees;
+they do not claim exact commit-object identity.
+
+Export also refuses distinct NewGit ref names that map to the same Git ref
+instead of silently overwriting one. Its regression fixture checks the collision
+between `main` and `refs/main`, validates the mapped destination with Git's
+`check-ref-format`, and verifies rejection before partial output. A separate
+real-Git round-trip fixture checks ordered parents for a valid merge whose second
+parent is already an ancestor of its first.
 
 ## Hard limitations (loud, never silent)
 
@@ -94,7 +113,8 @@ necessarily reference the new git objects.
    whose names violate NewGit's stricter ref grammar are skipped and
    reported.
 7. `git` binary must be available and modern enough for `fast-export
-   --full-tree --show-original-ids` (git ≥ 2.20; tested against 2.47).
+   --full-tree --show-original-ids` (git ≥ 2.20; this suite runs against Git
+   2.43.0 in the recorded environment).
 
 ## CLI details
 
