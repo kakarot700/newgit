@@ -11,6 +11,7 @@
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
 - **Git message compatibility hosted validation:** implementation commit `52fa27a6a8d5cba4fbbdc87cc74acf31f06b84f2` passed GitHub [CI run 37201393466](https://github.com/kakarot700/newgit/actions/runs/37201393466) and [CodeQL run 37201393416](https://github.com/kakarot700/newgit/actions/runs/37201393416) on `main`.
 - **Empty-tree compatibility hosted validation:** commit `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [CI run 37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979) and [CodeQL run 37203669978](https://github.com/kakarot700/newgit/actions/runs/37203669978), both on that exact SHA.
+- **Documentation-only validation head:** commit `6f66b7cad8e426a1af08324912232e62dd2e988d` passed [CI run 37204021004](https://github.com/kakarot700/newgit/actions/runs/37204021004) and [CodeQL run 37204021011](https://github.com/kakarot700/newgit/actions/runs/37204021011), both on that exact SHA.
 - **Clean-clone verification:** commit `b648079` built with `--locked`; all 278 debug and release tests passed, and the README install/CLI quick start, agent workflow, and real-Git import/export smoke checks passed.
 - **Publication local verification (2026-10-04):** `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (278 passed), `cargo build --release --locked`, `cargo test --release --locked` (278 passed), and the generated-SBOM drift check passed on the pinned Rust 1.99.0 toolchain.
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
@@ -106,8 +107,9 @@
   --locked -- -D warnings`, full debug and release suites (**287 passed each**),
   `cargo build --release --locked`, SBOM drift check, and `git diff --check` all
   pass. `tests/git_compat.rs` has **18 passing tests**. Hosted CI and CodeQL
-  passed on the exact pushed implementation SHA; a following documentation-only
-  head is being checked separately.
+  passed on the exact pushed implementation SHA and on the documentation-only
+  validation head listed above; this final state-record commit is rechecked on
+  its own pushed SHA before completion.
 
 ## Local development setup
 
