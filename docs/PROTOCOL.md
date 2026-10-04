@@ -62,6 +62,27 @@ projection before Git negotiates the transferred pack. Other Git versions and
 platforms are not established by this test. Evidence:
 `tests/git_remote_e2e.rs::real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http`.
 
+The read adapter also supports the bounded partial-clone filter `blob:none`.
+It enables Git's upload-pack filter capability in protected command-scope
+configuration, denies other filter types, and allows lazy object-ID requests
+only for objects reachable from an exported ref. With Git 2.43.0/Linux,
+`git clone --filter=blob:none --no-checkout <url> repo` creates promisor-remote
+metadata and omits blob objects; an ordinary `git -C repo checkout <branch>`
+then fetches the checked-out file blob on demand, leaving older history blobs
+missing locally. This follows Git's [partial-clone design](https://git-scm.com/docs/partial-clone)
+and [`git-upload-pack` configuration](https://git-scm.com/docs/git-upload-pack).
+It is a client transfer/object-store optimization only: clone and each lazy
+fetch still materialize the complete temporary Git projection, so the server
+does not avoid full export work or temporary storage. The regression proves
+object omission and hydration, not byte-level network savings; other filters,
+Git versions, and platforms are not established. Git documents that the
+`uploadpack.allowReachableSHA1InWant` reachability calculation can be
+computationally expensive ([Git 2.43 configuration reference](https://git-scm.com/docs/git-config/2.43.0)); the existing 120-second request deadline bounds
+elapsed time but does not remove that cost. Partial clone is therefore a
+client-side transfer/object-store option, not a server performance optimization.
+Evidence:
+`tests/git_remote_e2e.rs::real_git_partial_clone_omits_blobs_and_lazily_fetches_checkout_content`.
+
 The write-side receive-pack adapter accepts protocol versions 0 and 1. For
 version 1, the server delegates the standard `version 1` advertisement packet
 and receive-pack exchange to the installed Git executable, passing the validated

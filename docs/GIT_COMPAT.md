@@ -204,10 +204,20 @@ environment and does not claim other Git versions or operating systems.
    ordinary `clone`, `fetch`, `pull`, and `ls-remote` through upload-pack
    (protocol v0/v1/v2 in the tested Git 2.43.0 environment). A real-Git
    loopback regression also verifies `clone --depth=1`, `fetch --deepen=1`, and
-   `fetch --unshallow`, followed by ordinary fetch and pull; this is established
-   only for Git 2.43.0/Linux. Each request still materializes the complete
-   temporary Git projection, so shallow transfer does not make that export
-   incremental. A separately
+   `fetch --unshallow`, followed by ordinary fetch and pull. Another real-Git
+   test proves the bounded `blob:none` workflow: a no-checkout clone omits
+   reachable blobs and records promisor metadata, then an ordinary checkout
+   lazily fetches the required file blob while earlier versions remain absent.
+   This evidence is limited to Git 2.43.0/Linux; other filters are disabled.
+   Shallow and partial transfers do not make export incremental: every HTTP
+   request, including lazy hydration, still materializes the complete temporary
+   Git projection. Partial clone can reduce objects sent to and stored by a
+   client that does not need all blobs, but no byte-level transfer benchmark is
+   claimed. Lazy hydration also asks upload-pack to validate that requested
+   object IDs are reachable from exported refs; Git documents this check as
+   computationally expensive ([Git 2.43 configuration reference](https://git-scm.com/docs/git-config/2.43.0)). The existing 120-second
+   deadline bounds a request, but the check itself has not been benchmarked.
+   A separately
    tested receive-pack slice accepts write-authenticated branch creates,
    fast-forward or forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions
    per request, including an initial push to an empty repository. Existing tags

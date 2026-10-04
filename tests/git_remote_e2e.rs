@@ -1973,3 +1973,142 @@ fn real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http() {
     assert_eq!(newgit.refs.read("refs/main").unwrap(), fourth);
     server.shutdown();
 }
+
+#[test]
+fn real_git_partial_clone_omits_blobs_and_lazily_fetches_checkout_content() {
+    let (_dir, root) = temp("partial-clone");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+    let mut payloads = Vec::new();
+    let mut parent = None;
+    for (index, seed) in [0x1234_5678_u64, 0x9abc_def0, 0xfeed_beef]
+        .into_iter()
+        .enumerate()
+    {
+        let mut state = seed;
+        let payload = (0..256 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect::<Vec<_>>();
+        let tip = commit(
+            &newgit,
+            "refs/main",
+            &format!("partial-clone snapshot {index}"),
+            &[("large.bin", &payload, EntryMode::File)],
+            parent.into_iter().collect(),
+        );
+        parent = Some(tip);
+        payloads.push(payload);
+    }
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set partial-clone default branch"),
+        )
+        .unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        allow_anonymous_read: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let clone = root.join("partial-clone");
+    let clone_path = clone.to_str().unwrap();
+
+    // Avoid checkout during clone so blob:none has an observable missing-blob
+    // state before Git's normal checkout path performs promisor hydration.
+    git(&[
+        "clone",
+        "--quiet",
+        "--no-checkout",
+        "--filter=blob:none",
+        &url,
+        clone_path,
+    ]);
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "config",
+            "--get",
+            "remote.origin.promisor"
+        ]))
+        .trim(),
+        "true"
+    );
+    assert_eq!(
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "config",
+            "--get",
+            "remote.origin.partialCloneFilter"
+        ]))
+        .trim(),
+        "blob:none"
+    );
+    assert!(std::fs::read_dir(clone.join(".git/objects/pack"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry
+            .path()
+            .extension()
+            .is_some_and(|ext| ext == "promisor")));
+
+    let blob_oids = ["HEAD~2", "HEAD~1", "HEAD"]
+        .into_iter()
+        .map(|revision| {
+            as_text(&git(&[
+                "-C",
+                clone_path,
+                "ls-tree",
+                revision,
+                "--",
+                "large.bin",
+            ]))
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    let missing = || {
+        as_text(&git(&[
+            "-C",
+            clone_path,
+            "rev-list",
+            "--objects",
+            "--missing=print",
+            "--no-object-names",
+            "HEAD",
+        ]))
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .map(str::to_owned)
+        .collect::<std::collections::HashSet<_>>()
+    };
+    let missing_after_clone = missing();
+    for oid in &blob_oids {
+        assert!(
+            missing_after_clone.contains(oid),
+            "blob {oid} should be omitted before checkout; missing objects: {missing_after_clone:?}"
+        );
+    }
+
+    // Checkout is an ordinary Git operation: it asks the promisor remote for
+    // the current blob by object ID. Older versions remain absent locally.
+    git(&["-C", clone_path, "checkout", "--quiet", "main"]);
+    assert_eq!(std::fs::read(clone.join("large.bin")).unwrap(), payloads[2]);
+    let missing_after_checkout = missing();
+    assert!(!missing_after_checkout.contains(&blob_oids[2]));
+    assert!(missing_after_checkout.contains(&blob_oids[0]));
+    assert!(missing_after_checkout.contains(&blob_oids[1]));
+    server.shutdown();
+}

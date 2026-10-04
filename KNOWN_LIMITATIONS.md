@@ -72,9 +72,23 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 11. Git smart HTTP supports upload-pack and a **narrow receive-pack slice**:
     a real Git 2.43.0/Linux loopback test covers `clone --depth=1`,
     `fetch --deepen=1`, `fetch --unshallow`, then ordinary fetch and pull.
-    Shallow negotiation changes only the transfer boundary: each request still
-    materializes the complete temporary Git projection, and this does not
-    establish support on other Git versions or platforms. Separate real Git CLI
+    The read adapter also supports only the partial-clone filter `blob:none`:
+    the real-Git regression checks promisor metadata and absent blob objects
+    after `clone --no-checkout`, then verifies ordinary checkout lazily retrieves
+    its required blob while historical blobs remain absent. Both workflows are
+    established only for Git 2.43.0/Linux. Shallow and partial negotiation change
+    the client transfer boundary, not server-side work: each clone, fetch, or
+    lazy hydration request still materializes the complete temporary Git
+    projection. The test proves omitted objects and later hydration, not a
+    specific number of saved network bytes; lazy fetch may add HTTP requests.
+    Lazy hydration also enables `uploadpack.allowReachableSHA1InWant`; Git 2.43
+    documents its reachability calculation as computationally expensive
+    ([configuration reference](https://git-scm.com/docs/git-config/2.43.0)). The
+    existing 120-second request deadline bounds each operation, but no benchmark
+    characterizes this cost. Partial clone is a client-side object-transfer
+    option, not a server resource optimization. Other filters, Git versions, and
+    platforms are not established.
+    Separate real Git CLI
     tests cover write-authenticated branch creates, fast-forward
     and forced non-fast-forward updates, and deletions, plus lightweight tag creates/deletions per request,
     including an initial branch push to an empty repository. Existing tags cannot

@@ -5,6 +5,12 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Added
+- Git smart HTTP now supports a bounded partial-clone read workflow with
+  `--filter=blob:none`. A real Git 2.43.0/Linux loopback test proves the clone
+  records a promisor remote and omits reachable blob objects, then a normal
+  checkout lazily fetches the current file blob while older blobs remain absent.
+  Other filter types are not enabled. The server still materializes its full
+  temporary Git projection for each clone or lazy-fetch request.
 - Real Git 2.43.0/Linux loopback coverage now proves the smart-HTTP read path
   supports `clone --depth=1`, `fetch --deepen=1`, and `fetch --unshallow`, then
   ordinary fetch and pull to a new remote commit. This uses standard Git

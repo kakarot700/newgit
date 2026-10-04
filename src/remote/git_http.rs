@@ -207,6 +207,17 @@ fn run_upload_pack(
 ) -> Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
+        // These are command-scope (protected) settings, not repository config:
+        // advertise partial-clone filtering, allow only blob:none, and let a
+        // promisor client hydrate an object only if it is reachable from a ref.
+        .arg("-c")
+        .arg("uploadpack.allowFilter=true")
+        .arg("-c")
+        .arg("uploadpackfilter.allow=false")
+        .arg("-c")
+        .arg("uploadpackfilter.blob:none.allow=true")
+        .arg("-c")
+        .arg("uploadpack.allowReachableSHA1InWant=true")
         .arg("upload-pack")
         .args(args)
         .arg(&view.path)
