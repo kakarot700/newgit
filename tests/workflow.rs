@@ -651,7 +651,7 @@ fn evidence_record_limits_and_signals() {
         "9MB output must truncate to the 8MiB record cap"
     );
     assert!(rep.output_bytes <= (8 << 20) + 64);
-    // killed by signal → inconclusive
+    // Unix exposes signals; Windows reports the child's exit code.
     let rep2 = evidence_record(
         &repo,
         actor,
@@ -662,8 +662,18 @@ fn evidence_record_limits_and_signals() {
         Some(8001),
     )
     .unwrap();
-    assert_eq!(rep2.verdict, Verdict::Inconclusive);
-    assert!(rep2.signal);
+    #[cfg(unix)]
+    {
+        assert_eq!(rep2.verdict, Verdict::Inconclusive);
+        assert!(rep2.signal);
+        assert_eq!(rep2.exit_code, None);
+    }
+    #[cfg(not(unix))]
+    {
+        assert_eq!(rep2.verdict, Verdict::Fail);
+        assert!(!rep2.signal);
+        assert!(rep2.exit_code.is_some_and(|code| code != 0));
+    }
     // missing command → actionable error, not a panic
     let r = evidence_record(
         &repo,
