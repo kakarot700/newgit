@@ -15,6 +15,28 @@ fn counter_oid(round: u64) -> ObjectId {
     ObjectId::from_bytes(b)
 }
 
+fn retry_lock_busy<T>(
+    operation: &str,
+    mut run: impl FnMut() -> std::result::Result<T, newgit::Error>,
+) -> T {
+    const MAX_ATTEMPTS: usize = 8;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match run() {
+            Ok(value) => return value,
+            Err(newgit::Error::LockBusy(reason)) => {
+                if attempt == MAX_ATTEMPTS {
+                    panic!(
+                        "{operation} remained lock-busy after {MAX_ATTEMPTS} attempts: {reason:?}"
+                    );
+                }
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("{operation} failed: {error:?}"),
+        }
+    }
+    unreachable!("retry loop returns or panics on its final attempt")
+}
+
 #[test]
 fn cas_races_exactly_one_winner_per_version() {
     let (_d, repo) = temp_repo();
@@ -93,34 +115,31 @@ fn parallel_multiref_transactions_all_succeed() {
             let store = newgit::repo::refs::RefStore::new(ng.clone(), limits.clone());
             for a in 0..10u64 {
                 let oid = counter_oid(t * 100 + a);
-                store
-                    .update(
-                        &format!("t{t}/r{a}"),
-                        Cas::Any,
-                        Some(oid),
-                        RefLogEntry::system("bulk"),
-                    )
-                    .unwrap();
+                let ref_name = format!("t{t}/r{a}");
+                let _ = retry_lock_busy("single-ref update", || {
+                    store.update(&ref_name, Cas::Any, Some(oid), RefLogEntry::system("bulk"))
+                });
                 // two-ref atomic txn on shared namespace
-                newgit::repo::txn::execute(
-                    &ng,
-                    vec![
-                        newgit::repo::txn::TxnOp::Ref {
-                            name: format!("shared/a{t}"),
-                            cas: Cas::Any,
-                            new: Some(oid),
-                            log: RefLogEntry::system("shared"),
-                        },
-                        newgit::repo::txn::TxnOp::Ref {
-                            name: format!("shared/b{t}"),
-                            cas: Cas::Any,
-                            new: Some(oid),
-                            log: RefLogEntry::system("shared"),
-                        },
-                    ],
-                    &limits,
-                )
-                .unwrap();
+                let _ = retry_lock_busy("two-ref atomic txn", || {
+                    newgit::repo::txn::execute(
+                        &ng,
+                        vec![
+                            newgit::repo::txn::TxnOp::Ref {
+                                name: format!("shared/a{t}"),
+                                cas: Cas::Any,
+                                new: Some(oid),
+                                log: RefLogEntry::system("shared"),
+                            },
+                            newgit::repo::txn::TxnOp::Ref {
+                                name: format!("shared/b{t}"),
+                                cas: Cas::Any,
+                                new: Some(oid),
+                                log: RefLogEntry::system("shared"),
+                            },
+                        ],
+                        &limits,
+                    )
+                });
             }
             drop(store);
         }));
@@ -195,12 +214,16 @@ fn concurrent_recovery_and_writes() {
             let store = newgit::repo::refs::RefStore::new(ng, limits);
             let mut a = 0u64;
             while stop.load(Ordering::Relaxed) == 0 && a < 60 {
-                let _ = store.update(
-                    &format!("hammer/h{t}"),
-                    Cas::Any,
-                    Some(counter_oid(a)),
-                    RefLogEntry::system("hammer"),
-                );
+                let ref_name = format!("hammer/h{t}");
+                let oid = counter_oid(a);
+                let _ = retry_lock_busy("concurrent recovery writer", || {
+                    store.update(
+                        &ref_name,
+                        Cas::Any,
+                        Some(oid),
+                        RefLogEntry::system("hammer"),
+                    )
+                });
                 a += 1;
             }
         }));

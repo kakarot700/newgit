@@ -130,9 +130,8 @@ fn as_text(output: &Output) -> &str {
     std::str::from_utf8(&output.stdout).unwrap()
 }
 
-fn read_http_status(stream: &mut TcpStream) -> u16 {
+fn read_http_response(stream: &mut TcpStream, max_body_bytes: usize) -> (u16, Vec<u8>) {
     const MAX_HEADER_BYTES: usize = 64 * 1024;
-    const MAX_BODY_BYTES: usize = 1024 * 1024;
 
     let mut response = Vec::new();
     let mut chunk = [0u8; 8192];
@@ -173,8 +172,8 @@ fn read_http_status(stream: &mut TcpStream) -> u16 {
         })
         .expect("HTTP response must include Content-Length");
     assert!(
-        content_length <= MAX_BODY_BYTES,
-        "HTTP status response body exceeded {MAX_BODY_BYTES} bytes"
+        content_length <= max_body_bytes,
+        "HTTP response body exceeded {max_body_bytes} bytes"
     );
     let response_end = header_end
         .checked_add(content_length)
@@ -192,7 +191,11 @@ fn read_http_status(stream: &mut TcpStream) -> u16 {
         );
         response.extend_from_slice(&chunk[..n]);
     }
-    status
+    (status, response[header_end..response_end].to_vec())
+}
+
+fn read_http_status(stream: &mut TcpStream) -> u16 {
+    read_http_response(stream, 1024 * 1024).0
 }
 
 fn raw_git_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
@@ -238,14 +241,12 @@ fn raw_git_receive_advertisement_with_protocol(
         "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {authorization}\r\n{protocol}Connection: close\r\n\r\n"
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    let headers_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap();
-    assert!(response[..headers_end].starts_with(b"HTTP/1.1 200"));
-    response[headers_end + 4..].to_vec()
+    let (status, response) = read_http_response(&mut stream, 1024 * 1024);
+    assert_eq!(
+        status, 200,
+        "receive-pack advertisement must return HTTP 200"
+    );
+    response
 }
 
 fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8]) -> u16 {
@@ -257,17 +258,7 @@ fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8
     )
     .unwrap();
     stream.write_all(body).unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    String::from_utf8_lossy(&response)
-        .lines()
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap()
+    read_http_status(&mut stream)
 }
 
 #[cfg(target_os = "linux")]
@@ -280,22 +271,7 @@ fn raw_git_http_response(addr: SocketAddr, request: &[u8]) -> (u16, Vec<u8>) {
         .set_read_timeout(Some(SNAPSHOT_READER_RESPONSE_TIMEOUT))
         .unwrap();
     stream.write_all(request).unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    let headers_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap();
-    let status = String::from_utf8_lossy(&response[..headers_end])
-        .lines()
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    (status, response[headers_end + 4..].to_vec())
+    read_http_response(&mut stream, 256 * 1024 * 1024)
 }
 
 #[cfg(target_os = "linux")]
