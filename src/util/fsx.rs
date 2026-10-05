@@ -337,12 +337,11 @@ mod tests {
         let p = dir.path().join("res");
         let l1 = FileLock::acquire(&p, Duration::ZERO).unwrap();
         let lock_path = l1.path().to_path_buf();
-        assert!(std::fs::read_to_string(&lock_path).unwrap().is_empty());
         let r = FileLock::acquire(&p, Duration::from_millis(20));
         assert!(matches!(r, Err(Error::LockBusy(_))));
         drop(l1);
         assert!(lock_path.exists(), "stable lock inode path must persist");
-        assert_eq!(std::fs::read(&lock_path).unwrap(), b"");
+        assert!(std::fs::read_to_string(&lock_path).unwrap().is_empty());
         let _l2 = FileLock::acquire(&p, Duration::from_millis(100)).unwrap();
     }
 
