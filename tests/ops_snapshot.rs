@@ -289,27 +289,37 @@ fn checkout_rejects_windows_reserved_paths_before_writing() {
         .put_blob(b"would otherwise be written first")
         .unwrap();
     let invalid = repo.objects.put_blob(b"reserved path").unwrap();
-    let tree = Tree::new(vec![
-        TreeEntry {
-            name: "a-valid.txt".into(),
-            mode: EntryMode::File,
-            oid: valid,
-        },
-        TreeEntry {
-            name: "z:invalid.txt".into(),
-            mode: EntryMode::File,
-            oid: invalid,
-        },
-    ])
-    .unwrap();
-    let root = repo.objects.put(&Object::Tree(tree)).unwrap();
-    let dest = tempfile::tempdir().unwrap();
-    let result = checkout_tree(&repo, root, dest.path(), CheckoutMode::FreshWorkspace, None);
-    assert!(
-        matches!(&result, Err(Error::Invalid(message)) if message.contains("Windows-reserved character")),
-        "{result:?}"
-    );
-    assert!(std::fs::read_dir(dest.path()).unwrap().next().is_none());
+    for (invalid_path, expected_reason) in [
+        ("z:invalid.txt", "absolute path not allowed"),
+        ("z?invalid.txt", "Windows-reserved character"),
+        ("trailing.", "ends in a dot or space"),
+        ("NUL.txt", "Windows device name"),
+    ] {
+        let tree = Tree::new(vec![
+            TreeEntry {
+                name: "a-valid.txt".into(),
+                mode: EntryMode::File,
+                oid: valid,
+            },
+            TreeEntry {
+                name: invalid_path.into(),
+                mode: EntryMode::File,
+                oid: invalid,
+            },
+        ])
+        .unwrap();
+        let root = repo.objects.put(&Object::Tree(tree)).unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let result = checkout_tree(&repo, root, dest.path(), CheckoutMode::FreshWorkspace, None);
+        assert!(
+            matches!(&result, Err(Error::Invalid(message)) if message.contains(expected_reason)),
+            "path {invalid_path:?}: {result:?}"
+        );
+        assert!(
+            std::fs::read_dir(dest.path()).unwrap().next().is_none(),
+            "checkout partially wrote files before rejecting {invalid_path:?}"
+        );
+    }
 }
 
 #[test]
