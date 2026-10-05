@@ -545,14 +545,14 @@ fn quoted_utf8_git_paths_roundtrip_without_changing_names() {
     #[cfg(unix)]
     let first_path = "café \"quoted\"\\name.txt";
     #[cfg(windows)]
-    let first_path = "café \"quoted\".txt";
+    let first_path = "café quoted.txt";
     write(&gdir, first_path, b"first content\n");
     commit(&gdir, "quoted UTF-8 path root");
 
     #[cfg(unix)]
     let second_path = "quoted \"résumé\"\\file.txt";
     #[cfg(windows)]
-    let second_path = "quoted \"résumé\".txt";
+    let second_path = "quoted résumé.txt";
     git(&gdir, &["mv", first_path, second_path]);
     write(&gdir, second_path, b"renamed content\n");
     commit(&gdir, "rename quoted UTF-8 path");
@@ -567,6 +567,7 @@ fn quoted_utf8_git_paths_roundtrip_without_changing_names() {
         fast_export.contains("\\303\\251"),
         "UTF-8 path was not C-quoted"
     );
+    #[cfg(unix)]
     assert!(fast_export.contains("\\\""), "quote was not C-escaped");
     #[cfg(unix)]
     assert!(fast_export.contains("\\\\"), "backslash was not C-escaped");
@@ -874,6 +875,10 @@ fn export_native_newgit_repo() {
         .unwrap();
     assert_eq!(at, 1_600_000_060);
     // worktree usable
+    assert_eq!(
+        git_out(&outdir, &["config", "--local", "--bool", "core.autocrlf"]).trim(),
+        "false"
+    );
     assert_eq!(std::fs::read(outdir.join("y.txt")).unwrap(), b"more\n");
     let v = verify(&repo, &VerifyOpts { deep: true });
     assert!(v.ok());

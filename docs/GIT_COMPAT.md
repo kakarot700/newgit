@@ -33,7 +33,7 @@ newgit export-git <target-dir>        # NewGit → git (target must be empty/abs
 | first-parent order of merges | `extras.git_parents_ordered` (NewGit `parents` is a sorted set by protocol) | exact for tested ordinary, redundant-ancestor, and four-parent octopus merges; restored on export |
 | mode 100644 / 100755 / 120000 | `EntryMode::File / Executable / Symlink` | exact |
 | empty Git tree | empty NewGit `Tree` object | tested for an empty root commit, returning to empty after deleting the only file, and a consecutive empty commit; exact Git tree id survives export in this fixture |
-| Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping; tested with Unicode plus quotes/backslashes and a rename through import/export |
+| Valid UTF-8 Git paths | NewGit tree path strings | UTF-8 bytes survive Git C-quoted escaping. Unicode filenames are used on Windows; literal quote/backslash filenames are tested on Unix only because Windows forbids those characters. |
 | `refs/heads/*`, `refs/tags/*` | same ref names when they target commits | exact for tested commit refs; other object targets are refused |
 | other `refs/*` | same ref names (if the ref grammar accepts them) | commit targets only; other object targets are refused |
 | lightweight tag | ref → target snapshot | exact |
@@ -111,6 +111,12 @@ annotated-tag chains and other Git versions/platforms are not separately tested.
 | trees/blobs | byte-exact | round-tripped blob **git SHAs are identical** — tested |
 | Symbolic `HEAD` | `symbolic-ref` | working tree materialized with `reset --hard` |
 | Detached `HEAD` | detached checkout of its snapshot | a temporary fast-import ref carries otherwise-unreferenced history and is deleted after checkout; tested output has no leaked temporary ref |
+
+The newly created export repository sets **local** `core.autocrlf=false` before
+`fast-import` and checkout. This prevents default `core.autocrlf` conversion from changing Windows
+worktree bytes; file-specific `.gitattributes` rules still apply. The setting
+is written only into the exported repository; user, global, and system
+Git configuration is not modified.
 
 Export streams (no full-repo buffering of blob data) and is deterministic:
 same repository ⇒ same marks, same stream bytes. `feature done`/`done`

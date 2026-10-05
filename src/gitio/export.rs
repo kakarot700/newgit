@@ -279,6 +279,16 @@ fn export_git_impl(
             String::from_utf8_lossy(&init.stderr).trim()
         )));
     }
+    // This newly initialized export must preserve canonical blob bytes rather than
+    // inherit Git-for-Windows' CRLF checkout policy. Pin the setting locally
+    // before fast-import and any worktree materialization.
+    run_git(
+        target,
+        &["config", "--local", "core.autocrlf", "false"],
+        isolated_global_config,
+        isolated_template_dir,
+        deadline,
+    )?;
     #[cfg(test)]
     crate::remote::bench_timing::record("export.git_init", stage_started.elapsed());
     let marks_file = target.join(".git").join("newgit-export-marks");
