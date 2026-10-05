@@ -114,3 +114,24 @@ and the successful native/CodeQL/security results. The hosted `dist` package job
 was cancelled without steps or logs on attempts 4 and 5, so this source revision
 does not have a completed package gate. Keep release readiness pending; the
 existing `v0.1.0` tag was not moved and no `v0.1.1` tag was created.
+
+## Follow-up source-change evidence — deadline-test timing margin (2026-10-06)
+
+The docs-only commit `ea068dccdbabd2446786de6d6748cca8da8384b2` was checked by
+[CI run 37372516920](https://github.com/kakarot700/newgit/actions/runs/37372516920)
+and [CodeQL run 37372516949](https://github.com/kakarot700/newgit/actions/runs/37372516949).
+CI attempt 1 had Windows real-Git transfer failures; shared CI and CodeQL were
+cancelled before any steps, dependency/SBOM passed, and the package job was
+skipped. Attempt 2 passed shared checks, dependency/SBOM, Linux x86_64, and both
+macOS targets. Windows x86_64/ARM64 failed full-suite real-Git transfer tests
+with HTTP 408/reset during partial-clone or shallow operations; the focused
+deadline regression passed on both. ARM64 Linux missed only a 550 ms test ceiling
+by 2.040549 ms. The package job was skipped. CodeQL attempt 2 passed.
+
+This combined follow-up widens only that test assertion to 1 second; the
+HTTP 408, connection-close, deadline, worker-completion, and successful-normal-
+request checks stay intact. Production code, limits, and dependencies are
+unchanged. Local focused/debug/release/format/Clippy checks passed. This does not
+clear the hosted release gate: keep readiness pending until all six native jobs,
+CodeQL, and the exact current-SHA reproducible `dist` job actually pass. Do not
+move `v0.1.0` or create a `v0.1.1` tag for a test-only fix.

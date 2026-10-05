@@ -1147,10 +1147,7 @@ mod request_deadline_tests {
         );
         assert_eq!(status(&body_response), 408, "{body_response}");
         assert!(body_response.contains("Connection: close\r\n"));
-        assert!(
-            body_elapsed < Duration::from_millis(550),
-            "{body_elapsed:?}"
-        );
+        assert!(body_elapsed < Duration::from_secs(1), "{body_elapsed:?}");
 
         let (normal_response, _) = request_with_budget(
             &cfg,

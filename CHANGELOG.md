@@ -89,6 +89,10 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   complete 408/`Connection: close` response and worker join. The test now relies
   on the framed response, elapsed deadline, and joined worker rather than that
   post-join peer-EOF result; production server behavior did not change.
+- Widened the slow-body deadline regression's test-only elapsed-time ceiling
+  from 550 ms to 1 s after ARM64 Linux hosted CI measured 552 ms under scheduler
+  jitter. Functional deadline/408/close/worker and normal-request assertions are
+  unchanged; no production timeout or transfer limit changed.
 - `import-git` now inspects ref object types before invoking `fast-export` and
   refuses ordinary refs that target non-commit objects, naming the ref/type and
   leaving refs untouched. Git 2.43.0 silently omits lightweight blob/tree refs,
