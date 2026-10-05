@@ -8,7 +8,7 @@
 | Workspace files | user/agent-written files, symlinks, names | walk-time path validation; symlink policy (recorded as symlink blobs, never followed out of root); size/count limits |
 | CLI input | arguments, prefixes, names | ref/path/name grammars; limit checks; no shell evaluation anywhere |
 | Remote wire | HTTP requests, JSON bodies, object batches | size limits, strict JSON schemas, per-object digest verification, refs CAS, authn/authz before any mutation |
-| Git interop | foreign repos via fast-export; Git smart-HTTP clients via upload-pack | streamed parsing with limits; path/name validation identical to native; fixed Git argv (never a shell); remote read view is private and temporary with empty isolated Git config and cleared repository-redirection environment; receive-pack is disabled |
+| Git interop | foreign repos via fast-export; Git smart-HTTP clients via upload-pack and bounded receive-pack | streamed parsing with limits; path/name validation identical to native; fixed Git argv (never a shell); private temporary projection with isolated Git config and cleared repository-redirection environment; write-role authorization and transactional canonical ref updates |
 | Evidence/evaluation | claims by any actor | honesty flags (`deterministic`, `ai_generated`); policy layer distinguishes them; core never upgrades claims |
 
 ## 2. Identity model
@@ -25,12 +25,13 @@
 
 NewGit **never executes repository content**: no hooks, no filters, no
 smudge/clean, no eval of config. The system `git` process is used for import,
-export, and read-only smart HTTP. The remote adapter runs isolated exporter
+export, and smart HTTP. The remote adapter runs isolated exporter
 commands and `git upload-pack` with fixed argument vectors, empty global
 config and template directories, system config disabled, and Git
 repository-redirection variables cleared; only its private temporary
-projection is served. Git receive-pack is not invoked. Agents get no host
-access through NewGit beyond the repository
+projection is served. Receive-pack is used only after write-role authorization,
+runs on this private view, and promotes accepted changes through NewGit
+transactions. Agents get no host access through NewGit beyond the repository
 directory they are pointed at.
 
 ## 4. Input hardening rules (implemented + tested)
@@ -43,7 +44,22 @@ directory they are pointed at.
 4. Path grammar: no absolute paths, `..`, `.`, NUL, control chars, drive
    letters; per-component length caps; symlink-escape check on join.
 5. Config: unknown keys/versions rejected (fail loudly, not silently ignore).
-6. Locks: `O_EXCL` creation; stale reclaim only past timeout, logged.
+6. Locks: `O_EXCL` creation; Linux does not reclaim a lock with a live recorded
+   PID merely because it is old. On non-Linux platforms, a recorded lock falls
+   back to the configured age timeout; see the platform boundary below.
+7. Smart-HTTP snapshot: projection construction obtains the global transaction/
+   GC lock, replays any committed incomplete journal while holding it, and keeps
+   it through the complete refs/HEAD/history/object export. Initialization and
+   GC share this lock, and direct object deletion is no longer a public bypass.
+   A Linux black-box regression pauses a real transaction after its first ref
+   apply, proves direct and HTTP readers wait, kills the holder, then verifies
+   journal recovery precedes complete Git advertisements and pack responses.
+8. Scope: each HTTP request has its own committed snapshot; no protocol token
+   pins advertisement and upload-pack to one generation. The exclusive guard
+   serializes projections, writers, and GC. Arbitrary filesystem edits outside
+   NewGit's APIs are not coordinated. Non-Linux stale-age reclamation and
+   network-filesystem lock/atomicity semantics are not established; a holder
+   exceeding the configured stale timeout may not retain the same guarantee.
 
 ## 5. Resource limits (configurable, `.newgit/config`)
 

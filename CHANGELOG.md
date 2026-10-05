@@ -5,6 +5,17 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 ## [Unreleased]
 
 ### Added
+- Smart-HTTP advertisement and upload-pack now build from a recovered committed
+  NewGit view: projection construction holds the shared transaction/GC lock
+  across refs, HEAD, history, and reachable-object export. A Linux real-Git race
+  regression pauses a live two-ref transaction after ref 1; direct and HTTP
+  readers block, and after the holder is killed the journal is recovered before
+  both refs and pack data are served. This is per-request consistency only; no
+  generation cache or cross-request snapshot pin was added.
+- The release smart-HTTP benchmark now records projection lock wait/hold and a
+  four-reader plus transactional-writer workload at 80/800 commits. One warm-
+  cache shared-host observation shows the expected exclusive-reader
+  serialization; see `docs/BENCHMARKS.md` for exact numbers and caveats.
 - Git smart HTTP now supports a bounded partial-clone read workflow with
   `--filter=blob:none`. A real Git 2.43.0/Linux loopback test proves the clone
   records a promisor remote and omits reachable blob objects, then a normal

@@ -29,7 +29,7 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Absolute paths / drive letters (Windows export) | rejected in grammar | ✅ |
 | TOCTOU on file reads (file swapped mid-read) | content hashed from the bytes actually read; index is a cache; snapshot atomicity via tmp+rename | crash tests (it2/3) |
 | Resource exhaustion via huge files/many files | configurable limits; enforced before allocation | `limits_enforced` ✅; walk limits (it3) |
-| Stale lock DoS | bounded wait + stale reclaim with logging | `stale_lock_is_reclaimed` ✅ |
+| Stale lock DoS or age-based theft during a long projection | bounded wait; on Linux, age alone cannot reclaim a lock whose recorded holder PID is alive; non-Linux uses the configured stale-age fallback | `stale_lock_is_reclaimed`, `stale_age_does_not_steal_lock_from_live_holder` (Linux) ✅; non-Linux long-holder behavior is not established |
 
 ## C. Concurrency / crash
 
@@ -68,15 +68,16 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Confused deputy (server acts with client privileges) | per-request auth context; no ambient credentials; audit ties actions to token role | `roles_enforced_reader_writer_admin` ✅ |
 | Replay | CAS semantics make replays no-ops or CAS failures (`exactly(old)` after a move always fails) | `push_cas_race_one_winner_clean_loser` ✅ |
 
-### E.1. Git smart-HTTP read adapter
+### E.1. Git smart-HTTP adapter
 
 | Threat | Mitigation | Test / residual |
 |---|---|---|
 | Ambient `GIT_DIR`/work-tree redirects Git commands, or a host template supplies executable hooks | Exporter and upload-pack use fixed argv, empty isolated global config and template directory, disabled system config, and scrub repository/config/executable/tracing overrides; temp roots are OS-random private directories | `ambient_git_environment_cannot_redirect_or_run_template_hooks` exercises detached checkout under hostile `GIT_DIR`/`GIT_WORK_TREE`/`GIT_TEMPLATE_DIR`; live `ls-remote` succeeds, sentinel refs stay unchanged, and a malicious `post-checkout` marker is absent; other env overrides are not individually tested |
 | Malformed/adversarial request pins server workers in Git subprocess or pipe deadlock | Request/response bytes are capped; upload-pack stdin writing and stdout draining run concurrently; one 120-second wall-clock deadline covers projection and Git work; child process group is killed and direct child reaped | `deadline_kills_and_reaps_child_process_group` proves descendant termination; real-Git integration exercises normal stream flow and rejects an advertisement exceeding a tiny configured cap; malformed-packet fuzzing is not established |
 | Predictable temp path collision, local snooping, or leaked projection | `tempfile` creates random private directory before contents are written; RAII cleanup applies on success and setup errors | exercised by live adapter requests; local multi-user race behavior depends on the OS tempfile implementation |
-| Unauthorized read or attempted Git-side mutation | Shared reader/anonymous authorization gate; adapter implements upload-pack only and explicitly rejects receive-pack/push | `real_git_clone_fetch_pull_and_ls_remote_over_smart_http` tests token denial, successful read, failed push, and unchanged NewGit refs |
-| Expensive history export, disk/memory exhaustion, or inconsistent concurrent ref view | 120-second processing deadline and configured `--max-body` cap on buffered responses; full Git projection is still regenerated per HTTP request | Temporary-disk/peak-memory quota and consistent ref snapshot under concurrent writes remain unimplemented and untested |
+| Unauthorized read or Git-side mutation | Shared reader/anonymous authorization gate; receive-pack requires a write-role token, operates on a private projection, and commits accepted canonical changes through NewGit transactions | `real_git_clone_fetch_pull_and_ls_remote_over_smart_http` tests token denial, authorized read/push, and refusal paths; `real_git_lightweight_tag_pushes_are_transactional_and_bounded` ✅ |
+| Partial multi-ref state or incomplete journal exposed by a projection | Each projection obtains the transaction/GC lock, runs recovery while holding it, and retains it through refs/HEAD/history/object export; initial HEAD and GC use the same lock | Linux-only `smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed_refs`: a live transaction pauses after ref 1, direct and HTTP readers block, then the killed holder's journal is recovered before complete refs and pack data return ✅ |
+| Cross-request view drift, reader serialization, or projection resource exhaustion | Each request independently exports one committed view; no protocol token pins advertisement to upload-pack. The exclusive lock serializes projections, writers, and GC; deadline and body cap remain in force | Four concurrent 800-commit clones measured 11.19 s versus the prior 3.18 s observation; a delayed metadata transaction took 873 ms including wait and commit. One warm-cache shared-host run only; no capacity claim. Temporary-disk/peak-memory quotas, non-Linux stale-lock behavior, network filesystems, and arbitrary out-of-band filesystem edits are not established |
 
 ### E2. Web UI + MCP surface (it10 — REALIZED)
 

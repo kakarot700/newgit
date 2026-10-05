@@ -100,6 +100,49 @@ fn txn_dir(ng: &Path) -> PathBuf {
     ng.join("txn")
 }
 
+fn acquire_global_lock(ng: &Path, limits: &Limits) -> Result<fsx::FileLock> {
+    fsx::ensure_dir(&txn_dir(ng))?;
+    fsx::FileLock::acquire(
+        &txn_dir(ng).join("LOCK"),
+        Duration::from_millis(limits.lock_wait_ms),
+        Duration::from_secs(limits.lock_stale_s),
+    )
+}
+
+/// An exclusive, recovered view of canonical repository state.
+///
+/// Hold this guard for the entire traversal of refs, HEAD, and reachable
+/// objects. It serializes with ref/metadata transactions and GC; acquiring it
+/// first replays any committed-but-partially-applied journal.
+#[derive(Debug)]
+pub struct SnapshotReadGuard {
+    _lock: fsx::FileLock,
+}
+
+impl SnapshotReadGuard {
+    pub fn acquire(ng: &Path, limits: &Limits) -> Result<Self> {
+        let lock = acquire_global_lock(ng, limits)?;
+        recover_locked(ng, limits)?;
+        Ok(Self { _lock: lock })
+    }
+}
+
+/// Initialize the default HEAD only if no concurrent initializer or
+/// transaction has already created it. The atomic one-file write is protected
+/// by the same lock used by repository readers and writers.
+pub(crate) fn initialize_head_if_missing(ng: &Path, limits: &Limits) -> Result<()> {
+    let _lock = acquire_global_lock(ng, limits)?;
+    recover_locked(ng, limits)?;
+    let path = ng.join("HEAD");
+    if !path.exists() {
+        fsx::atomic_write(
+            &path,
+            format!("ref: {}\n", crate::repo::DEFAULT_BRANCH).as_bytes(),
+        )?;
+    }
+    Ok(())
+}
+
 fn journal_path(ng: &Path, id: &str) -> PathBuf {
     txn_dir(ng).join(format!("{id}.journal"))
 }
@@ -335,12 +378,7 @@ where
     F: FnOnce() -> Result<()>,
 {
     validate_ops(&ops, limits)?;
-    fsx::ensure_dir(&txn_dir(ng))?;
-    let lock = fsx::FileLock::acquire(
-        &txn_dir(ng).join("LOCK"),
-        Duration::from_millis(limits.lock_wait_ms),
-        Duration::from_secs(limits.lock_stale_s),
-    )?;
+    let lock = acquire_global_lock(ng, limits)?;
     // Recovery first: a previous crash must not be masked by new work.
     recover_locked(ng, limits)?;
 
@@ -403,11 +441,7 @@ pub fn recover(ng: &Path, limits: &Limits) -> Result<RecoveryReport> {
     if !txn_dir(ng).exists() {
         return Ok(RecoveryReport::default());
     }
-    let lock = fsx::FileLock::acquire(
-        &txn_dir(ng).join("LOCK"),
-        Duration::from_millis(limits.lock_wait_ms),
-        Duration::from_secs(limits.lock_stale_s),
-    )?;
+    let lock = acquire_global_lock(ng, limits)?;
     let r = recover_locked(ng, limits)?;
     drop(lock);
     Ok(r)

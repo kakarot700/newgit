@@ -77,10 +77,8 @@ impl Repo {
         if !cfg_path.exists() {
             cfg.save(&cfg_path)?;
         }
-        let head_path = ng.join("HEAD");
-        if !head_path.exists() {
-            fsx::atomic_write(&head_path, format!("ref: {DEFAULT_BRANCH}\n").as_bytes())?;
-        }
+        let config = RepoConfig::load(&cfg_path)?;
+        txn::initialize_head_if_missing(&ng, &config.limits)?;
         Repo::open_at(root, ng)
     }
 

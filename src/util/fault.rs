@@ -6,6 +6,8 @@
 //! * `abort` (default): the process aborts immediately (simulates power loss
 //!   / SIGKILL at the worst possible moment).
 //! * `error`: the point returns an Err (simulates I/O failure without death).
+//! * `pause`: the point writes `NEWGIT_FAULT_READY_FILE` and waits for
+//!   `NEWGIT_FAULT_RESUME_FILE` to exist; intended for deterministic race tests.
 //!
 //! Fault points are documented in docs/TESTING.md and only fire when the
 //! environment variable is explicitly set — production runs never set it.
@@ -67,6 +69,17 @@ pub fn fault_action(name: &str) -> FaultAction {
     }
     match std::env::var("NEWGIT_FAULT_MODE").as_deref() {
         Ok("error") => FaultAction::Error,
+        Ok("pause") => {
+            let ready = std::env::var_os("NEWGIT_FAULT_READY_FILE")
+                .expect("pause fault mode requires NEWGIT_FAULT_READY_FILE");
+            let resume = std::env::var_os("NEWGIT_FAULT_RESUME_FILE")
+                .expect("pause fault mode requires NEWGIT_FAULT_RESUME_FILE");
+            std::fs::write(ready, b"paused\n").expect("write fault pause marker");
+            while !std::path::Path::new(&resume).exists() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            FaultAction::None
+        }
         _ => {
             // Flush stdio so test output is not lost, then die hard.
             eprintln!("newgit: fault point '{name}' firing (abort, hit #{count})");

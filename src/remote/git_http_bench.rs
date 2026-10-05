@@ -11,15 +11,15 @@ use super::TempGitView;
 use crate::object::types::{Actor, ActorKind, EntryMode, Object, Snapshot};
 use crate::object::ObjectId;
 use crate::remote::server::{self, ServerConfig};
-use crate::repo::txn::{Cas, RefLogEntry};
+use crate::repo::txn::{Cas, RefLogEntry, TxnOp};
 use crate::repo::{Head, Repo};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -551,6 +551,104 @@ fn measure_concurrent_clones(proxy: &CountingProxy, args: Vec<Vec<String>>) -> V
         .collect()
 }
 
+fn measure_concurrent_clones_with_writer(
+    proxy: &CountingProxy,
+    args: Vec<Vec<String>>,
+    repo_root: PathBuf,
+    commits: usize,
+) {
+    proxy.reset();
+    let process_cpu_before = process_cpu();
+    let wall_start = Instant::now();
+    let (measurements, writer_wait) = thread::scope(|scope| {
+        let start = Arc::new(Barrier::new(args.len() + 1));
+        let writer_start = start.clone();
+        let writer_root = repo_root.clone();
+        let writer = scope.spawn(move || {
+            // Open before clients begin so this sample isolates transaction
+            // wait/commit rather than repository discovery.
+            let repo = Repo::open(&writer_root).unwrap();
+            writer_start.wait();
+            thread::sleep(Duration::from_millis(75));
+            let probe = format!("benchmark-writer-probe-{commits}");
+            let begin = Instant::now();
+            crate::repo::txn::execute(
+                repo.ng(),
+                vec![TxnOp::File {
+                    rel: probe,
+                    data: b"temporary lock-contention probe\n".to_vec(),
+                }],
+                repo.limits(),
+            )
+            .unwrap();
+            begin.elapsed()
+        });
+        let readers = args
+            .iter()
+            .map(|args| {
+                let start = start.clone();
+                scope.spawn(move || {
+                    start.wait();
+                    run_timed_git(args)
+                })
+            })
+            .collect::<Vec<_>>();
+        let measurements = readers
+            .into_iter()
+            .map(|reader| reader.join().expect("concurrent Git clone thread panicked"))
+            .collect::<Vec<_>>();
+        let writer_wait = writer.join().expect("benchmark writer thread panicked");
+        (measurements, writer_wait)
+    });
+    let wall = wall_start.elapsed();
+    let process_cpu_elapsed = process_cpu_seconds(process_cpu_before, process_cpu());
+    let transfer = proxy.snapshot();
+    for (index, (elapsed, output, resources)) in measurements.iter().enumerate() {
+        assert!(
+            output.status.success(),
+            "concurrent-with-writer Git clone {} failed ({}): {}",
+            index + 1,
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!(
+            "concurrent-with-writer clone client {}: wall_ms={:.2}, client_leader_user_s={}, client_leader_system_s={}, client_leader_peak_rss_kib={}",
+            index + 1,
+            elapsed.as_secs_f64() * 1000.0,
+            optional_seconds(resources.user_seconds),
+            optional_seconds(resources.system_seconds),
+            resources.peak_rss_kib.map(|rss| rss.to_string()).unwrap_or_else(|| "n/a".into()),
+        );
+    }
+    println!(
+        "concurrent-with-writer batch: clients={}, writer_delay_ms=75, writer_transaction_wait_and_commit_ms={:.2}, wall_ms={:.2}, http_responses={}, response_body_bytes={}, harness_process_cpu_s={}, non_200={:?}",
+        measurements.len(),
+        writer_wait.as_secs_f64() * 1000.0,
+        wall.as_secs_f64() * 1000.0,
+        transfer.responses,
+        transfer.response_body_bytes,
+        optional_seconds(process_cpu_elapsed),
+        transfer.non_200,
+    );
+    assert!(
+        transfer.non_200.is_empty(),
+        "non-200 HTTP responses: {:?}",
+        transfer.non_200
+    );
+
+    // Keep repeated manual benchmark runs clean. This metadata probe is never
+    // part of the projected Git refs or object graph.
+    let repo = Repo::open(&repo_root).unwrap();
+    crate::repo::txn::execute(
+        repo.ng(),
+        vec![TxnOp::FileDelete {
+            rel: format!("benchmark-writer-probe-{commits}"),
+        }],
+        repo.limits(),
+    )
+    .unwrap();
+}
+
 fn directory_bytes(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
         return 0;
@@ -701,7 +799,7 @@ fn live_git_transfer_baseline() {
         String::from_utf8_lossy(&run_git(&["--version".into()]).stdout).trim()
     );
     println!(
-        "context: fixture built once then served; client outputs use fresh directories; no OS page-cache eviction (warm-cache observation); projection temporary directory is fresh per HTTP request; {PROJECTION_SAMPLES} direct projection samples, {CLONE_SAMPLES} serial full-clone samples, {CONCURRENT_CLONES} simultaneous full clones, 3 unchanged fetches"
+        "context: fixture built once then served; client outputs use fresh directories; no OS page-cache eviction (warm-cache observation); projection temporary directory is fresh per HTTP request; {PROJECTION_SAMPLES} direct projection samples, {CLONE_SAMPLES} serial full-clone samples, {CONCURRENT_CLONES} simultaneous full clones, {CONCURRENT_CLONES} simultaneous full clones with a delayed transactional writer, 3 unchanged fetches"
     );
     println!(
         "resources: /proc/{{pid}}/stat and /proc/{{pid}}/status are sampled every 2ms for each Git leader process (CPU and high-water RSS; excludes helper descendants); /proc/self/stat and VmHWM cover only the harness process, including its server threads but excluding child Git processes; CPU resolution is kernel clock ticks; non-Linux resource fields may be n/a"
@@ -767,7 +865,7 @@ fn live_git_transfer_baseline() {
 
         let server = server::spawn(ServerConfig {
             bind: "127.0.0.1:0".into(),
-            repo_root: newgit_path,
+            repo_root: newgit_path.clone(),
             token_file: case_root.join("missing-tokens.json"),
             allow_anonymous_read: true,
             ..Default::default()
@@ -858,6 +956,21 @@ fn live_git_transfer_baseline() {
             })
             .collect();
         measure_concurrent_clones(&proxy, concurrent_args);
+
+        let concurrent_writer_args = (1..=CONCURRENT_CLONES)
+            .map(|client| {
+                let destination = case_root.join(format!("clone-concurrent-write-{client}"));
+                vec![
+                    "-c".into(),
+                    "protocol.version=2".into(),
+                    "clone".into(),
+                    "--quiet".into(),
+                    url.clone(),
+                    destination.display().to_string(),
+                ]
+            })
+            .collect();
+        measure_concurrent_clones_with_writer(&proxy, concurrent_writer_args, newgit_path, commits);
         server.shutdown();
         drop(proxy);
         drop(repo);

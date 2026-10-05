@@ -158,22 +158,43 @@ impl TempGitView {
         // merges, tree content, and symbolic HEAD.
         #[cfg(test)]
         let export_started = Instant::now();
-        let export = if materialize_worktree {
-            crate::gitio::export::export_git_isolated(
-                repo,
-                &view.path,
-                &view.global_config,
-                &view.template_dir,
-                deadline,
-            )
-        } else {
-            crate::gitio::export::export_git_isolated_for_upload_pack(
-                repo,
-                &view.path,
-                &view.global_config,
-                &view.template_dir,
-                deadline,
-            )
+        #[cfg(test)]
+        let snapshot_wait_started = Instant::now();
+        let export = {
+            // Refs, HEAD, history, and their objects must all come from one
+            // committed state. Recovery is performed while acquiring the
+            // same exclusive lock used by transactions and GC.
+            let _snapshot = crate::repo::txn::SnapshotReadGuard::acquire(repo.ng(), repo.limits())?;
+            #[cfg(test)]
+            crate::remote::bench_timing::record(
+                "projection.snapshot_lock_wait",
+                snapshot_wait_started.elapsed(),
+            );
+            #[cfg(test)]
+            let snapshot_hold_started = Instant::now();
+            let export = if materialize_worktree {
+                crate::gitio::export::export_git_isolated(
+                    repo,
+                    &view.path,
+                    &view.global_config,
+                    &view.template_dir,
+                    deadline,
+                )
+            } else {
+                crate::gitio::export::export_git_isolated_for_upload_pack(
+                    repo,
+                    &view.path,
+                    &view.global_config,
+                    &view.template_dir,
+                    deadline,
+                )
+            };
+            #[cfg(test)]
+            crate::remote::bench_timing::record(
+                "projection.snapshot_lock_hold",
+                snapshot_hold_started.elapsed(),
+            );
+            export
         };
         let export = match export {
             Ok(report) => report,

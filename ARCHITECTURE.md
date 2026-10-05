@@ -99,20 +99,23 @@ Spec: **docs/STORAGE_FORMAT.md** (normative).
 * Workspaces: per-workspace lock; two actors never share one workspace.
 * Remote: server serializes ref updates through the same txn machinery.
 
-Git smart-HTTP projections are currently built per request; they are not an
-immutable repository snapshot and are not cached. The transaction lock
-serializes writers, but export readers do not hold it while collecting refs,
-`HEAD`, and object history, so they cannot yet prove a single committed view
-while a multi-ref transaction or recovery is applying. Do not add a projection
-cache or process-local generation counter until a durable repository generation
-covers every relevant object/ref/`HEAD` mutation (including initialization and
-recovery), readers can pin a stable committed snapshot, and each advertisement
-or upload-pack request independently validates the current generation before
-serving an immutable cache entry. An earlier entry can be reused only when that
-fresh check still identifies its generation as current. Advertisement and
-upload-pack are separate stateless HTTP requests, so without an explicit
-protocol-level snapshot token they cannot be guaranteed to use the same
-generation if a mutation lands between them.
+Each Git smart-HTTP request builds a fresh private projection. Before it reads
+refs, `HEAD`, history, or reachable objects, the builder acquires the global
+transaction/GC lock and runs journal recovery while holding it; the lock remains
+held through the complete NewGit-to-Git export, then is released before Git
+advertisement or upload-pack processing. Ref/metadata transactions, recovery,
+repository default-`HEAD` initialization, and GC use the same lock. Object puts
+remain lock-free because they add immutable content-addressed objects; an object
+is not made reachable until a locked ref transaction publishes it. The
+crate-private object deletion API is used by GC under that lock.
+
+This gives each projection one committed canonical view, including when it must
+redo a journal left partway through applying refs. It does not pin the separate
+`info/refs` and stateless upload-pack HTTP requests to the same generation: a
+mutation between them may make both requests individually consistent but
+different. No projection cache or generation counter is implemented. The guard
+is exclusive, so projections serialize with other projections as well as
+writers and GC; see `docs/BENCHMARKS.md` for the observed contention cost.
 
 ## 5. Failure philosophy
 
@@ -123,10 +126,12 @@ generation if a mutation lands between them.
 
 ## 6. Security posture (summary; full docs in SECURITY_MODEL.md / THREAT_MODEL.md)
 
-* No implicit execution of repository content. The Git read adapter invokes
-  the system Git upload-pack/exporter on a private temporary projection with
-  system/global Git configuration and repository-redirection variables
-  isolated; Git receive-pack is not exposed.
+* No implicit execution of repository content. Smart-HTTP upload-pack and the
+  bounded receive-pack write path invoke system Git only against private
+  temporary projections with system/global Git configuration and
+  repository-redirection variables isolated; receive-pack is used only after
+  write-role authorization, and accepted canonical changes go through the
+  transaction engine.
 * All external input length/type/shape-validated before use; decoders total.
 * Path safety enforced at every filesystem boundary (walk, checkout, join).
 * Evidence honesty protocol: claimed vs deterministic results distinguished.

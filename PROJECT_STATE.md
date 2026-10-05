@@ -5,7 +5,7 @@
 
 ## Current status
 
-- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; incremental Git compatibility work continues. The active milestone audited whether smart-HTTP projections can be safely reused; the result is a documented no-cache boundary because current mutation and reader semantics cannot prove a stable generation.
+- **Phase:** The 12 original implementation iterations and v0.1.0 publication are complete; the current milestone establishes one recovered committed NewGit view per smart-HTTP projection. No projection cache or generation counter was added; incremental Git compatibility work continues.
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.
@@ -21,7 +21,17 @@
 - **Security controls and scans:** the pre-publication Gitleaks v8.30.1 scan found 0 findings across the then-current worktree and history; GitHub secret scanning/push protection, Dependabot alerts/security updates, and private vulnerability reporting are enabled. actionlint v1.7.12 found no workflow errors.
 - **Publication deliverable:** the preserved development history, public repository, release decision, and completion/readiness report. The active compatibility continuation is tracked below.
 
-## Current Git remote projection-cache safety milestone — 2026-10-05
+## Current smart-HTTP committed-snapshot milestone — 2026-10-05
+
+- **Goal:** Ensure every advertisement/upload-pack projection is built from one complete committed canonical state even when a multi-ref transaction or recovery is paused partway through.
+- **Implementation:** `SnapshotReadGuard` acquires the shared transaction/GC lock, recovers pending committed journal work while holding it, and retains the lock through refs/HEAD/history/reachable-object export. Default HEAD initialization now uses the same lock; GC uses crate-private object deletion under that lock. Immutable content-addressed puts remain lock-free. Linux lock reclamation no longer steals an old lock from a live recorded PID.
+- **Adversarial proof:** `tests/git_remote_e2e.rs::smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed_refs` pauses a live transaction after ref 1 while it owns the real lock. Direct advertisement/upload-pack, raw HTTP advertisement/upload-pack, and real Git 2.43.0 `ls-remote` all block. The test kills the holder and verifies recovery completes both refs before advertisements and pack data return. The test is Linux-only.
+- **Performance:** Release benchmark observed direct projection medians of 121.31 ms (80 commits) and 918.88 ms (800), with lock wait medians of 0.59/0.81 ms and lock holds of 120.10/917.78 ms. Four concurrent clones took 1.62/11.19 s versus historical 0.65/3.18 s; the delayed metadata transaction took 99/873 ms including wait and commit. Single warm-cache shared-host observations, not capacity guarantees; see `docs/BENCHMARKS.md`.
+- **Boundary:** A separate stateless advertisement and upload-pack request may see different individually committed states; there is no session token or durable generation. No cache was introduced. Arbitrary filesystem edits outside NewGit APIs, non-Linux stale-age semantics, and network-filesystem behavior remain unestablished.
+- **Local validation (2026-10-05):** `cargo fmt --all --check`, warnings-denied `cargo clippy --all-targets --locked`, `cargo test --locked` (**322 passed, 1 manual benchmark ignored**), `cargo build --release --locked`, and `cargo test --release --locked` (**322 passed, 1 manual benchmark ignored**). The exact suite breakdown and Git CLI evidence are in `TEST_MATRIX.md`.
+- **Hosted verification:** Push the combined milestone once; check CI and CodeQL on that exact SHA and report both links in the task completion response. Do not create a state-only follow-up commit.
+
+## Previous Git remote projection-cache safety milestone — 2026-10-05
 
 - **Goal:** Avoid the duplicated projection cost on unchanged smart-HTTP fetches only if a safe cache invariant can be proven from the canonical repository's actual writers, recovery, and readers.
 - **Decision:** No cache, generation counter, or production behavior change. The measured 800-commit unchanged fetch is 1,944.18 ms median / 219 response bytes, with 1,830.84 ms median spent building two projections. This establishes duplicate projection as material latency, not that cache invalidation can be made safe without changing core synchronization and mutation contracts.

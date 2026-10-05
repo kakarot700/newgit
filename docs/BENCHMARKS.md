@@ -26,7 +26,8 @@ paths per commit, 12 KiB per blob version) and sends real Git clients through th
 live loopback smart-HTTP server and a byte-counting proxy. For each fixture it
 prints three direct projection-build samples and temporary bytes, three full
 clones into fresh client directories, three unchanged fetches against the first
-clone, and a batch of four simultaneous full clones. Response-body bytes are
+clone, a batch of four simultaneous full clones, and a second four-clone batch
+started alongside a delayed transactional metadata writer. Response-body bytes are
 the HTTP `Content-Length` totals observed by the proxy. There is no OS page-cache
 eviction: later samples are warm-cache observations, not cold-storage tests.
 
@@ -192,6 +193,11 @@ leader-only RSS limitations described above still apply.
 
 ### Projection-cache safety audit (2026-10-05)
 
+> Historical note: this audit records the state before the lock-protected
+> snapshot guard in D-021. Its reader-race and GC/HEAD-bypass findings below are
+> superseded by that implementation; the cache/generation decision remains in
+> force.
+
 **Decision: do not cache projections or add a generation counter yet.** The
 performance case is real—an 800-commit unchanged fetch returns 219 bytes but
 spends a median 1,830.84 ms building two projections—yet the current mutation
@@ -226,6 +232,40 @@ same generation if a mutation lands between them. If protocol-level pinning is
 required, it needs an explicit request/session token rather than an implicit
 cache hit. Cached Git files must remain disposable derived data; NewGit's
 objects and refs remain canonical.
+
+### Committed projection snapshot guard and contention (2026-10-05)
+
+The release-mode ignored benchmark was rerun after adding the exclusive
+`SnapshotReadGuard`. It records lock-acquisition wait and lock-hold time during
+each temporary Git projection. Fixture generation and compilation are excluded;
+the OS page cache was warm and not cleared. Git 2.43.0/Linux; three direct
+projections per size and one four-client batch per workload. The before-guard
+concurrent-clone values are the earlier single-run observations in this file.
+
+| Measurement | 80 commits | 800 commits |
+|---|---:|---:|
+| Direct projection median / snapshot-lock wait / lock hold | 121.31 / 0.59 / 120.10 ms | 918.88 / 0.81 / 917.78 ms |
+| Four simultaneous full clones, current batch / historical pre-guard batch | 1,617.14 / 650.15 ms | 11,186.67 / 3,182.38 ms |
+| Four clones plus delayed metadata transaction: batch / transaction wall time | 1,631.92 / 99.42 ms | 11,126.23 / 873.43 ms |
+
+All 12 clone HTTP responses in each four-client batch were successful (no
+non-200 responses). The writer starts 75 ms after the readers, then runs one
+transactional metadata write; its reported wall time includes both lock wait and
+commit. The isolated lock wait in direct projection samples was below 1 ms, but
+the lock is held for essentially the full export: about 120 ms at 80 commits and
+918 ms at 800 commits.
+
+The material tradeoff is reader-reader serialization: in this observed run the
+four-clone 800-history batch took 11.19 s versus the earlier 3.18 s observation;
+the 80-history batch took 1.62 s versus 0.65 s. Writer blocking is also visible
+in the synthetic concurrent-writer workload. These are single warm-cache runs
+on a shared host, so the exact ratios are not capacity guarantees, but
+serialization is an intentional consequence of using the existing exclusive
+lock. The guard is released as soon as the private projection is complete; Git
+advertisement/upload-pack subprocess work does not retain it. Each HTTP request
+is individually consistent, but a mutation between advertisement and
+upload-pack can still make the two request-local views differ. No cache or
+generation counter was added.
 
 ## Environment (as measured)
 

@@ -178,25 +178,40 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     or faked submodule support.
 23. Export loses **sub-second timestamp precision** (git stores whole
     seconds); import is exact at git's own precision.
-24. **No efficient direct NewGit-object/Git-remote bridge**: import/export
-    conversion is whole-history, and both smart-HTTP adapters rematerialize
-    the complete Git view for each discovery/request. A projection cache is
-    deliberately not implemented: object-store writes are lock-free and
-    `ObjectStore::put`/`put_canonical` are public; GC deletes object files
-    directly; multi-ref transactions and recovery apply refs one at a time
-    while projection readers do not hold the transaction lock; initial `HEAD`
-    creation bypasses the transaction engine; and generic transaction FILE/
-    FDEL operations are not restricted from targeting refs or `HEAD`. A
-    process-local counter would not cover other processes or survive restart,
-    and a counter advanced only by ref transactions would miss these paths.
-    Each advertisement and stateless upload-pack exchange opens and projects
-    separately, with no request token that pins the earlier advertised view.
-    Git's ordinary upload-pack negotiation works at the wire/transfer layer,
-    but does not avoid that server-side export work. Before caching, the core
-    needs a durable generation advanced/recovered across every relevant write,
-    a consistent reader snapshot/publication protocol, and per-request current-
-    generation validation; cached projections must remain disposable derived
-    data, never the source of truth.
+24. **Every smart-HTTP projection is consistent but exclusive and request-local.**
+    The adapter acquires the global transaction/GC lock, replays any committed
+    incomplete journal while holding it, and keeps the lock through the full
+    refs/HEAD/history/object export. Ref and generic FILE/FDEL transactions,
+    initialization of default `HEAD`, recovery, and GC serialize on that lock;
+    object puts remain lock-free because objects are immutable and only become
+    reachable through a ref transaction. Object deletion is crate-private and
+    GC-only. The Linux regression
+    `tests/git_remote_e2e.rs::smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed_refs`
+    pauses a real transaction after its first ref apply, confirms direct and
+    HTTP readers wait, kills the holder, and verifies recovery completes both
+    refs before advertisements and pack data return.
+
+    The guard is exclusive: concurrent readers serialize with one another, and
+    writers/GC wait through projection export. In one warm-cache 2026-10-05
+    benchmark, four simultaneous full clones took 1.62 s at 80 commits and
+    11.19 s at 800 commits, versus historical same-host observations of 0.65 s
+    and 3.18 s before the guard. A delayed metadata transaction took 99 ms and
+    873 ms respectively, including lock wait and commit. These are single-run
+    shared-host observations, not capacity promises; see
+    `docs/BENCHMARKS.md`.
+
+    Each `info/refs` and stateless upload-pack request has its own committed
+    view. Without a protocol/session token, a mutation between them may make
+    them individually consistent but different. No projection cache or durable
+    generation counter exists; the lock closes the partial-view race, not the
+    cache invalidation problem. Arbitrary filesystem edits outside NewGit APIs
+    are not coordinated. The tested lock behavior is Linux with local
+    filesystem semantics; on non-Linux platforms, a recorded holder may be
+    reclaimed by the configured stale-age fallback, and network-filesystem
+    lock/atomicity behavior is unverified. Git projections still rematerialize
+    the complete reachable view per request, and temporary disk/peak-memory
+    quotas are not separately enforced. Cached views, if ever added, must
+    remain disposable derived data, never canonical state.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
     (`extras.git_message_lossy`); a real Git plumbing fixture verifies the raw
     source bytes, fast-export payload, replacement text, marker, and lossy export

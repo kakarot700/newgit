@@ -150,3 +150,20 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   **PRODUCTION-CANDIDATE** — at implementation completion, hosted CI had not yet run;
   the current publication result is recorded in RELEASE_READINESS.md and
   docs/COMPLETION_REPORT.md.
+
+## Iteration 13 — Committed smart-HTTP projection snapshots  [x] ✅ 2026-10-05
+- DONE: every advertisement/upload-pack projection now acquires the shared
+  transaction/GC lock, replays committed journal recovery under it, and holds it
+  through refs/HEAD/history/object export. Default HEAD initialization is locked;
+  GC uses the crate-private deletion method; Linux lock reclamation no longer
+  steals an old lock from a live recorded PID.
+- DONE: live Linux race test pauses a two-ref transaction after its first apply,
+  starts direct projection readers, raw HTTP advertisement/upload-pack readers,
+  and real Git `ls-remote`, proves they block, kills the writer, then verifies
+  recovery yields the complete refs and packs. No cache or generation counter.
+- DONE: real-Git 80/800 release benchmark records lock wait/hold plus concurrent
+  reader/writer contention; exclusive-reader serialization and non-Linux/network
+  filesystem boundaries are documented.
+- DONE: `TEST_MATRIX.md`, `ARCHITECTURE.md`, `DECISIONS.md`, security/threat
+  models, limitations, compatibility matrix, and changelog record the new
+  invariant and residual cross-request/platform boundaries.

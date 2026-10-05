@@ -222,7 +222,7 @@ impl ObjectStore {
 
     /// Remove an object (GC only — callers must hold the GC lock and prove
     /// unreachability). Returns true if a file was removed.
-    pub fn remove(&self, oid: &ObjectId) -> Result<bool> {
+    pub(crate) fn remove(&self, oid: &ObjectId) -> Result<bool> {
         let path = self.path_for(oid);
         match std::fs::remove_file(&path) {
             Ok(()) => {

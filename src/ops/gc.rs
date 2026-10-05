@@ -116,6 +116,10 @@ pub fn gc(repo: &Repo, opts: &GcOpts) -> Result<GcReport> {
         let Ok(oid) = ObjectId::from_hex(&format!("{shard_name}{name}")) else {
             continue;
         };
+        if repo.objects.path_for(&oid) != file {
+            rep.kept_corrupt += 1;
+            continue;
+        }
         if live.contains(&oid) {
             continue;
         }
@@ -149,7 +153,7 @@ pub fn gc(repo: &Repo, opts: &GcOpts) -> Result<GcReport> {
         }
         let size = raw.len() as u64;
         if !opts.dry_run {
-            std::fs::remove_file(&file)?;
+            repo.objects.remove(&oid)?;
             touched_shards.insert(shard);
         }
         rep.deleted_objects += 1;

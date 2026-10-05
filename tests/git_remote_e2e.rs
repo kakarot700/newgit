@@ -7,7 +7,9 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use newgit::object::types::{Actor, ActorKind, EntryMode, Object, Snapshot};
 use newgit::object::ObjectId;
@@ -213,6 +215,117 @@ fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8
         .unwrap()
 }
 
+fn raw_git_http_response(addr: SocketAddr, request: &[u8]) -> (u16, Vec<u8>) {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    stream.write_all(request).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let headers_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    let status = String::from_utf8_lossy(&response[..headers_end])
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    (status, response[headers_end + 4..].to_vec())
+}
+
+fn raw_git_upload_advertisement(addr: SocketAddr) -> (u16, Vec<u8>) {
+    raw_git_http_response(
+        addr,
+        format!(
+            "GET /info/refs?service=git-upload-pack HTTP/1.1\r\nHost: {addr}\r\nGit-Protocol: version=1\r\nConnection: close\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+}
+
+fn raw_git_upload_pack(addr: SocketAddr, request_body: &[u8]) -> (u16, Vec<u8>) {
+    let request = format!(
+        "POST /git-upload-pack HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/x-git-upload-pack-request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        request_body.len()
+    );
+    let mut bytes = request.into_bytes();
+    bytes.extend_from_slice(request_body);
+    raw_git_http_response(addr, &bytes)
+}
+
+fn advertised_git_refs(advertisement: &[u8]) -> Vec<(String, String)> {
+    let mut refs = Vec::new();
+    let mut position = 0;
+    while position + 4 <= advertisement.len() {
+        let Ok(prefix) = std::str::from_utf8(&advertisement[position..position + 4]) else {
+            break;
+        };
+        let Ok(length) = usize::from_str_radix(prefix, 16) else {
+            break;
+        };
+        position += 4;
+        if length == 0 {
+            continue;
+        }
+        if length < 4 || position + length - 4 > advertisement.len() {
+            break;
+        }
+        let packet = &advertisement[position..position + length - 4];
+        position += length - 4;
+        let line = packet.split(|byte| *byte == 0).next().unwrap_or_default();
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let Some(space) = line.iter().position(|byte| *byte == b' ') else {
+            continue;
+        };
+        let Ok(oid) = std::str::from_utf8(&line[..space]) else {
+            continue;
+        };
+        let Ok(name) = std::str::from_utf8(&line[space + 1..]) else {
+            continue;
+        };
+        if oid.len() == 40 && name.starts_with("refs/heads/") {
+            refs.push((name.to_string(), oid.to_string()));
+        }
+    }
+    refs.sort();
+    refs
+}
+
+fn upload_pack_want(oid: &str) -> Vec<u8> {
+    let line = format!("want {oid}\n");
+    let mut request = format!("{:04x}{line}", line.len() + 4).into_bytes();
+    request.extend_from_slice(b"0000");
+    request.extend_from_slice(b"0009done\n");
+    request
+}
+
+fn child_snapshot(repo: &Repo, message: &str, bytes: &[u8], parent: ObjectId) -> ObjectId {
+    let author = actor(repo);
+    let blob = repo.objects.put_blob(bytes).unwrap();
+    let root =
+        newgit::ops::tree::build_tree(repo, &[("file.txt".to_string(), blob, EntryMode::File)])
+            .unwrap();
+    repo.put(&Object::Snapshot(Snapshot {
+        parents: vec![parent],
+        root,
+        author,
+        timestamp_ms: 1_735_689_601_000,
+        tz_offset_min: 0,
+        message: message.into(),
+        workspace: None,
+        change: None,
+        goal: None,
+        extras: Default::default(),
+    }))
+    .unwrap()
+}
+
 #[test]
 fn ambient_git_environment_cannot_redirect_or_run_template_hooks() {
     const CHILD_MODE: &str = "NEWGIT_GIT_DIR_REGRESSION_CHILD";
@@ -325,6 +438,264 @@ fn ambient_git_environment_cannot_redirect_or_run_template_hooks() {
         !hook_marker.exists(),
         "ambient Git template hook executed during projection generation"
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed_refs() {
+    let (_dir, root) = temp("snapshot-recovery-race");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let repo = Repo::init(&remote_path).unwrap();
+    let old_left = commit(
+        &repo,
+        "refs/left",
+        "old left",
+        &[("file.txt", b"old left\n", EntryMode::File)],
+        vec![],
+    );
+    let old_right = commit(
+        &repo,
+        "refs/right",
+        "old right",
+        &[("file.txt", b"old right\n", EntryMode::File)],
+        vec![],
+    );
+    let new_left = child_snapshot(&repo, "new left", b"new left\n", old_left);
+    let new_right = child_snapshot(&repo, "new right", b"new right\n", old_right);
+    repo.set_head(
+        &Head::Symbolic("refs/left".into()),
+        RefLogEntry::system("set snapshot-race HEAD"),
+    )
+    .unwrap();
+
+    let prior_advertisement =
+        newgit::remote::git_http::advertise(&repo, Some("version=1"), 64 * 1024 * 1024).unwrap();
+    let old_refs = advertised_git_refs(&prior_advertisement)
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        old_refs.len(),
+        2,
+        "unexpected initial advertisement: {old_refs:?}"
+    );
+    let want_old_left = upload_pack_want(&old_refs["refs/heads/left"]);
+
+    let token_file = root.join("tokens.json");
+    auth::save(&token_file, &TokenFile::default()).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path.clone(),
+        token_file,
+        allow_anonymous_read: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    // Pause the live transaction after its first ref apply. It still owns the
+    // real transaction lock while the partial on-disk state exists.
+    let new_left_hex = new_left.to_hex();
+    let new_right_hex = new_right.to_hex();
+    let pause_marker = root.join("txn-paused");
+    let resume_marker = root.join("txn-resume");
+    let mut transaction = Command::new(std::env::var("CARGO_BIN_EXE_newgit-faultlab").unwrap())
+        .args([
+            "txn-two",
+            remote_path.to_str().unwrap(),
+            "refs/left",
+            &new_left_hex,
+            "refs/right",
+            &new_right_hex,
+        ])
+        .env("NEWGIT_FAULTS", "txn:apply#1")
+        .env("NEWGIT_FAULT_MODE", "pause")
+        .env("NEWGIT_FAULT_READY_FILE", &pause_marker)
+        .env("NEWGIT_FAULT_RESUME_FILE", &resume_marker)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pause_deadline = Instant::now() + Duration::from_secs(10);
+    while !pause_marker.exists() {
+        if let Some(status) = transaction.try_wait().unwrap() {
+            panic!("faultlab exited before pausing after ref 1: {status}");
+        }
+        assert!(Instant::now() < pause_deadline, "faultlab pause timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(repo.refs.read("refs/left").unwrap(), new_left);
+    assert_eq!(repo.refs.read("refs/right").unwrap(), old_right);
+    assert!(std::fs::read_dir(repo.ng().join("txn"))
+        .unwrap()
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal")));
+
+    // Readers using an already-open Repo and the live HTTP server must block
+    // while the transaction process itself holds the lock.
+    let url = format!("http://{}/", server.addr());
+    let (advertisement_tx, advertisement_rx) = mpsc::channel();
+    let (projection_pack_tx, projection_pack_rx) = mpsc::channel();
+    let (http_advertisement_tx, http_advertisement_rx) = mpsc::channel();
+    let (http_pack_tx, http_pack_rx) = mpsc::channel();
+    let (git_ls_remote_tx, git_ls_remote_rx) = mpsc::channel();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            advertisement_tx
+                .send(newgit::remote::git_http::advertise(
+                    &repo,
+                    Some("version=1"),
+                    64 * 1024 * 1024,
+                ))
+                .unwrap();
+        });
+        scope.spawn(|| {
+            projection_pack_tx
+                .send(newgit::remote::git_http::upload_pack(
+                    &repo,
+                    None,
+                    &want_old_left,
+                    64 * 1024 * 1024,
+                ))
+                .unwrap();
+        });
+        scope.spawn(|| {
+            http_advertisement_tx
+                .send(raw_git_upload_advertisement(server.addr()))
+                .unwrap();
+        });
+        scope.spawn(|| {
+            http_pack_tx
+                .send(raw_git_upload_pack(server.addr(), &want_old_left))
+                .unwrap();
+        });
+        scope.spawn(|| {
+            let output = Command::new("git")
+                .args([
+                    "-c",
+                    "protocol.version=1",
+                    "ls-remote",
+                    &url,
+                    "refs/heads/left",
+                    "refs/heads/right",
+                ])
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            git_ls_remote_tx.send(output).unwrap();
+        });
+
+        assert!(
+            matches!(
+                advertisement_rx.recv_timeout(Duration::from_millis(150)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "direct advertisement returned before lock release"
+        );
+        assert!(
+            matches!(
+                projection_pack_rx.recv_timeout(Duration::from_millis(150)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "direct upload-pack returned before lock release"
+        );
+        assert!(
+            matches!(
+                http_advertisement_rx.recv_timeout(Duration::from_millis(150)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "HTTP advertisement returned before lock release"
+        );
+        assert!(
+            matches!(
+                http_pack_rx.recv_timeout(Duration::from_millis(150)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "HTTP upload-pack returned before lock release"
+        );
+        assert!(
+            matches!(
+                git_ls_remote_rx.recv_timeout(Duration::from_millis(150)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "real Git ls-remote returned before lock release"
+        );
+
+        assert!(
+            transaction.try_wait().unwrap().is_none(),
+            "transaction must still be paused with the lock held"
+        );
+        transaction.kill().unwrap();
+        assert!(
+            !transaction.wait().unwrap().success(),
+            "killed mid-apply transaction must not report success"
+        );
+
+        let direct_advertisement = advertisement_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("direct advertisement must finish after recovery")
+            .unwrap();
+        let direct_pack = projection_pack_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("direct upload-pack must finish after recovery")
+            .unwrap();
+        let (http_ad_status, http_advertisement) = http_advertisement_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("HTTP advertisement must finish after recovery");
+        let (http_pack_status, http_pack) = http_pack_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("HTTP upload-pack must finish after recovery");
+        let git_ls_remote = git_ls_remote_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("real Git ls-remote must finish after recovery");
+
+        let direct_refs = advertised_git_refs(&direct_advertisement)
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let http_refs = advertised_git_refs(&http_advertisement)
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            direct_refs.len(),
+            2,
+            "direct snapshot refs: {direct_refs:?}"
+        );
+        assert_eq!(http_ad_status, 200);
+        assert_eq!(http_refs.len(), 2, "HTTP snapshot refs: {http_refs:?}");
+        assert_eq!(direct_refs, http_refs);
+        assert_ne!(direct_refs["refs/heads/left"], old_refs["refs/heads/left"]);
+        assert_ne!(
+            direct_refs["refs/heads/right"],
+            old_refs["refs/heads/right"]
+        );
+        assert_eq!(http_pack_status, 200);
+        assert!(
+            direct_pack.windows(4).any(|bytes| bytes == b"PACK"),
+            "direct upload-pack response: {:?}",
+            String::from_utf8_lossy(&direct_pack)
+        );
+        assert!(
+            http_pack.windows(4).any(|bytes| bytes == b"PACK"),
+            "HTTP upload-pack response: {:?}",
+            String::from_utf8_lossy(&http_pack)
+        );
+        assert!(
+            git_ls_remote.status.success(),
+            "{}",
+            String::from_utf8_lossy(&git_ls_remote.stderr)
+        );
+        let git_refs = String::from_utf8(git_ls_remote.stdout).unwrap();
+        assert_eq!(git_refs.lines().count(), 2, "{git_refs:?}");
+        assert!(git_refs.contains("refs/heads/left"), "{git_refs:?}");
+        assert!(git_refs.contains("refs/heads/right"), "{git_refs:?}");
+    });
+
+    assert_eq!(repo.refs.read("refs/left").unwrap(), new_left);
+    assert_eq!(repo.refs.read("refs/right").unwrap(), new_right);
+    assert!(repo.recover().unwrap().0.redone.is_empty());
+    server.shutdown();
 }
 
 #[test]

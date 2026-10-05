@@ -45,7 +45,7 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | I4 | decoders never panic on arbitrary bytes | `truncated_input_never_panics`, `truncated_envelopes_never_panic`, `decode_rejects_garbage`, `tests/fuzz_parsers.rs` (6 suites, 110k inputs) ✅ |
 | I5 | decompression bombs bounded | `bomb_protection` |
 | I6 | path safety: traversal/NUL/absolute/symlink escape rejected | `path_checks`, `symlink_escape_is_rejected` |
-| I7 | locks exclusive; stale locks reclaimed only after timeout | `lock_is_exclusive`, `stale_lock_is_reclaimed` |
+| I7 | Locks exclusive; Linux detects a dead recorded holder before stale age and never reclaims a live PID only because of age; non-Linux uses the configured stale-age fallback | `lock_is_exclusive`, `stale_lock_is_reclaimed`, Linux `stale_age_does_not_steal_lock_from_live_holder` |
 | I8 | atomic writes leave no partial files/debris | `atomic_write_is_durable_and_replaces` |
 | I9 | config: unknown keys/versions rejected loudly | `config_rejects_unknown_and_bad` |
 | I10 | set-fields strictly ascending ⇒ unique canonical form | `tree_roundtrip_and_ordering`, `decode_rejects_garbage` |
@@ -81,28 +81,28 @@ cargo test --release --locked       # same suites, optimized (chaos uses this)
 | I40 | Git branch writes and lightweight-tag create/delete commit accepted canonical refs together; partial projection acceptance or a competing CAS winner cannot publish a partial ref set or loser objects | `real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http`, `real_git_lightweight_tag_pushes_are_transactional_and_bounded`, `racing_multi_ref_pushes_publish_only_one_complete_ref_set`, `racing_ref_deletion_and_update_have_one_cas_winner` ✅ |
 | I41 | A deletion accepted only in the disposable projection is not published when another requested ref is rejected; atomic and ordinary requests leave canonical refs/object inventory intact | `real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http` (HTTP 409 partial result and atomic policy failure) ✅ |
 | I42 | Lightweight Git tags may be created/deleted only when targeting commits; annotated tag objects and all tag retargets, including forced retargets, are refused without canonical ref/object mutation | `real_git_lightweight_tag_pushes_are_transactional_and_bounded` (atomic annotated-tag + branch advance refusal, forced tag retarget rejection, unauthorized token) ✅ |
+| I43 | Every smart-HTTP projection exports one committed refs/HEAD/history/object view and recovers a committed mid-apply journal before returning; readers never see a partial multi-ref transaction | Linux-only `smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed_refs` (live faultlab pause after ref 1, direct advertisement/upload-pack, raw HTTP advertisement/upload-pack, real Git `ls-remote`; readers block, holder is killed, recovery completes both refs, pack responses succeed) ✅ |
 
 ## Latest recorded run
-- Date: 2026-10-05 (projection-cache safety audit; documentation-only, Git
-  2.43.0/Linux, Rust 1.99.0)
-- `cargo test --locked` (debug): **320 passed; 0 failed; 1 ignored** (140 lib
-  unit passed, 1 manual benchmark ignored,
-  6 chaos, 16 cli_e2e, 4 concurrency_refs, 8 diff_engine, 8 fuzz_parsers,
-  28 git_compat, 7 git_remote_e2e, 18 merge_integrate, 13 ops_snapshot,
-  12 property_core, 16 remote_e2e, 14 txn_recovery, 20 verify_gc, 1 version,
-  9 workflow).
-- `cargo test --release --locked`: **320 passed; 0 failed; 1 ignored** (same
-  suites).
-- The seven live Git CLI E2E tests include shallow clone/deepen/unshallow and
-  ordinary fetch/pull after the ref advances; partial clone with verified
-  missing blobs and promisor metadata; and on-demand checkout hydration, along
-  with existing smart-HTTP push/auth/CAS regressions.
-- `cargo fmt --check`, warnings-denied Clippy, release build, SBOM
-  drift, Git 2.43.0 / `ssh-keygen` prerequisites, and `git diff --check`: clean.
-- This milestone changes documentation only; no cache implementation,
-  cache-specific test, or post-change performance claim was added. Exact-SHA
-  GitHub CI and CodeQL are checked after the single combined push;
-  report both links in the task completion response, with no state-only follow-up.
+- Date: 2026-10-05 (smart-HTTP committed-snapshot milestone; Git 2.43.0/Linux, Rust 1.99.0)
+- `cargo test --locked` (debug): **322 passed; 0 failed; 1 ignored** (141 lib
+  unit passed, 1 manual benchmark ignored; 6 chaos, 16 cli_e2e, 4 concurrency_refs,
+  8 diff_engine, 8 fuzz_parsers, 28 git_compat, 8 git_remote_e2e, 18 merge_integrate,
+  13 ops_snapshot, 12 property_core, 16 remote_e2e, 14 txn_recovery, 20 verify_gc,
+  1 version, 9 workflow).
+- `cargo test --release --locked`: **322 passed; 0 failed; 1 ignored** (same suites).
+- The new Linux Git 2.43.0 E2E pauses the live transaction after its first ref apply,
+  proves five direct/HTTP/real-Git readers wait on the global lock, kills the writer,
+  and verifies recovery completes both refs before advertisements and pack responses.
+- Release benchmark (warm cache, one shared-host run): direct projection medians 121.31
+  ms (80 commits) and 918.88 ms (800); exclusive-lock holds 120.10/917.78 ms; four-clone
+  batches 1.62/11.19 s versus historical 0.65/3.18 s; delayed metadata transaction
+  99/873 ms including wait and commit. See `docs/BENCHMARKS.md`; no throughput claim.
+- `cargo fmt --all --check`, warnings-denied `cargo clippy --all-targets --locked`,
+  release build, SBOM drift check, Git 2.43.0 / `ssh-keygen` prerequisites, and
+  `git diff --check`: clean.
+- Exact-SHA GitHub CI and CodeQL are checked after the one combined push; report both
+  links in the task completion response, with no state-only follow-up commit.
 - Empty-tree compatibility commit
   `ba5eaed79cf778bf77d66fbea0bb6c0d2b46c6cb` passed [hosted CI run
   37203669979](https://github.com/kakarot700/newgit/actions/runs/37203669979)

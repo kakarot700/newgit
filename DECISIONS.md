@@ -2,8 +2,38 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-021 · Lock-protected committed view per smart-HTTP projection (2026-10-05)
+**Context:** The pre-D-021 projection-cache audit found that readers could
+overlap sequential multi-ref journal apply/recovery, initialization wrote the
+default `HEAD` outside the transaction lock, and object deletion was exposed by
+a public `ObjectStore::remove` API. A projection reads refs, `HEAD`, history,
+and objects at separate points; an impossible mixed view could be exported.
+**Decision:** Before every smart-HTTP projection, acquire the existing global
+transaction/GC lock, replay pending committed journals while holding it, and
+retain it through the complete NewGit-to-Git export. Initialize default `HEAD`
+under that lock as well. Keep immutable content-addressed object puts lock-free;
+make object deletion crate-private and have GC use it while holding the lock.
+Do not add a cache or generation counter. Each stateless request independently
+gets a committed view; no claim that advertisement and upload-pack share one
+generation without an explicit session token.
+**Rationale:** Transactions, generic FILE/FDEL ops, recovery, and GC already
+serialize on this lock. On Linux, a live recorded holder is not reclaimed just
+for exceeding the stale age. The new real-Git race test pauses a live two-ref
+transaction after ref 1, confirms direct and HTTP readers block, kills the
+holder, and verifies journal recovery yields both refs before advertisements
+and pack data return.
+**Consequences:** Correctness is request-local and Linux-tested, not a
+cross-request pin; arbitrary out-of-band filesystem writes remain outside the
+cooperative lock model. Non-Linux stale-age behavior and network filesystems are
+not established. Exclusive locking serializes projections, writers, and GC.
+One warm-cache shared-host benchmark observed four-clone batches grow from the
+historical 0.65 s to 1.62 s (80 commits) and 3.18 s to 11.19 s (800 commits);
+delayed writer transaction wall time, including wait and commit, was 99 ms and
+873 ms. These are single-run observations, not capacity claims; see
+`docs/BENCHMARKS.md`. No persistent cache or generation was added.
+
 ## D-020 · Defer smart-HTTP projection caching until canonical generations are safe (2026-10-05)
-**Context:** An 800-commit unchanged smart-HTTP fetch returns 219 bytes but
+**Context (pre-D-021):** An 800-commit unchanged smart-HTTP fetch returns 219 bytes but
 measures 1,944.18 ms median, including 1,830.84 ms for two temporary Git
 projections (`docs/BENCHMARKS.md`).
 **Decision:** Keep projections request-local; add neither a cache nor a
@@ -12,7 +42,7 @@ consistent generation across all relevant object/ref/`HEAD` writes, GC, and
 crash recovery. Readers must capture a stable committed view, and every HTTP
 request must validate the current generation before using an immutable cache
 entry. A cache remains disposable derived data; NewGit stays canonical.
-**Rationale:** Current object writes are lock-free/public, GC deletes objects
+**Rationale at that audit point:** Object writes were lock-free/public, GC deleted objects
 directly, journal application/recovery updates refs sequentially while readers
 do not hold the transaction lock, initialization creates `HEAD` outside the
 transaction engine, and generic FILE/FDEL ops can target refs or `HEAD`.
@@ -24,7 +54,7 @@ risks.
 only after the canonical mutation and reader-snapshot invariants are enforced
 and tested across competing writes, recovery, and HTTP request races.
 
-## D-019 · Git smart HTTP through a separate read-only upload-pack adapter (2026-10-04)
+## D-019 · Initial Git smart-HTTP read-only adapter (scope superseded by receive-pack milestone, 2026-10-04)
 **Context:** The project needs ordinary Git clone/fetch/pull interoperability
 without making NewGit's canonical SHA-256 object store depend on Git's pack
 format or treating a compatibility projection as core storage.

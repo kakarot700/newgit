@@ -117,11 +117,25 @@ impl FileLock {
                     // crash-recovery path for locks.
                     let age = lock_age(&lock_path);
                     let holder = read_lock_info(&lock_path);
-                    let holder_dead = holder
-                        .map(|(pid, _)| pid != std::process::id() && !pid_alive(pid))
-                        .unwrap_or(false);
                     let timed_out = age.map(|a| a > stale_after).unwrap_or(false);
-                    if holder_dead || timed_out {
+                    let reclaimable = match holder {
+                        Some((pid, _)) => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                // On Linux, a live PID is authoritative: an
+                                // old lock may still protect a long transaction
+                                // or projection and must not be stolen by age.
+                                pid != std::process::id() && !pid_alive(pid)
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = pid;
+                                timed_out
+                            }
+                        }
+                        None => timed_out,
+                    };
+                    if reclaimable {
                         // Reclaim: remove and retry once.
                         let _ = std::fs::remove_file(&lock_path);
                         if try_create_lock(&lock_path).is_ok() {
@@ -372,6 +386,19 @@ mod tests {
         let lp = lock_path_for(&p);
         std::fs::write(&lp, format!("pid={} time=1", std::process::id())).unwrap();
         let r = FileLock::acquire(&p, Duration::from_millis(50), Duration::from_secs(3600));
+        assert!(matches!(r, Err(Error::LockBusy(_))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_age_does_not_steal_lock_from_live_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("res");
+        let lp = lock_path_for(&p);
+        std::fs::write(&lp, format!("pid={} time=1", std::process::id())).unwrap();
+        let file = File::open(&lp).unwrap();
+        file.set_modified(filetime_past()).unwrap();
+        let r = FileLock::acquire(&p, Duration::from_millis(50), Duration::from_millis(1));
         assert!(matches!(r, Err(Error::LockBusy(_))));
     }
 
