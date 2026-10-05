@@ -139,7 +139,18 @@ Honest, current list. Anything not listed here that fails is a bug — report it
 12. Transport security relies on a TLS-terminating reverse proxy; the built-in
     server speaks plain HTTP/1.1 and MUST NOT be exposed to hostile networks
     directly; TLS must be terminated by a trusted reverse proxy or traffic
-    must remain on a trusted private network. See `docs/DEPLOYMENT.md`.
+    must remain on a trusted private network. See `docs/DEPLOYMENT.md`. The
+    compact v1 parser intentionally supports Content-Length framing only: it
+    rejects duplicate singleton framing/auth/protocol headers and a combined
+    Content-Length/Transfer-Encoding request, refuses chunked bodies, and caps
+    request lines at 16 KiB, aggregate headers at 64 KiB/128 fields, and bodies
+    at the configured request limit. Socket I/O retains a 30-second per-operation
+    timeout and now has a fixed five-minute absolute request-read deadline from
+    accept, covering the request line, headers, and declared body; expiry returns
+    408 and closes the connection. This deadline is not operator-configurable and
+    a slow request may occupy a worker for up to five minutes. Reverse proxies
+    that buffer client headers or bodies before connecting upstream need their
+    own request-duration and size limits; NewGit cannot bound proxy-side buffering.
 
 ## Diff
 13. Line diff uses Myers with a bounded edit distance (default 1024 per

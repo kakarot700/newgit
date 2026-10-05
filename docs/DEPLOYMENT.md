@@ -86,15 +86,27 @@ server {
     ssl_certificate     /etc/letsencrypt/live/git.example.org/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/git.example.org/privkey.pem;
     client_max_body_size 64m;              # matches newgit max_request_bytes
+    client_body_timeout 60s;               # idle-gap limit, not a total duration
     location / {
         proxy_pass http://127.0.0.1:8765;
         proxy_http_version 1.1;            # NewGit speaks HTTP/1.1, no chunked
+        proxy_request_buffering off;       # stream the declared body to NewGit
+        proxy_send_timeout 360s;           # allow the 300 s NewGit receive budget
         proxy_set_header Connection close; # server closes per request anyway
-        proxy_read_timeout 60s;
+        proxy_read_timeout 180s;           # above the separate 120 s Git deadline
         proxy_pass_header X-NewGit-Protocol;
     }
 }
 ```
+
+NewGit applies a 300-second absolute request-receive deadline from the time its
+upstream TCP connection is accepted. It covers the full request line, headers,
+and declared body, and is distinct from the 120-second Git operation deadline.
+Keep request-body buffering disabled (or configure an equivalent edge total
+deadline): otherwise the proxy may hold client request bytes before NewGit has
+accepted a connection, outside NewGit's worker/deadline bound. Proxy idle-gap
+timeouts such as `client_body_timeout` are not themselves total-duration limits;
+configure edge header/body size and duration limits for the proxy-facing side.
 
 Caddy equivalent (automatic HTTPS):
 
@@ -104,6 +116,11 @@ git.example.org {
     reverse_proxy 127.0.0.1:8765
 }
 ```
+
+Apply equivalent request-duration controls for the Caddy-facing connection.
+NewGit's deadline begins only after the reverse proxy opens its upstream
+connection; proxy-side buffering and slow client headers remain the proxy's
+responsibility.
 
 Let's Encrypt via certbot/caddy is $0. The protocol is proxy-friendly:
 Content-Length framing only, one request per connection, no websockets.

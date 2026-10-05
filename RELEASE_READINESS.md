@@ -99,3 +99,17 @@ not certify this change. Local test and security-gate results are recorded in
 `TEST_MATRIX.md`. The final combined implementation/docs commit's six-target
 native CI, CodeQL, and packaging results are cited by exact SHA in the task
 completion report; no state-only follow-up commit is used to retrofit evidence.
+
+## Follow-up source-change evidence — bounded HTTP request parsing
+
+The HTTP/1.1 line-allocation and framing hardening is a source-bearing change
+after clean/synced predecessor `c0dd16dbc85f19fd827db1988d17bca045ba1621`.
+That SHA's CI and CodeQL do not certify the parser change. Local debug/release,
+lint, security, and SBOM results are recorded in `TEST_MATRIX.md`. The same
+source-bearing milestone now also includes an accept-start 300-second total
+request-read deadline covering headers and declared bodies; short-budget live
+socket tests prove drip-paced clients receive 408 and are closed while normal
+requests still succeed. The final combined source/docs commit's six-target
+native CI, CodeQL, and package results are cited against its exact SHA in the
+task completion report. The `c0dd16d` predecessor runs above do not certify any
+part of this combined source change.

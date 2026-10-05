@@ -5,7 +5,12 @@ require `PROTOCOL_VERSION = 2` and a migration note here.
 Transport: HTTP/1.1, JSON bodies, `Content-Length` framing only (no chunked,
 no keep-alive pipelining: every response closes the connection). No TLS in
 v1 — deploy behind a TLS-terminating reverse proxy (nginx/caddy) for
-encryption; the protocol is proxy-friendly plain HTTP.
+encryption; the protocol is proxy-friendly plain HTTP. The server reads the
+request line and headers incrementally under 16 KiB, 64 KiB aggregate, and 128
+field-line limits. It rejects malformed field names, duplicate singleton
+headers, and requests containing both `Content-Length` and
+`Transfer-Encoding`; unrelated extension-header duplicates retain the last
+value. The configured body cap is applied before allocation/read.
 
 ```
 newgit serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
@@ -415,8 +420,11 @@ actionable errors (v1: TLS at the proxy, one repo per server).
   temporary disk/peak-memory quotas are not implemented.
 - Batch caps: `max_batch_objects` (default 4096) for have/get/put;
   `negotiate` allows up to max(batch,10 000) oid arguments.
-- Thread cap (`--max-threads`, default 32) ⇒ 429 beyond; per-connection
-  read/write timeouts 30 s; client connect 10 s, read 300 s, write 60 s.
+- Thread cap (`--max-threads`, default 32) ⇒ 429 beyond; socket I/O idle
+  timeouts are 30 s, and one 300 s monotonic deadline from accept covers receipt
+  of the complete HTTP request (request line, headers, and declared body), with
+  HTTP 408 on expiry. This is separate from the 120 s Git child-operation
+  deadline above. Client connect/read/write timeouts remain 10/300/60 s.
 - Parsers are total and fuzzed (`fuzz_http_and_wire_json_never_panic`,
   20k seeded prefix-anchored inputs).
 - Objects travel as self-verifying envelopes; ids are recomputed from

@@ -69,6 +69,19 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   validation. Added a deterministic 20,000-input parser fuzz regression and
   live Git 2.43.0/Linux no-mutation cases for malformed framing, invalid refs,
   truncated/corrupt packs, duplicate capability tokens, and over-limit pushes.
+- Hardened HTTP request parsing so request/header byte limits are enforced by
+  incremental reads rather than after an unbounded line allocation. Header
+  counts now measure actual field lines; malformed field-name whitespace,
+  duplicate singleton auth/framing/protocol fields, and combined
+  Content-Length/Transfer-Encoding requests are rejected. Added oversized-line,
+  duplicate-header-count, parser-policy, and live TCP framing regressions while
+  preserving normal real-Git smart-HTTP flows.
+- Added one 300-second monotonic request-receive deadline from TCP accept,
+  applying the remaining budget to request-line, header, and declared-body
+  reads while retaining the 30-second per-I/O idle timeout. Expiry now returns
+  HTTP 408 and closes the connection; deterministic live-socket slow-drip tests
+  cover headers, a delayed body, and a normal request. The 64 MiB body cap and
+  separate 120-second Git child-process deadline are unchanged.
 
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and

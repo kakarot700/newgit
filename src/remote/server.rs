@@ -8,13 +8,13 @@
 //! reverse proxy for encryption (documented in docs/PROTOCOL.md).
 
 use std::collections::HashSet;
-use std::io::{BufReader, BufWriter};
+use std::io::{self, BufRead, BufReader, BufWriter, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -36,6 +36,7 @@ use crate::util::base64;
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8787";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(300);
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug)]
@@ -89,8 +90,9 @@ impl ServerHandle {
         self.addr.port()
     }
     /// Signal the accept loop to stop and wait for it. Connection workers are
-    /// detached; socket I/O uses `IO_TIMEOUT`, while Git projection/pack work
-    /// is bounded by the adapter's 120-second child-process deadline.
+    /// detached; each socket I/O operation uses `IO_TIMEOUT`, complete request
+    /// reads have a five-minute accept-start deadline, and Git projection/pack
+    /// work remains bounded by the adapter's 120-second child-process deadline.
     pub fn shutdown(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(j) = self.join.take() {
@@ -130,6 +132,7 @@ fn accept_loop(listener: TcpListener, cfg: ServerConfig, stop: Arc<AtomicBool>) 
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _peer)) => {
+                let request_deadline = Instant::now() + REQUEST_READ_TIMEOUT;
                 if active.load(Ordering::Relaxed) >= cfg.max_threads {
                     let mut w = BufWriter::new(stream);
                     let body = envelope_err(429, "limit", "server busy: too many connections");
@@ -142,7 +145,7 @@ fn accept_loop(listener: TcpListener, cfg: ServerConfig, stop: Arc<AtomicBool>) 
                 let res = std::thread::Builder::new()
                     .name("newgit-serve-conn".into())
                     .spawn(move || {
-                        handle_conn(stream, &cfg);
+                        handle_conn(stream, &cfg, request_deadline);
                         active_conn.fetch_sub(1, Ordering::Relaxed);
                     });
                 if res.is_err() {
@@ -170,7 +173,54 @@ fn envelope_err(status_hint: u16, category: &str, message: &str) -> Vec<u8> {
     .unwrap_or_default()
 }
 
-fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
+/// BufRead adapter that applies both the existing idle timeout and one
+/// accept-start deadline to every socket read, including Content-Length bodies.
+struct DeadlineBufReader {
+    inner: BufReader<TcpStream>,
+    deadline: Instant,
+}
+
+impl DeadlineBufReader {
+    fn new(stream: TcpStream, deadline: Instant) -> Self {
+        Self {
+            inner: BufReader::new(stream),
+            deadline,
+        }
+    }
+
+    fn arm_read_timeout(&self) -> io::Result<()> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "HTTP request receive deadline expired",
+            ));
+        }
+        self.inner
+            .get_ref()
+            .set_read_timeout(Some(remaining.min(IO_TIMEOUT)))
+    }
+}
+
+impl Read for DeadlineBufReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm_read_timeout()?;
+        self.inner.read(buf)
+    }
+}
+
+impl BufRead for DeadlineBufReader {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.arm_read_timeout()?;
+        self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.inner.consume(amount);
+    }
+}
+
+fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant) {
     #[cfg(test)]
     let connection_started = std::time::Instant::now();
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
@@ -184,7 +234,7 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig) {
         Ok(s) => s,
         Err(_) => return,
     };
-    let mut r = BufReader::new(stream);
+    let mut r = DeadlineBufReader::new(stream, request_deadline);
     let mut w = BufWriter::new(out_stream);
 
     // Repo + tokens are loaded per connection (cheap, always fresh).
@@ -936,4 +986,172 @@ fn parse_oid_batch(hexes: &[String], cap: usize) -> Result<Vec<ObjectId>> {
 /// Convenience for tests/CLI: spawn + a writable "listening" announcement.
 pub fn listening_line(addr: SocketAddr) -> String {
     format!("newgit serve: listening on http://{addr} (protocol v{PROTOCOL_VERSION})")
+}
+
+#[cfg(test)]
+mod request_deadline_tests {
+    use super::*;
+
+    fn test_config(repo_root: PathBuf, token_file: PathBuf) -> ServerConfig {
+        ServerConfig {
+            bind: "127.0.0.1:0".into(),
+            repo_root,
+            token_file,
+            allow_anonymous_read: true,
+            ..ServerConfig::default()
+        }
+    }
+
+    /// Drive the production connection handler over loopback with a short
+    /// accept-start budget; the sender can pause before and between bytes.
+    fn request_with_budget(
+        cfg: &ServerConfig,
+        budget: Duration,
+        initial: &[u8],
+        drip: &[u8],
+        pause_before_drip: Duration,
+        per_byte_delay: Duration,
+    ) -> (String, Duration) {
+        use std::io::{Read, Write};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cfg = cfg.clone();
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let deadline = Instant::now() + budget;
+            handle_conn(stream, &cfg, deadline);
+        });
+
+        let mut writer = TcpStream::connect(addr).unwrap();
+        writer.set_nodelay(true).unwrap();
+        let mut reader = writer.try_clone().unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let started = Instant::now();
+        writer.write_all(initial).unwrap();
+
+        let stop_sender = Arc::new(AtomicBool::new(false));
+        let sender_stop = stop_sender.clone();
+        let drip = drip.to_vec();
+        let sender = std::thread::spawn(move || {
+            if !pause_before_drip.is_zero() {
+                std::thread::sleep(pause_before_drip);
+            }
+            for byte in drip {
+                if sender_stop.load(Ordering::Relaxed) || writer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                if !per_byte_delay.is_zero() {
+                    std::thread::sleep(per_byte_delay);
+                }
+            }
+        });
+
+        // Consume exactly one framed response instead of waiting for EOF while
+        // the deliberately slow sender still owns its half of the test socket.
+        let mut response = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0u8; 4096];
+            let n = reader.read(&mut chunk).unwrap();
+            assert_ne!(n, 0, "server closed before sending response headers");
+            response.extend_from_slice(&chunk[..n]);
+            if let Some(position) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        stop_sender.store(true, Ordering::Relaxed);
+        sender.join().unwrap();
+        let header = std::str::from_utf8(&response[..header_end - 4]).unwrap();
+        let content_length = header
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .expect("response includes Content-Length");
+        let response_end = header_end + content_length;
+        while response.len() < response_end {
+            let mut chunk = [0u8; 4096];
+            let n = reader.read(&mut chunk).unwrap();
+            assert_ne!(n, 0, "server closed before the response body completed");
+            response.extend_from_slice(&chunk[..n]);
+        }
+        worker.join().unwrap();
+        let response = String::from_utf8(response[..response_end].to_vec()).unwrap();
+        let mut extra = [0u8; 1];
+        match reader.read(&mut extra) {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            result => panic!("server did not close the request socket: {result:?}"),
+        }
+        (response, started.elapsed())
+    }
+
+    fn status(response: &str) -> u16 {
+        response
+            .lines()
+            .next()
+            .and_then(|line| line.split_ascii_whitespace().nth(1))
+            .and_then(|value| value.parse().ok())
+            .expect("HTTP response status")
+    }
+
+    #[test]
+    fn absolute_request_deadline_covers_headers_and_body_and_allows_normal_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        Repo::init(&repo_root).unwrap();
+        let cfg = test_config(repo_root, dir.path().join("tokens.json"));
+        let budget = Duration::from_millis(250);
+        let drip = Duration::from_millis(20); // well below the production 30 s idle timeout
+
+        let (header_response, header_elapsed) = request_with_budget(
+            &cfg,
+            budget,
+            b"GET /v1/info HTTP/1.1",
+            b"\r\nHost: x\r\nConnection: close\r\n\r\n",
+            Duration::ZERO,
+            drip,
+        );
+        assert_eq!(status(&header_response), 408, "{header_response}");
+        assert!(header_response.contains("Connection: close\r\n"));
+        assert!(
+            header_elapsed < Duration::from_secs(2),
+            "{header_elapsed:?}"
+        );
+
+        let (body_response, body_elapsed) = request_with_budget(
+            &cfg,
+            Duration::from_millis(400),
+            b"POST /v1/have HTTP/1.1\r\nHost: x\r\nContent-Length: 20\r\nConnection: close\r\n\r\n",
+            b"01234567890123456789",
+            Duration::from_millis(330),
+            drip,
+        );
+        assert_eq!(status(&body_response), 408, "{body_response}");
+        assert!(body_response.contains("Connection: close\r\n"));
+        assert!(
+            body_elapsed < Duration::from_millis(550),
+            "{body_elapsed:?}"
+        );
+
+        let (normal_response, _) = request_with_budget(
+            &cfg,
+            Duration::from_secs(2),
+            b"GET /v1/info HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            b"",
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+        assert_eq!(status(&normal_response), 200, "{normal_response}");
+        assert!(normal_response.contains("\"product\":\"newgit\""));
+    }
 }

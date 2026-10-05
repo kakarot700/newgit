@@ -208,3 +208,29 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - VALIDATION: Full debug/release tests, lint, audit/deny, SBOM, exact-SHA six-
   target native CI, CodeQL, and packaging results are reported against the
   implementation-and-docs commit; predecessor matrix evidence is not reused.
+
+## Iteration 17 — Bounded HTTP request parsing and framing hardening  [x] · 2026-10-05
+- IMPLEMENTED: Enforce the 16 KiB request-line, 64 KiB aggregate-header, and
+  128 actual header-line limits during incremental reads. Validate HTTP token
+  field names and decimal Content-Length; reject duplicate singleton fields and
+  simultaneous Content-Length/Transfer-Encoding. Keep extension-field
+  last-value-wins semantics and Content-Length-only body handling. A single
+  300-second monotonic deadline starts at TCP accept and covers the complete
+  request, including headers and the declared body; reads apply the lesser of
+  remaining total time and the unchanged 30-second idle timeout.
+- TESTED: Parser regressions cover oversized request/header lines, repeated
+  extension headers exceeding the actual-field count, whitespace before `:`,
+  duplicate consumed fields, CL+TE, signed Content-Length, and extension
+  compatibility. Live TCP cases assert 400 plus connection close; real Git
+  2.43.0 smart-HTTP clone/fetch/pull/push tests remain green. Short-budget live
+  sockets drip request headers and a delayed Content-Length body, assert 408 and
+  close/worker completion, and verify a normal request returns 200.
+- LOCAL GATES: Debug and release suites each **340 passed, 0 failed, 1 ignored**
+  across 20 binaries; formatting, warnings-denied host/five-target Clippy,
+  release build, RustSec, cargo-deny, SBOM drift, and whitespace checks passed.
+  Hosted support evidence is tied to the exact combined source/docs SHA.
+- BOUNDARY: The fixed 300-second deadline is not operator-configurable and may
+  reject unusually slow large transfers; a slow request can hold a worker for
+  up to five minutes. Reverse proxies that buffer before connecting upstream
+  must separately bound client header/body reception. These residuals are
+  recorded in `KNOWN_LIMITATIONS.md` and `docs/DEPLOYMENT.md`.

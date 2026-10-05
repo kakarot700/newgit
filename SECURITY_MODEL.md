@@ -73,6 +73,13 @@ directory they are pointed at.
    Concurrent operation across binaries using different lock protocols is not
    supported; stop older processes before upgrading. Network-filesystem
    lock/atomicity semantics are not established.
+9. HTTP/1.1 request and header lines are read incrementally under the 16 KiB
+   request-line and 64 KiB aggregate-header limits; the 128-header limit counts
+   actual field lines. `Content-Length` is checked before body allocation/read.
+   Field names use HTTP token syntax; duplicate singleton fields used for
+   authorization, protocol selection, content type, or framing are rejected, as
+   is a request combining `Content-Length` and `Transfer-Encoding`. Chunked
+   transfer remains unsupported; responses to parse errors close the connection.
 
 ### Platform-specific guarantees and limits
 
@@ -95,7 +102,8 @@ directory they are pointed at.
 ## 5. Resource limits (configurable, `.newgit/config`)
 
 blob size, object size, stored size, tree entries, path component length,
-walk depth, lock wait/stale, remote batch object count, HTTP request size.
+walk depth, lock wait/stale, remote batch object count, HTTP request/header
+line sizes and HTTP request body size.
 Defaults chosen for laptops; servers should tighten `max_request_bytes`.
 
 ## 6. Secrets hygiene
@@ -115,6 +123,14 @@ Defaults chosen for laptops; servers should tighten `max_request_bytes`.
   ref updates). The existing configurable HTTP body cap (64 MiB by default)
   remains the outer request bound; Git validates pack version, checksum, and
   object contents in the disposable projection.
+* The remote server retains a 30-second per-operation socket timeout and adds
+  one five-minute absolute request-read deadline measured from TCP accept. Every
+  request-line, header, and declared-body socket read uses the lesser of the
+  idle timeout and remaining total budget. Expiry returns HTTP 408, closes the
+  connection, and releases the worker. The 64 MiB default body cap and separate
+  120-second Git child-process deadline are unchanged. A slow-drip request can
+  still occupy a worker for up to five minutes; an upstream proxy must separately
+  protect any client header/body bytes buffered before opening its upstream.
 
 ## 8. Agent interfaces: Web UI + MCP (iteration 10)
 

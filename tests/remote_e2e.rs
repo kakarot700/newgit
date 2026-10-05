@@ -174,6 +174,41 @@ fn snapshot_msg(repo: &Repo, oid: ObjectId) -> String {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn rejects_ambiguous_http_framing_on_live_socket() {
+    use std::io::{Read, Write};
+
+    let (_sd, sdir) = tmp("http-framing");
+    let repo_path = sdir.join("srv");
+    init_repo(&repo_path);
+    let srv = spawn(&repo_path, &[], true, |_| {});
+    let addr = srv.handle.addr();
+    let requests = [
+        format!(
+            "GET /v1/info HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nTransfer-Encoding: identity\r\n\r\n"
+        ),
+        format!(
+            "GET /v1/info HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"
+        ),
+    ];
+
+    for request in requests {
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "ambiguous request must be rejected: {response:?}"
+        );
+        assert!(response.contains("Connection: close\r\n"), "{response:?}");
+    }
+    srv.handle.shutdown();
+}
+
+#[test]
 fn info_anonymous_and_refs_gated() {
     let (_sd, sdir) = tmp("srv");
     let srv_repo = init_repo(&sdir.join("srv"));

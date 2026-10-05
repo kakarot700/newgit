@@ -24,7 +24,8 @@ pub struct Request {
     pub path: String,
     /// Percent-decoded query pairs, in order.
     pub query: Vec<(String, String)>,
-    /// Header keys lowercased; duplicate keys: last wins.
+    /// Header keys lowercased; duplicate singleton fields are rejected, while
+    /// unrelated extension headers retain last-value-wins behavior.
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
 }
@@ -48,21 +49,23 @@ fn err(status: u16, msg: impl Into<String>) -> HttpError {
     (status, msg.into())
 }
 
+fn read_error_status(error: &std::io::Error) -> u16 {
+    match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => 408,
+        _ => 400,
+    }
+}
+
 /// Read one request. `max_body` caps Content-Length AND the actual read.
 pub fn read_request<R: BufRead>(
     r: &mut R,
     max_body: u64,
 ) -> std::result::Result<Request, HttpError> {
-    let mut line = String::new();
-    let n = r
-        .read_line(&mut line)
-        .map_err(|e| err(400, format!("request line read: {e}")))?;
-    if n == 0 {
+    let line = read_bounded_line(r, MAX_REQUEST_LINE)
+        .map_err(|e| err(read_error_status(&e), format!("request line read: {e}")))?;
+    let Some(line) = line else {
         return Err(err(400, "empty request (connection closed)"));
-    }
-    if n > MAX_REQUEST_LINE {
-        return Err(err(400, "request line too long"));
-    }
+    };
     let line = line.trim_end();
     let mut parts = line.splitn(3, ' ');
     let method = parts.next().unwrap_or("").to_string();
@@ -89,31 +92,45 @@ pub fn read_request<R: BufRead>(
     }
 
     let mut headers = BTreeMap::new();
+    let mut header_count = 0usize;
     let mut header_total = 0usize;
     loop {
-        let mut hl = String::new();
-        let n = r
-            .read_line(&mut hl)
-            .map_err(|e| err(400, format!("header read: {e}")))?;
-        if n == 0 {
+        let remaining = MAX_HEADER_TOTAL.saturating_sub(header_total);
+        let hl = read_bounded_line(r, remaining)
+            .map_err(|e| err(read_error_status(&e), format!("header read: {e}")))?;
+        let Some(hl) = hl else {
             return Err(err(400, "connection closed inside headers"));
-        }
-        header_total += n;
-        if headers.len() > MAX_HEADER_COUNT || header_total > MAX_HEADER_TOTAL {
+        };
+        header_total += hl.len();
+        if header_total > MAX_HEADER_TOTAL {
             return Err(err(400, "too many/too large headers"));
         }
         let hl = hl.trim_end();
         if hl.is_empty() {
             break;
         }
+        header_count += 1;
+        if header_count > MAX_HEADER_COUNT {
+            return Err(err(400, "too many/too large headers"));
+        }
         let (k, v) = hl
             .split_once(':')
             .ok_or_else(|| err(400, format!("malformed header {hl:?}")))?;
-        let k = k.trim().to_ascii_lowercase();
-        if k.is_empty() {
-            return Err(err(400, "empty header name"));
+        if k.is_empty() || !k.bytes().all(is_field_name_byte) {
+            return Err(err(400, format!("malformed header name {k:?}")));
+        }
+        let k = k.to_ascii_lowercase();
+        if is_singleton_header(&k) && headers.contains_key(&k) {
+            return Err(err(400, format!("duplicate singleton HTTP header {k:?}")));
         }
         headers.insert(k, v.trim().to_string());
+    }
+
+    if headers.contains_key("transfer-encoding") && headers.contains_key("content-length") {
+        return Err(err(
+            400,
+            "Content-Length and Transfer-Encoding must not appear together",
+        ));
     }
 
     let body = if headers
@@ -129,15 +146,19 @@ pub fn read_request<R: BufRead>(
         match headers.get("content-length") {
             None => Vec::new(),
             Some(cl) => {
+                let cl = cl.trim();
+                if cl.is_empty() || !cl.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(err(400, format!("bad Content-Length {cl:?}")));
+                }
                 let len: u64 = cl
-                    .trim()
                     .parse()
                     .map_err(|_| err(400, format!("bad Content-Length {cl:?}")))?;
                 if len > max_body {
                     return Err(err(413, format!("body {len} exceeds limit {max_body}")));
                 }
                 let mut buf = vec![0u8; len as usize];
-                read_exact(r, &mut buf).map_err(|e| err(400, format!("body read: {e}")))?;
+                read_exact(r, &mut buf)
+                    .map_err(|e| err(read_error_status(&e), format!("body read: {e}")))?;
                 buf
             }
         }
@@ -151,6 +172,74 @@ pub fn read_request<R: BufRead>(
         headers,
         body,
     })
+}
+
+/// Read one line without allowing the input to grow the destination beyond its
+/// configured wire-byte limit. `read_line` allocates until a newline arrives,
+/// so it cannot enforce a limit that is checked only after the call returns.
+fn read_bounded_line<R: BufRead>(r: &mut R, max_len: usize) -> std::io::Result<Option<String>> {
+    let mut bytes = Vec::with_capacity(max_len.min(4096));
+    loop {
+        let next = {
+            let available = r.fill_buf()?;
+            if available.is_empty() {
+                None
+            } else {
+                let remaining = max_len.saturating_sub(bytes.len());
+                let inspect_len = available.len().min(remaining.saturating_add(1));
+                let newline = available[..inspect_len]
+                    .iter()
+                    .position(|byte| *byte == b'\n');
+                let (line_len, terminated) = match newline {
+                    Some(index) => (index + 1, true),
+                    None if available.len() <= remaining => (available.len(), false),
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "HTTP line exceeds its configured byte limit",
+                        ));
+                    }
+                };
+                if line_len > remaining {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "HTTP line exceeds its configured byte limit",
+                    ));
+                }
+                bytes.extend_from_slice(&available[..line_len]);
+                Some((line_len, terminated))
+            }
+        };
+        let Some((consumed, terminated)) = next else {
+            break;
+        };
+        r.consume(consumed);
+        if terminated {
+            break;
+        }
+    }
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "HTTP line is not UTF-8"))
+}
+
+fn is_field_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+}
+
+fn is_singleton_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "content-length"
+            | "content-type"
+            | "git-protocol"
+            | "host"
+            | "transfer-encoding"
+    ) || name == HDR_PROTOCOL
 }
 
 fn read_exact<R: BufRead>(r: &mut R, buf: &mut [u8]) -> std::io::Result<()> {
@@ -237,6 +326,7 @@ pub fn status_text(code: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         409 => "Conflict",
         411 => "Length Required",
         413 => "Payload Too Large",
@@ -357,6 +447,12 @@ mod tests {
             400
         );
         assert_eq!(
+            parse("POST /v1/x HTTP/1.1\r\nContent-Length: +0\r\n\r\n", 1024)
+                .unwrap_err()
+                .0,
+            400
+        );
+        assert_eq!(
             parse(
                 "POST /v1/x HTTP/1.1\r\nContent-Length: 10\r\n\r\nshort",
                 1024
@@ -379,6 +475,60 @@ mod tests {
             501
         );
         assert_eq!(parse("GET / HTTP/2.0\r\n\r\n", 1024).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn rejects_oversized_request_and_header_lines_with_bounded_reads() {
+        let request_line = format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(MAX_REQUEST_LINE + 1));
+        assert_eq!(parse(&request_line, 1024).unwrap_err().0, 400);
+
+        let header_line = format!(
+            "GET / HTTP/1.1\r\nX-Test: {}\r\n\r\n",
+            "x".repeat(MAX_HEADER_TOTAL + 1)
+        );
+        assert_eq!(parse(&header_line, 1024).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn counts_duplicate_header_lines_toward_the_header_limit() {
+        let mut request = String::from("GET / HTTP/1.1\r\n");
+        for _ in 0..=MAX_HEADER_COUNT {
+            request.push_str("X-Test: value\r\n");
+        }
+        request.push_str("\r\n");
+        assert_eq!(parse(&request, 1024).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn rejects_ambiguous_duplicate_singletons_and_body_framing() {
+        for request in [
+            "POST /x HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+            "POST /x HTTP/1.1\r\nTransfer-Encoding: identity\r\nTransfer-Encoding: chunked\r\n\r\n",
+            "POST /x HTTP/1.1\r\nContent-Length: 0\r\nTransfer-Encoding: identity\r\n\r\n",
+            "GET /x HTTP/1.1\r\nAuthorization: Bearer a\r\nAuthorization: Bearer b\r\n\r\n",
+            "GET /x HTTP/1.1\r\nGit-Protocol: version=0\r\nGit-Protocol: version=1\r\n\r\n",
+            "GET /x HTTP/1.1\r\nX-NewGit-Protocol: 1\r\nX-NewGit-Protocol: 2\r\n\r\n",
+        ] {
+            assert_eq!(parse(request, 1024).unwrap_err().0, 400, "{request:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_whitespace_in_http_field_names_but_keeps_extension_last_wins() {
+        for header in [
+            " Content-Length: 0",
+            "Content-Length : 0",
+            "Content-Length\t: 0",
+        ] {
+            let request = format!("POST /x HTTP/1.1\r\n{header}\r\n\r\n");
+            assert_eq!(parse(&request, 1024).unwrap_err().0, 400, "{header:?}");
+        }
+
+        let request = "GET /x HTTP/1.1\r\nX-Extra: first\r\nX-Extra: second\r\n\r\n";
+        assert_eq!(
+            parse(request, 1024).unwrap().header("x-extra"),
+            Some("second")
+        );
     }
 
     #[test]
@@ -428,6 +578,13 @@ mod tests {
         assert!(s.contains("Content-Length: 12\r\n"));
         assert!(s.contains(&format!("{HDR_PROTOCOL}: 1\r\n")));
         assert!(s.ends_with("\r\n\r\n{\"ok\":false}"));
+    }
+
+    #[test]
+    fn request_read_timeouts_map_to_408() {
+        let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "request deadline");
+        assert_eq!(read_error_status(&error), 408);
+        assert_eq!(status_text(408), "Request Timeout");
     }
 
     #[test]

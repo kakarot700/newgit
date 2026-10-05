@@ -2,6 +2,38 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-025 · Bound HTTP reads, framing, and request duration (2026-10-05)
+**Context:** The minimal HTTP/1.1 parser called `read_line` and checked its
+request-line/header caps only after the entire line had already been allocated.
+It also measured the header-count limit using unique map keys and retained
+last-value-wins behavior for fields used in authentication, protocol selection,
+content type, and message framing. The socket's existing 30-second timeout was
+per blocking operation, so a peer could send bytes inside every idle window and
+retain a connection worker for an unbounded duration.
+**Decision:** Read each line incrementally with its wire-byte budget applied
+before extending the buffer; count actual header field lines; accept only HTTP
+token syntax for field names (no whitespace before `:`); reject duplicate
+security/framing singleton fields and requests containing both
+`Content-Length` and `Transfer-Encoding`. Keep Content-Length-only body handling,
+explicitly refuse chunked transfer coding, and retain last-value-wins only for
+unrelated extension fields.
+Set one absolute request-read deadline from TCP accept, and apply only the
+remaining duration (capped by the 30-second idle timeout) to each request-line,
+header, and declared-body read. Expiry returns HTTP 408 and closes the connection.
+**Rationale:** Post-read size checks do not constrain peak allocation. Divergent
+handling of body-framing or auth fields can make a reverse proxy and the server
+interpret one request differently. [RFC 9112](https://httpwg.org/specs/rfc9112.html)
+requires rejection of whitespace before a field-name colon and permits servers
+to reject Content-Length/Transfer-Encoding ambiguity.
+**Consequences:** Requests retain the existing 16 KiB request-line, 64 KiB
+aggregate-header, 128-field, and configured body limits, now enforced during
+reading. Duplicate singleton fields receive HTTP 400; this intentionally favors
+unambiguous parsing over rare clients that repeat them. No wire protocol version,
+JSON schema, dependency, or Git adapter boundary changes. The default absolute
+request-read budget is five minutes; the 64 MiB body cap and separate 120-second
+Git child-process deadline are unchanged. The private connection-handler test
+path accepts a short injected deadline without adding an operator-facing option.
+
 ## D-024 · Opt-in exact protected Git refs require admin (2026-10-05)
 **Context:** The smart-HTTP receive-pack adapter already authenticates write
 requests and commits accepted canonical ref changes transactionally. Operators
