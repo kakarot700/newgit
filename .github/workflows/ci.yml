@@ -145,6 +145,9 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Focused Windows request-deadline regression
+        if: matrix.os == 'windows'
+        run: cargo test --locked --lib remote::server::request_deadline_tests::absolute_request_deadline_covers_headers_and_body_and_allows_normal_requests -- --exact
       - name: Native unit and integration tests
         run: cargo test --locked
       - name: Native release build
