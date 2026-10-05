@@ -62,6 +62,13 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   403 before disposable Git projection/import or canonical object promotion.
   Real-Git tests cover admin acceptance, writer denial, exact-name boundaries,
   and refusal of a mixed atomic push without changing refs or object inventory.
+- Hardened the separate receive-pack command parser: enforce Git's 65,520-byte
+  pkt-line ceiling, strict first-command capability framing, a 256-ref command
+  limit, and protocol-correct pack presence (including the valid empty pack for
+  creates/updates). Git remains responsible for pack checksums and object
+  validation. Added a deterministic 20,000-input parser fuzz regression and
+  live Git 2.43.0/Linux no-mutation cases for malformed framing, invalid refs,
+  truncated/corrupt packs, duplicate capability tokens, and over-limit pushes.
 
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and

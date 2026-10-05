@@ -90,3 +90,12 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x] CodeQL analysis — run 37182199239 completed successfully on the same commit
 - [x] CodeQL on portability implementation and follow-up — runs 37259546815, 37260495354, 37263992598, 37264635990, 37265829698, 37267038890, 37268005330, 37268942492, 37269773105, and 37271788478 completed successfully on their respective exact SHAs; each future source-bearing change needs its own analysis.
 - [x] tag-release workflow is configured to publish only on `v*` tags after the `dist` job; main-push preflight is not itself a test of tag publication
+
+## Follow-up source-change evidence — receive-pack parser hardening
+
+The bounded Git receive-pack parser change is a source-bearing follow-up after
+`c9ab4681ead4dbbb647b35af7fffe9fc9e9d23d2`; that earlier exact-SHA matrix does
+not certify this change. Local test and security-gate results are recorded in
+`TEST_MATRIX.md`. The final combined implementation/docs commit's six-target
+native CI, CodeQL, and packaging results are cited by exact SHA in the task
+completion report; no state-only follow-up commit is used to retrofit evidence.

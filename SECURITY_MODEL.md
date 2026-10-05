@@ -110,6 +110,11 @@ Defaults chosen for laptops; servers should tighten `max_request_bytes`.
   verify, signed objects roadmap).
 * zlib decompression cost bounded by `max_raw` but CPU cost of inflating
   ~limit bytes remains (DoS vector for anonymous servers ⇒ require auth).
+* Git receive-pack is delegated pack validation, not pack parsing: NewGit
+  validates a bounded command envelope (pkt-lines ≤65,520 bytes; at most 256
+  ref updates). The existing configurable HTTP body cap (64 MiB by default)
+  remains the outer request bound; Git validates pack version, checksum, and
+  object contents in the disposable projection.
 
 ## 8. Agent interfaces: Web UI + MCP (iteration 10)
 

@@ -192,3 +192,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - HARDENED: Validate names as exact supported branch/tag refs; reject patterns and malformed/unrepresentable names. Preflight every parsed command before disposable Git projection/import or canonical object promotion; reject mixed/atomic pushes without refs or object-inventory changes. Protect mapped canonical aliases too (`refs/heads/tags/X` and `refs/tags/X`), because NewGit cannot persist them as separate refs.
 - TESTED: Unit policy/grammar/status tests, repeated CLI flag rejection, and real Git 2.43.0/Linux smart-HTTP tests cover writer denial, admin branch/tag creates and deletes plus branch updates, no-op and neighboring-ref behavior, non-admin reads, exact 403, atomic all-or-none rejection, unchanged canonical inventory, and alias denial.
 - LOCAL GATES: Rust 1.99.0 `cargo fmt --all --check`, warnings-denied host and five-target Clippy, debug and release suites (**330 passed, 0 failed, 1 ignored each**), release build, cargo-audit, cargo-deny, SBOM drift, and `git diff --check` passed. Native feature evidence is reported only against the final commit's exact CI/CodeQL SHA; the prior `bbdc3c3` matrix is not treated as feature verification.
+
+## Iteration 16 — Adversarial receive-pack parser hardening  [x] · 2026-10-05
+- IMPLEMENTED: Bound the hand-rolled command envelope at Git's 65,520-byte
+  pkt-line maximum and 256 ref updates per request; require first-command
+  NUL/capability framing (including Git 2.43.0's one post-NUL separator space)
+  and enforce protocol-correct pack presence for updates versus deletion-only
+  batches. Pack checksums, object validation, and reachability remain delegated
+  to installed Git in the disposable projection; the HTTP body cap is unchanged.
+- TESTED: Fixed-seed 20,000-input parser fuzz/mutation suite; direct boundary
+  tests for truncation, capabilities, pack presence, max pkt-line and command
+  count; live Git 2.43.0/Linux malformed request cases assert no canonical refs
+  or objects change. The existing protected-ref writer-denial test now includes
+  a valid empty pack and continues to prove HTTP 403 preflight.
+- VALIDATION: Full debug/release tests, lint, audit/deny, SBOM, exact-SHA six-
+  target native CI, CodeQL, and packaging results are reported against the
+  implementation-and-docs commit; predecessor matrix evidence is not reused.

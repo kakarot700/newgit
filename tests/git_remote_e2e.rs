@@ -262,6 +262,26 @@ fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8
     read_http_status(&mut stream)
 }
 
+const EMPTY_GIT_PACK_V2: &[u8; 32] = b"PACK\x00\x00\x00\x02\x00\x00\x00\x00\x02\x9d\x08\x82\x3b\xd8\xa8\xea\xb5\x10\xad\x6a\xc7\x5c\x82\x3c\xfd\x3e\xd3\x1e";
+
+fn git_pkt_line(payload: &[u8]) -> Vec<u8> {
+    let length = payload.len() + 4;
+    assert!(
+        length <= 0xffff,
+        "test pkt-line must fit the four-byte header"
+    );
+    let mut packet = format!("{length:04x}").into_bytes();
+    packet.extend_from_slice(payload);
+    packet
+}
+
+fn git_receive_body(first_command: &[u8], trailing: &[u8]) -> Vec<u8> {
+    let mut body = git_pkt_line(first_command);
+    body.extend_from_slice(b"0000");
+    body.extend_from_slice(trailing);
+    body
+}
+
 #[cfg(target_os = "linux")]
 const SNAPSHOT_READER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(130);
 
@@ -1019,13 +1039,119 @@ fn real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http() {
         "Git should report the denied remote access"
     );
 
-    // Malformed receive-pack packets fail before any canonical NewGit mutation.
+    // Adversarial receive-pack framing fails safely and never changes canonical
+    // NewGit refs or objects. Git's pack decoder remains the authority for the
+    // pack version/checksum and object contents.
     let clean_objects = newgit.objects.iter().unwrap();
     let clean_refs = newgit.refs.list(None).unwrap();
     assert_eq!(
         raw_git_receive_post_status(server.addr(), &write_auth, b"000x"),
         400
     );
+    let zero_oid = "0000000000000000000000000000000000000000";
+    let command = format!("{zero_oid} {fetched_tip} refs/heads/parser-probe\0report-status\n");
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(command.as_bytes(), b""),
+        ),
+        400,
+        "create/update without even an empty pack must be rejected before Git projection"
+    );
+    let no_capability_separator =
+        format!("{zero_oid} {fetched_tip} refs/heads/no-capability-separator\n");
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(no_capability_separator.as_bytes(), EMPTY_GIT_PACK_V2),
+        ),
+        400
+    );
+    let multiple_nuls =
+        format!("{zero_oid} {fetched_tip} refs/heads/multiple-nuls\0report-status\0hidden\n");
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(multiple_nuls.as_bytes(), EMPTY_GIT_PACK_V2),
+        ),
+        400
+    );
+    let malformed_ref = format!("{zero_oid} {fetched_tip} refs/heads/../escape\0report-status\n");
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(malformed_ref.as_bytes(), EMPTY_GIT_PACK_V2),
+        ),
+        400
+    );
+    let mut invalid_utf8 = format!("{zero_oid} {fetched_tip} refs/heads/").into_bytes();
+    invalid_utf8.push(0xff);
+    invalid_utf8.extend_from_slice(b"\0report-status\n");
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(&invalid_utf8, EMPTY_GIT_PACK_V2),
+        ),
+        400
+    );
+    for special_length in [b"0001".as_slice(), b"0002", b"0003", b"0004"] {
+        let mut malformed = special_length.to_vec();
+        malformed.extend_from_slice(b"0000");
+        assert_eq!(
+            raw_git_receive_post_status(server.addr(), &write_auth, &malformed),
+            400,
+            "unexpected special/empty pkt-line {special_length:?}"
+        );
+    }
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(command.as_bytes(), b"PACK"),
+        ),
+        400,
+        "truncated pack header must be rejected before Git projection"
+    );
+
+    // A syntactically framed but invalid pack reaches Git's receive-pack
+    // validator. Duplicate capability tokens are passed through to Git; an
+    // unpack rejection must still leave canonical NewGit state untouched.
+    let duplicate_capabilities = format!(
+        "{zero_oid} {fetched_tip} refs/heads/duplicate-capabilities\0report-status report-status\n"
+    );
+    let mut invalid_pack = b"PACK".to_vec();
+    invalid_pack.extend_from_slice(&[0; 28]);
+    assert_eq!(
+        raw_git_receive_post_status(
+            server.addr(),
+            &write_auth,
+            &git_receive_body(duplicate_capabilities.as_bytes(), &invalid_pack),
+        ),
+        200,
+        "Git reports an unpack failure in its receive-pack status response"
+    );
+
+    // 257 small commands fit far below the configured 64 MiB request body
+    // cap, but exceed the independent per-push ref-work bound.
+    let mut too_many_commands = Vec::new();
+    for index in 0..257 {
+        let capability = if index == 0 { "\0report-status" } else { "" };
+        let line = format!("{zero_oid} {fetched_tip} refs/heads/too-many-{index}{capability}\n");
+        too_many_commands.extend_from_slice(&git_pkt_line(line.as_bytes()));
+    }
+    too_many_commands.extend_from_slice(b"0000");
+    too_many_commands.extend_from_slice(EMPTY_GIT_PACK_V2);
+    assert_eq!(
+        raw_git_receive_post_status(server.addr(), &write_auth, &too_many_commands),
+        413,
+        "command count is bounded independently of Content-Length"
+    );
+
     assert_eq!(newgit.refs.read("refs/main").unwrap(), s2);
     assert_eq!(newgit.objects.iter().unwrap(), clean_objects);
     assert_eq!(newgit.refs.list(None).unwrap(), clean_refs);
@@ -2218,6 +2344,7 @@ fn real_git_protected_refs_require_admin_and_reject_mixed_pushes_before_promotio
     let mut raw_update = format!("{:04x}", command.len() + 4).into_bytes();
     raw_update.extend_from_slice(command);
     raw_update.extend_from_slice(b"0000");
+    raw_update.extend_from_slice(EMPTY_GIT_PACK_V2);
     assert_eq!(
         raw_git_receive_post_status(server.addr(), &format!("Bearer {WRITE_TOKEN}"), &raw_update),
         403,

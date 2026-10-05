@@ -145,6 +145,17 @@ mismatched-lease rejection, matching `--force-with-lease` and `--force` success,
 forced atomic-batch rejection without canonical mutation, and post-force
 clone/fetch; other versions/platforms are not claimed.
 
+The hand-rolled receive-pack command envelope is deliberately bounded: every
+pkt-line is at most 65,520 bytes including its header, and a request may update
+at most 256 refs (larger command lists return HTTP 413, independently of
+`--max-body`). Only the first command may carry the NUL-delimited capability
+list; one leading space after that NUL is accepted because Git 2.43.0 emits it.
+Create/update requests require a packfile, including a valid empty pack when
+all objects are already present; deletion-only requests carry no packfile.
+Git itself validates pack format, checksum, and object contents in the
+disposable projection. The configured request body cap remains 64 MiB by
+default. Evidence: `src/remote/git_receive.rs::tests::fuzz_receive_pack_parser_never_panics_or_accepts_unbounded_command_sets` and `tests/git_remote_e2e.rs::real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http` (Git 2.43.0/Linux).
+
 The adapter materializes the full Git view independently for every discovery
 and POST request. Git's pack negotiation can reduce transferred bytes, but it
 does not avoid that full-history export. Both inbound request bodies and

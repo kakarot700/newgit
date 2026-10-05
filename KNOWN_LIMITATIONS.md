@@ -327,3 +327,13 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     outside Linux falls back to age, and case-collision preflight does not model
     every Unicode normalization/case-folding rule of every filesystem. These
     limitations are not waived by successful compilation alone.
+40. **Git receive-pack requests have bounded command scale.** One request may
+    contain at most 256 ref updates; larger command lists are rejected with
+    HTTP 413, independently of the configurable HTTP body cap (64 MiB by
+    default). Each pkt-line is limited to Git's 65,520-byte maximum. A batch
+    containing creates/updates requires a packfile (including a valid empty
+    pack); a deletion-only batch carries none. The installed Git executable
+    validates pack format, checksum, and objects. Very large `git push --all`,
+    `--tags`, or `--mirror` operations that exceed 256 ref commands must be
+    split into smaller pushes. Live client evidence is Git 2.43.0/Linux; other
+    client versions/platforms are not newly established by this parser test.

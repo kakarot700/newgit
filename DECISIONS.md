@@ -514,3 +514,26 @@ Realizes D-007. Chosen after implementing and testing both directions:
   supply chain); GraphQL/gRPC agent API (new deps, new surface — JSON/HTTP
   v1 already normative); MCP over HTTP+SSE (port exposure, auth story —
   stdio is the safe default); UI write operations (see above).
+
+## D-019 · Bounded receive-pack command envelope; Git owns pack validation (2026-10-05)
+
+- Keep Git smart HTTP as a separate adapter and retain the installed Git
+  `receive-pack` as the authority for pack version, checksum, object contents,
+  and reachability. NewGit parses only the bounded command envelope needed for
+  ref policy and atomic canonical import; no new pack parser or dependency.
+- Enforce the protocol pkt-line ceiling of 65,520 bytes and a fixed 256-ref
+  update limit per request, in addition to the existing configurable HTTP body
+  cap (64 MiB by default) and 120-second deadline. The request-level cap bounds
+  per-ref conflict/policy/preflight work rather than relying on Content-Length
+  alone; over-limit command batches return HTTP 413.
+- Require the first update command's NUL-delimited capability field, accept
+  one leading SP after that NUL because Git 2.43.0 emits it, and reject
+  additional NUL/capability framing on later commands. Creates/updates always
+  carry a pack, even an empty pack when all objects already exist; deletion-
+  only batches carry no pack. Git validates the pack bytes in the disposable
+  projection before NewGit promotes objects or refs.
+- Evidence: deterministic 20,000-input fixed-seed parser mutation test, targeted
+  unit cases, and live Git 2.43.0/Linux malformed-request no-mutation coverage.
+  Very large pushes exceeding 256 ref commands must be split; other client
+  versions/platforms remain unestablished. No change to the canonical object
+  model, JSON protocol, or adapter boundary.

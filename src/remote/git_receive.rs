@@ -21,6 +21,10 @@ use crate::repo::Repo;
 const GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
 const RECEIVE_PACK_ANNOUNCEMENT: &[u8] = b"001f# service=git-receive-pack\n0000";
 const ZERO_SHA1: &str = "0000000000000000000000000000000000000000";
+/// protocol-common caps a pkt-line at 65,520 bytes including its four-byte header.
+const MAX_PKT_LINE_LENGTH: usize = 65_520;
+/// Bound per-ref validation/projection work independently of the HTTP body cap.
+const MAX_PUSH_COMMANDS: usize = 256;
 
 #[derive(Debug)]
 struct PushCommand {
@@ -342,37 +346,71 @@ fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
         if length == 0 {
             break;
         }
-        if length < 4 || length > request.len().saturating_sub(offset) + 4 {
+        if !(4..=MAX_PKT_LINE_LENGTH).contains(&length) {
+            return Err(Error::Protocol(
+                "invalid receive-pack pkt-line length (expected 4..=65520)".into(),
+            ));
+        }
+        if commands.len() >= MAX_PUSH_COMMANDS {
+            return Err(Error::Limit(format!(
+                "receive-pack request exceeds the {MAX_PUSH_COMMANDS}-ref command limit"
+            )));
+        }
+        let payload_length = length - 4;
+        if payload_length > request.len().saturating_sub(offset) {
             return Err(Error::Protocol(
                 "invalid or truncated receive-pack pkt-line".into(),
             ));
         }
-        let end = offset + length - 4;
+        let end = offset + payload_length;
         let packet = &request[offset..end];
         offset = end;
-        let command_bytes = packet.split(|byte| *byte == 0).next().unwrap_or_default();
+
+        let command_bytes = if first {
+            let Some(separator) = packet.iter().position(|byte| *byte == 0) else {
+                return Err(Error::Protocol(
+                    "first receive-pack command is missing its capability separator".into(),
+                ));
+            };
+            let capabilities = &packet[separator + 1..];
+            validate_receive_pack_capabilities(capabilities)?;
+            &packet[..separator]
+        } else {
+            if packet.contains(&0) {
+                return Err(Error::Protocol(
+                    "only the first receive-pack command may carry capabilities".into(),
+                ));
+            }
+            packet
+        };
         let command_line = command_bytes.strip_suffix(b"\n").unwrap_or(command_bytes);
         let command_text = std::str::from_utf8(command_line)
             .map_err(|_| Error::Protocol("receive-pack command is not UTF-8".into()))?;
-        if first && command_text.starts_with("push-cert ") {
+        if first && (command_line == b"push-cert" || command_line.starts_with(b"push-cert ")) {
             return Err(Error::Invalid("signed Git pushes are not supported".into()));
         }
         first = false;
-        let fields: Vec<&str> = command_text.split(' ').collect();
-        if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+        let mut fields = command_text.split(' ');
+        let old_oid = fields.next().unwrap_or_default();
+        let new_oid = fields.next().unwrap_or_default();
+        let ref_name = fields.next().unwrap_or_default();
+        if old_oid.is_empty()
+            || new_oid.is_empty()
+            || ref_name.is_empty()
+            || fields.next().is_some()
+        {
             return Err(Error::Protocol(
                 "malformed receive-pack update command".into(),
             ));
         }
-        validate_sha1(fields[0])?;
-        validate_sha1(fields[1])?;
-        let ref_name = fields[2];
+        validate_sha1(old_oid)?;
+        validate_sha1(new_oid)?;
         if !ref_name.starts_with("refs/heads/") && !ref_name.starts_with("refs/tags/") {
             return Err(Error::Invalid(
                 "Git push supports refs/heads/* and lightweight refs/tags/* only; other refs are refused".into(),
             ));
         }
-        if fields[0] == ZERO_SHA1 && fields[1] == ZERO_SHA1 {
+        if old_oid == ZERO_SHA1 && new_oid == ZERO_SHA1 {
             return Err(Error::Invalid(
                 "receive-pack command cannot create or delete a ref from the zero object ID".into(),
             ));
@@ -383,8 +421,8 @@ fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
             )));
         }
         commands.push(PushCommand {
-            old_oid: fields[0].to_string(),
-            new_oid: fields[1].to_string(),
+            old_oid: old_oid.to_string(),
+            new_oid: new_oid.to_string(),
             ref_name: ref_name.to_string(),
         });
     }
@@ -393,15 +431,45 @@ fn parse_push_command(request: &[u8]) -> Result<Vec<PushCommand>> {
             "receive-pack request contains no ref updates".into(),
         ));
     }
-    // Git may legitimately omit the pack when a newly created ref points to
-    // an object already present on the server. Non-empty trailing data must
-    // still be a pack; Git validates its contents and reachability.
-    if !request[offset..].is_empty() && !request[offset..].starts_with(b"PACK") {
+    let pack = &request[offset..];
+    let deletion_only = commands.iter().all(|command| command.new_oid == ZERO_SHA1);
+    if deletion_only && !pack.is_empty() {
         return Err(Error::Protocol(
-            "receive-pack update has invalid trailing data (expected a Git packfile)".into(),
+            "receive-pack deletion-only request must not include a packfile".into(),
         ));
     }
+    if !deletion_only && pack.is_empty() {
+        return Err(Error::Protocol(
+            "receive-pack create/update requires a Git packfile, including an empty pack".into(),
+        ));
+    }
+    if !pack.is_empty() && (pack.len() < 32 || !pack.starts_with(b"PACK")) {
+        return Err(Error::Protocol(
+            "receive-pack update has invalid trailing data (expected a complete Git packfile header)".into(),
+        ));
+    }
+    // Git validates the pack's version, checksum, objects, and reachability.
     Ok(commands)
+}
+
+fn validate_receive_pack_capabilities(capabilities: &[u8]) -> Result<()> {
+    let capabilities = capabilities.strip_suffix(b"\n").unwrap_or(capabilities);
+    // Git 2.43 send-pack emits NUL followed by one separating SP before the
+    // capability tokens; accept that observed wire form, but no extra spaces.
+    let capabilities = capabilities.strip_prefix(b" ").unwrap_or(capabilities);
+    if capabilities
+        .iter()
+        .any(|byte| !(*byte == b' ' || (0x21..=0x7e).contains(byte)))
+        || (!capabilities.is_empty()
+            && (capabilities[0] == b' '
+                || capabilities[capabilities.len() - 1] == b' '
+                || capabilities.windows(2).any(|pair| pair == b"  ")))
+    {
+        return Err(Error::Protocol(
+            "malformed receive-pack capability list".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sha1(oid: &str) -> Result<()> {
@@ -769,13 +837,15 @@ mod tests {
     use super::{
         authorize_protected_updates, ensure_no_ref_name_conflict, parse_push_command,
         validate_git_protocol, validate_lightweight_tag_target, validate_protected_ref,
-        validate_sha1, PushCommand, ZERO_SHA1,
+        validate_sha1, PushCommand, MAX_PKT_LINE_LENGTH, MAX_PUSH_COMMANDS, ZERO_SHA1,
     };
     use crate::error::Error;
     use crate::remote::auth::Role;
     use crate::repo::txn::{self, Cas, RefLogEntry, TxnOp};
     use crate::repo::Repo;
     use std::collections::HashSet;
+
+    const EMPTY_PACK_V2: &[u8] = b"PACK\x00\x00\x00\x02\x00\x00\x00\x00\x02\x9d\x08\x82\x3b\xd8\xa8\xea\xb5\x10\xad\x6a\xc7\x5c\x82\x3c\xfd\x3e\xd3\x1e";
 
     fn pkt(payload: &[u8]) -> Vec<u8> {
         let length = payload.len() + 4;
@@ -786,7 +856,14 @@ mod tests {
 
     fn request(command: &[u8]) -> Vec<u8> {
         let mut out = pkt(command);
-        out.extend_from_slice(b"0000PACK");
+        out.extend_from_slice(b"0000");
+        out.extend_from_slice(EMPTY_PACK_V2);
+        out
+    }
+
+    fn deletion_request(command: &[u8]) -> Vec<u8> {
+        let mut out = pkt(command);
+        out.extend_from_slice(b"0000");
         out
     }
 
@@ -840,14 +917,16 @@ mod tests {
         multi.extend_from_slice(&pkt(
             format!("{ZERO_SHA1} {second} refs/heads/other\n").as_bytes()
         ));
-        multi.extend_from_slice(b"0000PACK");
+        multi.extend_from_slice(b"0000");
+        multi.extend_from_slice(EMPTY_PACK_V2);
         let parsed = parse_push_command(&multi).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].ref_name, "refs/heads/main");
         assert_eq!(parsed[1].ref_name, "refs/heads/other");
 
-        let deletion =
-            request(format!("{new} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes());
+        let deletion = deletion_request(
+            format!("{new} {ZERO_SHA1} refs/heads/main\0report-status\n").as_bytes(),
+        );
         let parsed_deletion = parse_push_command(&deletion).unwrap();
         assert_eq!(parsed_deletion.len(), 1);
         assert_eq!(parsed_deletion[0].old_oid, new);
@@ -867,26 +946,193 @@ mod tests {
         duplicate.extend_from_slice(&pkt(
             format!("{ZERO_SHA1} {second} refs/heads/main\n").as_bytes()
         ));
-        duplicate.extend_from_slice(b"0000PACK");
+        duplicate.extend_from_slice(b"0000");
+        duplicate.extend_from_slice(EMPTY_PACK_V2);
         assert!(parse_push_command(&duplicate).is_err());
     }
 
     #[test]
     fn rejects_malformed_pkt_lines_and_non_sha1_ids() {
+        use super::validate_receive_pack_capabilities;
+
         assert!(parse_push_command(b"000x").is_err());
+        for invalid in [&b"0001"[..], &b"0002"[..], &b"0003"[..], &b"0004"[..]] {
+            assert!(parse_push_command(invalid).is_err(), "{invalid:?}");
+        }
         assert!(parse_push_command(b"0008x").is_err());
         assert!(validate_sha1("not-an-object-id").is_err());
+        assert!(validate_receive_pack_capabilities(b"report-status\0atomic\n").is_err());
+        assert!(validate_receive_pack_capabilities(b"report-status\xff\n").is_err());
+        assert!(validate_receive_pack_capabilities(b" report-status\n").is_ok());
+        assert!(validate_receive_pack_capabilities(b"  report-status\n").is_err());
+        assert!(validate_receive_pack_capabilities(b"report-status  atomic\n").is_err());
     }
 
     #[test]
-    fn permits_an_omitted_pack_for_an_object_already_on_the_server() {
+    fn enforces_protocol_pack_presence_and_minimum_pkt_and_pack_bounds() {
         let new = "1234567890123456789012345678901234567890";
-        let mut body =
-            pkt(format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n").as_bytes());
+        let command = format!("{ZERO_SHA1} {new} refs/heads/main\0report-status\n");
+        let mut missing_pack = pkt(command.as_bytes());
+        missing_pack.extend_from_slice(b"0000");
+        assert!(parse_push_command(&missing_pack).is_err());
+
+        let valid_pack = request(command.as_bytes());
+        assert_eq!(parse_push_command(&valid_pack).unwrap()[0].new_oid, new);
+
+        let delete = format!("{new} {ZERO_SHA1} refs/heads/main\0report-status\n");
+        assert!(parse_push_command(&deletion_request(delete.as_bytes())).is_ok());
+        assert!(parse_push_command(&request(delete.as_bytes())).is_err());
+
+        let mut short_pack = pkt(command.as_bytes());
+        short_pack.extend_from_slice(b"0000PACK");
+        assert!(parse_push_command(&short_pack).is_err());
+
+        let mut bad_trailer = pkt(command.as_bytes());
+        bad_trailer.extend_from_slice(b"0000not-a-pack");
+        assert!(parse_push_command(&bad_trailer).is_err());
+
+        let mut oversized_line = pkt(&vec![b'x'; MAX_PKT_LINE_LENGTH - 3]);
+        assert!(parse_push_command(&oversized_line).is_err());
+        oversized_line.clear();
+        oversized_line.extend_from_slice(b"ffff");
+        oversized_line.extend_from_slice(b"short");
+        assert!(parse_push_command(&oversized_line).is_err());
+    }
+
+    #[test]
+    fn enforces_receive_pack_capability_and_command_line_framing() {
+        let oid = "1234567890123456789012345678901234567890";
+        let command = format!("{ZERO_SHA1} {oid} refs/heads/main");
+
+        // The first update carries one NUL-separated capability list; later
+        // updates carry only command bytes. Duplicate capability tokens are
+        // left to Git's capability semantics and do not change parsed refs.
+        let duplicate_capabilities =
+            request(format!("{command}\0report-status report-status\n").as_bytes());
+        assert_eq!(
+            parse_push_command(&duplicate_capabilities).unwrap().len(),
+            1
+        );
+
+        for malformed in [
+            format!("{command}\n"),
+            format!("{command}\0report-status\0hidden\n"),
+            format!("{command}\0report-status\u{00ff}\n"),
+        ] {
+            let mut body = pkt(malformed.as_bytes());
+            body.extend_from_slice(b"0000");
+            body.extend_from_slice(EMPTY_PACK_V2);
+            assert!(parse_push_command(&body).is_err(), "{malformed:?}");
+        }
+
+        let mut second_command_has_capabilities =
+            pkt(format!("{command}\0report-status\n").as_bytes());
+        second_command_has_capabilities.extend_from_slice(&pkt(format!(
+            "{ZERO_SHA1} {oid} refs/heads/other\0atomic\n"
+        )
+        .as_bytes()));
+        second_command_has_capabilities.extend_from_slice(b"0000");
+        second_command_has_capabilities.extend_from_slice(EMPTY_PACK_V2);
+        assert!(parse_push_command(&second_command_has_capabilities).is_err());
+
+        let signed = request(b"push-cert\0report-status\n");
+        assert!(parse_push_command(&signed)
+            .unwrap_err()
+            .to_string()
+            .contains("signed Git pushes are not supported"));
+    }
+
+    #[test]
+    fn excessive_receive_pack_command_lists_are_bounded() {
+        let mut body = Vec::new();
+        for index in 0..=MAX_PUSH_COMMANDS {
+            let oid = format!("{:040x}", index + 1);
+            let capability = if index == 0 { "\0report-status" } else { "" };
+            body.extend_from_slice(&pkt(format!(
+                "{ZERO_SHA1} {oid} refs/heads/command-{index}{capability}\n"
+            )
+            .as_bytes()));
+        }
         body.extend_from_slice(b"0000");
-        let parsed = parse_push_command(&body).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].new_oid, new);
+        body.extend_from_slice(EMPTY_PACK_V2);
+        assert!(matches!(parse_push_command(&body), Err(Error::Limit(_))));
+    }
+
+    #[test]
+    fn fuzz_receive_pack_parser_never_panics_or_accepts_unbounded_command_sets() {
+        fn next(state: &mut u64) -> u64 {
+            let mut value = *state;
+            value ^= value >> 12;
+            value ^= value << 25;
+            value ^= value >> 27;
+            *state = value;
+            value.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn check(input: &[u8]) {
+            if let Ok(commands) = parse_push_command(input) {
+                assert!(commands.len() <= MAX_PUSH_COMMANDS);
+                let _ = authorize_protected_updates(&commands, &HashSet::new(), Role::Write);
+            }
+        }
+
+        let oid = "1234567890123456789012345678901234567890";
+        let one = request(
+            format!(
+                "{ZERO_SHA1} {oid} refs/heads/fuzz\0report-status side-band-64k agent=git/2.43.0\n"
+            )
+            .as_bytes(),
+        );
+        let mut two = pkt(format!("{ZERO_SHA1} {oid} refs/heads/one\0report-status\n").as_bytes());
+        two.extend_from_slice(&pkt(
+            format!("{ZERO_SHA1} {oid} refs/heads/two\n").as_bytes()
+        ));
+        two.extend_from_slice(b"0000");
+        two.extend_from_slice(EMPTY_PACK_V2);
+        let deletion = deletion_request(
+            format!("{oid} {ZERO_SHA1} refs/tags/fuzz\0report-status\n").as_bytes(),
+        );
+        let templates = [
+            one,
+            two,
+            deletion,
+            b"0000".to_vec(),
+            b"0001".to_vec(),
+            b"0002".to_vec(),
+            b"0003".to_vec(),
+            b"0004".to_vec(),
+            b"000x".to_vec(),
+            b"fffftruncated".to_vec(),
+        ];
+        let prefixes: [&[u8]; 8] = [
+            b"0000", b"0001", b"0002", b"0003", b"0004", b"000x", b"ffff", b"PACK",
+        ];
+        let mut rng = 0xF00F_0009_u64;
+        for iteration in 0..20_000 {
+            if iteration % 2 == 0 {
+                let length = (next(&mut rng) % 4097) as usize;
+                let mut input = Vec::with_capacity(length);
+                while input.len() < length {
+                    input.extend_from_slice(&next(&mut rng).to_le_bytes());
+                }
+                input.truncate(length);
+                if input.len() >= 4 {
+                    let prefix = prefixes[iteration % prefixes.len()];
+                    input[..4].copy_from_slice(prefix);
+                }
+                check(&input);
+            } else {
+                let mut input = templates[iteration % templates.len()].clone();
+                let edits = (next(&mut rng) % 9 + 1) as usize;
+                for _ in 0..edits {
+                    if !input.is_empty() {
+                        let index = (next(&mut rng) as usize) % input.len();
+                        input[index] = next(&mut rng) as u8;
+                    }
+                }
+                check(&input);
+            }
+        }
     }
 
     #[test]
