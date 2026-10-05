@@ -2,10 +2,10 @@
 
 > Machine-and-human readable continuation state. Updated at the end of every
 > iteration. If context is lost, resume from this file.
-
+>
 ## Current status
 
-- **Phase:** The original implementation and v0.1.0 publication are complete. HTTP framing/deadline hardening was published at immutable SHA `d272befba35db78452527641e0206b391d63c14f`; its Windows-only test-portability follow-up is `b2fc43ee332a343ddfac444399dcdc8805e91352` (test/CI only; production behavior unchanged). Native checks passed on all six targets, the security/SBOM job and CodeQL passed, but the hosted reproducible-package job was cancelled without steps/logs on the final same-SHA attempt. Keep the release gate pending; details and attempt history follow.
+- **Phase:** The original implementation and v0.1.0 publication are complete. HTTP framing/deadline hardening remains at immutable implementation SHA `d272befba35db78452527641e0206b391d63c14f`; the Windows portability and ARM64 test-timing follow-ups change tests/CI only. Current documentation-only `main` SHA `c20ecff6b5a28f98f7cb9a95fc0053563ab5c949` passed its full exact-SHA matrix and reproducible-package gate on CI run 37380464977 attempt 2, with CodeQL run 37380465174 also passing. Production behavior is unchanged; preserve earlier failed attempts in the verification history below.
 - **Public repository:** [kakarot700/newgit](https://github.com/kakarot700/newgit), public, default branch `main`; the original 12 implementation commits remain in its history.
 - **Classification:** **PRODUCTION-CANDIDATE**, pre-1.0 and not a blanket Production Ready certification.
 - **Hosted verification:** the publication baseline passed GitHub CI run [37182199247](https://github.com/kakarot700/newgit/actions/runs/37182199247) and CodeQL run [37182199239](https://github.com/kakarot700/newgit/actions/runs/37182199239) on Ubuntu 24.04 commit `afa94c4`. The detached-HEAD/ref-integrity implementation commit `6ca3eec9b2e65b77e6e975127868bcec9079231a` was pushed to `main`; GitHub CI run [37200186462](https://github.com/kakarot700/newgit/actions/runs/37200186462) and CodeQL run [37200186384](https://github.com/kakarot700/newgit/actions/runs/37200186384) both completed successfully on that exact SHA.

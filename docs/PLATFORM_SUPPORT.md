@@ -141,3 +141,10 @@ shared checks and dependency/SBOM passed. `dist` was skipped after each native
 matrix failure. [CodeQL 37376156803](https://github.com/kakarot700/newgit/actions/runs/37376156803)
 passed. The follow-up changes only test portability/timing and documentation;
 production behavior is unchanged. Release readiness remains pending.
+
+
+## Current exact-SHA native evidence — Windows deadline follow-up (`c20ecff`)
+
+On exact SHA `c20ecff6b5a28f98f7cb9a95fc0053563ab5c949`, [CI run 37380464977 attempt 2](https://github.com/kakarot700/newgit/actions/runs/37380464977/attempts/2) passed all six native targets and their full test/build/artifact steps. Both Windows jobs passed the focused request-deadline regression before the full suite: [Windows x86_64 job 112005430166](https://github.com/kakarot700/newgit/actions/runs/37380464977/job/112005430166) and [Windows ARM64 job 112005430010](https://github.com/kakarot700/newgit/actions/runs/37380464977/job/112005430010). Their complete suites, including real-Git force-push coverage, passed. Linux x86_64/ARM64 and macOS x86_64/ARM64 also passed in that run.
+
+The shared checks, dependency/SBOM job, and dependent reproducible distribution-package gate passed on the same SHA; the exact-SHA [CodeQL run 37380465174](https://github.com/kakarot700/newgit/actions/runs/37380465174) passed. Attempt 1's force-push HTTP 408 remains in the record; the logs do not expose per-request idle duration, and the passing same-SHA retry is not used to erase or relabel that failure. The Windows-specific peer-EOF handling is test-only; production code and timeout policy are unchanged.

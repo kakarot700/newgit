@@ -93,6 +93,12 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   from 550 ms to 1 s after ARM64 Linux hosted CI measured 552 ms under scheduler
   jitter. Functional deadline/408/close/worker and normal-request assertions are
   unchanged; no production timeout or transfer limit changed.
+- The full exact-SHA rerun on `c20ecff6b5a28f98f7cb9a95fc0053563ab5c949`
+  passed all six native targets, both focused Windows deadline steps and full
+  Windows suites, security/SBOM, CodeQL, and reproducible distribution packaging.
+  The earlier same-SHA Linux timing-bound miss and Windows force-push HTTP 408
+  remain recorded in `TEST_MATRIX.md`; the Windows log did not provide the
+  request's idle duration. No production code, timeout, version, or tag changed.
 - `import-git` now inspects ref object types before invoking `fast-export` and
   refuses ordinary refs that target non-commit objects, naming the ref/type and
   leaving refs untouched. Git 2.43.0 silently omits lightweight blob/tree refs,
