@@ -85,10 +85,11 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 - [x→partial] clean reproducible build + artifacts + checksums — iteration 11 ✅ (two clean release builds bit-identical same-host, sha256 recorded; scripts/dist.sh tarball + SHA256SUMS verified with `sha256sum -c`; cross-host reproducibility NOT claimed — KL #37)
 - [x] Native CI matrix and release gate defined — `.github/workflows/ci.yml`; actions pinned, least-privilege permissions; Linux x86_64/ARM64, macOS Intel/ARM64, Windows x86_64/ARM64. Each native job runs fmt, Clippy, the full debug suite, a release build, executes its staged CLI, and uploads a target-specific tar bundle with a checksummed binary and OS/architecture/build metadata. `dist` is gated on all six. The current tagged release archives remain Linux x86_64 GNU; other native binaries are CI verification artifacts.
 - **Per-commit support evidence:** classify a target as supported only after its native job passes on that exact source SHA. The current six-target certification is recorded in [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md); workflow configuration, cross-target compilation, and prior Linux-only runs do not establish other targets.
-- [x] Latest six-target exact-SHA matrix and release-package gate — source SHA `c9ab4681ead4dbbb647b35af7fffe9fc9e9d23d2`; [CI run 37271788464 attempt 2](https://github.com/kakarot700/newgit/actions/runs/37271788464) passed all six native jobs, shared checks, dependency/SBOM, and reproducible packaging; [CodeQL 37271788478](https://github.com/kakarot700/newgit/actions/runs/37271788478) passed on the same SHA. Attempt 1 had two Windows x86_64 smart-HTTP E2E failures; the full same-SHA retry passed without source changes. All six bundles passed archive, provenance, checksum, and Unix permission verification; exact hashes are in [PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md). Tag publication was not triggered by this main-branch push.
+- [x] Latest six-target native evidence — exact source SHA `b2fc43ee332a343ddfac444399dcdc8805e91352`; all six native jobs passed on [CI run 37361584544 attempt 5](https://github.com/kakarot700/newgit/actions/runs/37361584544/attempts/5), including the focused deadline regression and complete suite on both Windows architectures. Shared tests/build and dependency/SBOM passed; [CodeQL 37361584304](https://github.com/kakarot700/newgit/actions/runs/37361584304) passed on the same SHA. These are native and analysis results only, not a green overall release workflow.
+- [ ] Current exact-SHA reproducible release-package gate — **pending** for `b2fc43e`. In CI run 37361584544 attempts 4 and 5, the `dist` job was cancelled after approximately 15 minutes with no steps or logs; tagged publication was skipped. No hosted package pass exists for this SHA, so do not call the release gate green.
 - [x] CI green on hosted runner — CI run 37182199247 on commit `afa94c4`, with applicable check, security, and reproducible-distribution jobs successful
 - [x] CodeQL analysis — run 37182199239 completed successfully on the same commit
-- [x] CodeQL on portability implementation and follow-up — runs 37259546815, 37260495354, 37263992598, 37264635990, 37265829698, 37267038890, 37268005330, 37268942492, 37269773105, and 37271788478 completed successfully on their respective exact SHAs; each future source-bearing change needs its own analysis.
+- [x] CodeQL on portability implementation and follow-up — runs 37259546815, 37260495354, 37263992598, 37264635990, 37265829698, 37267038890, 37268005330, 37268942492, 37269773105, 37271788478, and 37361584304 completed successfully on their respective exact SHAs; each future source-bearing change needs its own analysis.
 - [x] tag-release workflow is configured to publish only on `v*` tags after the `dist` job; main-push preflight is not itself a test of tag publication
 
 ## Follow-up source-change evidence — receive-pack parser hardening
@@ -102,14 +103,14 @@ completion report; no state-only follow-up commit is used to retrofit evidence.
 
 ## Follow-up source-change evidence — bounded HTTP request parsing
 
-The HTTP/1.1 line-allocation and framing hardening is a source-bearing change
-after clean/synced predecessor `c0dd16dbc85f19fd827db1988d17bca045ba1621`.
-That SHA's CI and CodeQL do not certify the parser change. Local debug/release,
-lint, security, and SBOM results are recorded in `TEST_MATRIX.md`. The same
-source-bearing milestone now also includes an accept-start 300-second total
-request-read deadline covering headers and declared bodies; short-budget live
-socket tests prove drip-paced clients receive 408 and are closed while normal
-requests still succeed. The final combined source/docs commit's six-target
-native CI, CodeQL, and package results are cited against its exact SHA in the
-task completion report. The `c0dd16d` predecessor runs above do not certify any
-part of this combined source change.
+The HTTP/1.1 bounded-line, framing, and accept-start 300-second request-deadline
+implementation was published in `d272befba35db78452527641e0206b391d63c14f`,
+after predecessor `c0dd16dbc85f19fd827db1988d17bca045ba1621`. The published SHA
+remains unchanged. Exact-SHA verification exposed a Windows-only test oracle
+issue; the follow-up `b2fc43ee332a343ddfac444399dcdc8805e91352` changes only the
+test and adds a focused Windows CI step. Production server behavior is unchanged.
+See `TEST_MATRIX.md` for all predecessor failures, five same-SHA CI attempts,
+and the successful native/CodeQL/security results. The hosted `dist` package job
+was cancelled without steps or logs on attempts 4 and 5, so this source revision
+does not have a completed package gate. Keep release readiness pending; the
+existing `v0.1.0` tag was not moved and no `v0.1.1` tag was created.

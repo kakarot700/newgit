@@ -84,6 +84,11 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   separate 120-second Git child-process deadline are unchanged.
 
 ### Fixed
+- Made the live slow-request deadline regression portable on Windows. Native
+  Windows CI returned WSAETIMEDOUT (10060) on a final extra-byte read after the
+  complete 408/`Connection: close` response and worker join. The test now relies
+  on the framed response, elapsed deadline, and joined worker rather than that
+  post-join peer-EOF result; production server behavior did not change.
 - `import-git` now inspects ref object types before invoking `fast-export` and
   refuses ordinary refs that target non-commit objects, naming the ref/type and
   leaving refs untouched. Git 2.43.0 silently omits lightweight blob/tree refs,

@@ -234,3 +234,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   up to five minutes. Reverse proxies that buffer before connecting upstream
   must separately bound client header/body reception. These residuals are
   recorded in `KNOWN_LIMITATIONS.md` and `docs/DEPLOYMENT.md`.
+
+## Iteration 18 — Windows deadline-test portability correction [package gate pending] · 2026-10-06
+- PRESERVED: Published implementation SHA `d272befba35db78452527641e0206b391d63c14f` remains immutable. The normal fast-forward test-only follow-up is `b2fc43ee332a343ddfac444399dcdc8805e91352`; production code is unchanged.
+- FIXED: Windows may return WSAETIMEDOUT (10060) on a final extra-byte read after the complete 408 response and worker join. The test skips only that post-join peer-EOF probe on Windows; response status, `Connection: close`, deadline bounds, worker termination/join, and normal request assertions remain. CI runs this regression on both Windows targets before the full native suite.
+- LOCAL GATES: Debug/release each **340 passed, 0 failed, 1 ignored** across 20 binaries; formatting, host/five-target Clippy, RustSec, cargo-deny, SBOM drift, reproducible build, package archive, and checksum gates passed locally.
+- WORKFLOW LINT: actionlint v1.7.7's bundled label catalog flags `macos-15-intel` and `windows-11-arm` as unknown. Official GitHub hosted-runner documentation lists both labels, and exact-SHA native jobs passed on them. A temporary exact per-file ignore for those two diagnostics allowed actionlint to validate the rest of the workflow; no target assignment or repository config changed.
+- HOSTED EVIDENCE: On `b2fc43e`, both Windows focused tests and full suites passed, all six native jobs passed in attempts 3 and 5, dependency/SBOM passed in attempts 4 and 5, and CodeQL run 37361584304 passed. The overall workflow is not green: the hosted reproducible-package job was cancelled without steps/logs in attempts 4 and 5, so release readiness remains pending.
+- VERSIONING: This changes no shipped behavior; no `v0.1.1` tag was created, the existing `v0.1.0` tag was not moved, and Cargo remains `0.1.0`.

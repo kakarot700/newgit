@@ -17,9 +17,9 @@ The authoritative evidence for a commit is its actual native matrix run in [GitH
 
 Current tagged release archives are Linux x86_64 GNU only. The native per-target CI binaries are verification artifacts and are not currently published as release archives.
 
-## Current exact-SHA certification — 2026-10-05
+## Last fully green exact-SHA certification — 2026-10-05
 
-The tested runtime source revision is `c9ab4681ead4dbbb647b35af7fffe9fc9e9d23d2`. [CI run 37271788464, attempt 2](https://github.com/kakarot700/newgit/actions/runs/37271788464) passed all six native jobs, shared formatting/lint/test/build, dependency/SBOM and advisory checks, and the reproducible release-package gate. [CodeQL run 37271788478](https://github.com/kakarot700/newgit/actions/runs/37271788478) passed on the same SHA. Attempt 1 of the same CI run failed two Windows x86_64 smart-HTTP E2Es (a shallow-fetch HTTP 400 and a connection abort); attempt 2 reran the full workflow on the identical SHA without source changes and passed. Both observations are retained.
+The last source revision with a fully green six-target and package gate was `c9ab4681ead4dbbb647b35af7fffe9fc9e9d23d2`. [CI run 37271788464, attempt 2](https://github.com/kakarot700/newgit/actions/runs/37271788464) passed all six native jobs, shared formatting/lint/test/build, dependency/SBOM and advisory checks, and the reproducible release-package gate. [CodeQL run 37271788478](https://github.com/kakarot700/newgit/actions/runs/37271788478) passed on the same SHA. Attempt 1 of the same CI run failed two Windows x86_64 smart-HTTP E2Es (a shallow-fetch HTTP 400 and a connection abort); attempt 2 reran the full workflow on the identical SHA without source changes and passed. Both observations are retained.
 
 | Target | Native job ID | Bundle SHA-256 |
 |---|---:|---|
@@ -107,3 +107,21 @@ Commit `45b3c5b1817172cbd41c11136bcc1280401fb41c` ran as [CI 37269773137](https:
 * Token files get best-effort mode `0600` on Unix. On Windows, their access control comes from the containing directory's inherited ACL; NewGit does not inspect or change that ACL.
 * File contents are synced before rename, but directory fsync is best-effort. Locking now uses stable kernel advisory-lock files and releases on process exit; all concurrent processes must use the same lock protocol, and network-filesystem lock/atomicity behavior is not established. The adversarial smart-HTTP mid-transaction snapshot test is Linux-only. Exact-SHA c9ab468 passed all six native jobs and the dependent package gate; the certification above is limited to that tested source revision, and network-filesystem locking/durability remains unestablished.
 * Git interoperability is exercised with the installed Git on each native runner when its job runs; local detailed baseline evidence is Git 2.43.0/Linux. The workflow requires Git 2.34.0 or newer for the SSH-signature fixtures, but that requirement is not a claim that every Git feature is compatible from that version onward.
+
+## Latest native matrix evidence — Windows test-only correction (2026-10-06)
+
+The exact source SHA `b2fc43ee332a343ddfac444399dcdc8805e91352` has successful
+native evidence for all six targets in [CI run 37361584544, attempt 3](https://github.com/kakarot700/newgit/actions/runs/37361584544/attempts/3). The native jobs completed their full suites, release builds, and staged-binary checks; the Windows jobs also ran the focused deadline regression first.
+
+| Target | Native job ID | Result on `b2fc43e` |
+|---|---:|---|
+| Linux x86_64 | [111949257369](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949257369) | Passed |
+| Linux ARM64 | [111949257059](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949257059) | Passed |
+| macOS x86_64 | [111949257133](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949257133) | Passed |
+| macOS ARM64 | [111949257062](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949257062) | Passed |
+| Windows x86_64 | [111949256914](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949256914) | Focused deadline test and full suite passed |
+| Windows ARM64 | [111949256918](https://github.com/kakarot700/newgit/actions/runs/37361584544/job/111949256918) | Focused deadline test and full suite passed |
+
+The Windows-focused tests and both native suites also passed on [attempt 5](https://github.com/kakarot700/newgit/actions/runs/37361584544/attempts/5); the exact-SHA [CodeQL run 37361584304](https://github.com/kakarot700/newgit/actions/runs/37361584304) passed. This is native platform evidence, not a green release gate: the overall CI run remained failed because the dependent reproducible-package job was cancelled without steps or logs on attempts 4 and 5. No package hashes or release artifacts are claimed for `b2fc43e`.
+
+Standalone `actionlint` v1.7.7 does not recognize `macos-15-intel` and `windows-11-arm` in its bundled runner-label catalog and reports them as unknown. [GitHub's official runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) lists both as standard hosted labels; the GitHub-hosted jobs above also ran on these labels. An isolated temporary config suppressed only those two runner-label diagnostics, after which actionlint passed the remaining workflow checks. No runner targets or checked-in actionlint configuration were changed.
