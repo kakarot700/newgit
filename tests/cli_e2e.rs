@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::git_config_null_device;
+use common::git_config_file;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -929,8 +929,9 @@ fn import_export_git_cli() {
             .arg("-C")
             .arg(&gdir)
             .args(args)
-            .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-            .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+            .env("GIT_CONFIG_GLOBAL", git_config_file())
+            .env("GIT_CONFIG_SYSTEM", git_config_file())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .unwrap();
         assert!(

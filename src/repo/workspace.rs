@@ -95,7 +95,6 @@ pub fn lock(repo: &Repo, name: &str) -> Result<fsx::FileLock> {
     fsx::FileLock::acquire(
         &md.join("OP"),
         Duration::from_millis(repo.limits().lock_wait_ms),
-        Duration::from_secs(repo.limits().lock_stale_s),
     )
 }
 

@@ -47,9 +47,11 @@ directory they are pointed at.
    trailing dots/spaces; checkout preflights all tree paths and case-folded
    collisions on Windows/default macOS targets before writing.
 5. Config: unknown keys/versions rejected (fail loudly, not silently ignore).
-6. Locks: `O_EXCL` creation; Linux does not reclaim a lock with a live recorded
-   PID merely because it is old. On non-Linux platforms, a recorded lock falls
-   back to the configured age timeout; see the platform boundary below.
+6. Locks: `fs4` whole-file OS advisory locks on stable `.lock` files. The kernel
+   releases ownership when the owning process/handle exits; NewGit never reads
+   or writes sidecar contents, acquisition waits at most `lock_wait_ms`, and
+   paths are never unlinked. Verification ignores legacy owner text. All
+   cooperating processes must use this same lock protocol.
 7. Smart-HTTP snapshot: projection construction obtains the global transaction/
    GC lock, replays any committed incomplete journal while holding it, and keeps
    it through the complete refs/HEAD/history/object export. Initialization and
@@ -60,11 +62,12 @@ directory they are pointed at.
 8. Scope: each HTTP request has its own committed snapshot; no protocol token
    pins advertisement and upload-pack to one generation. The exclusive guard
    serializes projections, writers, and GC. Arbitrary filesystem edits outside
-   NewGit's APIs are not coordinated. Linux uses recorded-PID liveness; other
-   targets use the configured stale-age fallback (defaults: `lock_stale_s` 300
-   seconds, `lock_wait_ms` 10 seconds). An immediate open after a crash may
-   return `LockBusy` until the stale age is reached and the caller retries; a
-   live holder exceeding that age may be reclaimed. Network-filesystem
+   NewGit's APIs are not coordinated. `lock_wait_ms` defaults to 10 seconds;
+   an immediate open after a crash can acquire the released OS lock and recover.
+   The legacy config key `lock_stale_s` is accepted as an alias for
+   `temp_file_grace_s`, which governs abandoned object-temp cleanup only.
+   Concurrent operation across binaries using different lock protocols is not
+   supported; stop older processes before upgrading. Network-filesystem
    lock/atomicity semantics are not established.
 
 ### Platform-specific guarantees and limits

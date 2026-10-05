@@ -12,6 +12,7 @@ Cargo.lock (committed; registry checksums).
 | crate | req | class |
 |---|---|---|
 | flate2 | ^1 | runtime |
+| fs4 | ^1.1 | runtime |
 | getrandom | ^0.4 | runtime |
 | proptest | ^1 | dev (tests only) |
 | serde | ^1 | runtime |
@@ -20,7 +21,7 @@ Cargo.lock (committed; registry checksums).
 | tempfile | ^3 | runtime |
 | thiserror | ^2 | runtime |
 
-## Runtime closure (32 crates — compiled into / linked by the binary)
+## Runtime closure (33 crates — compiled into / linked by the binary)
 
 | crate | version | license | source |
 |---|---|---|---|
@@ -35,6 +36,7 @@ Cargo.lock (committed; registry checksums).
 | errno | 0.3.14 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | https://github.com/rust-lang/crates.io-index |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
+| fs4 | 1.1.0 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | generic-array | 0.14.7 | MIT | https://github.com/rust-lang/crates.io-index |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/crates.io-index |
@@ -75,11 +77,12 @@ autocfg 1.5.1, bit-set 0.8.0, bit-vec 0.8.0, fnv 1.0.7, getrandom 0.3.4, num-tra
 
 ## Policy notes
 
-* **6 direct runtime dependency families** (flate2, getrandom, serde/serde_json,
-  sha2, tempfile, thiserror; seven crate entries) — the D-002 budget. `getrandom`
-  was already in the locked runtime closure through `tempfile` and is now a
-  direct dependency for portable OS CSPRNG access (D-022). No git/path/patched
-  sources: all crates.io.
+* **7 direct runtime dependency families** (flate2, fs4, getrandom,
+  serde/serde_json, sha2, tempfile, thiserror; eight crate entries) — the D-002
+  budget. `getrandom` was already in the locked runtime closure through
+  `tempfile` and is now a direct dependency for portable OS CSPRNG access
+  (D-022); `fs4` provides cross-platform kernel advisory locks (D-023). No
+  git/path/patched sources: all crates.io.
 * flate2 uses its **pure-Rust** backend (miniz_oxide) — no C/libz linkage;
   sha2 uses runtime CPU feature detection (cpufeatures), no bundled asm.
 * `#![forbid(unsafe_code)]` covers newgit's own code; unsafe inside the

@@ -27,12 +27,16 @@ selects an EXISTING repository, it does not create one.
 
 ### Exit 4 storms (`cas_failed` / `lock_busy`)
 Two writers raced; exactly one won (by design). Retry the loser. If retries
-never settle, something is holding a stale lock: locks are `<path>.lock`
-files next to their target (e.g. `.newgit/refs/refs/main.lock`) and
-self-reclaim after `lock_stale_s` (default 300 s) via holder-liveness
-checks — wait, or find the runaway process (`newgit verify` flags lock
-files and unrecovered journals in `.newgit/txn/`). Never delete lock files
-by hand while any newgit process runs.
+never settle, another process may still own the kernel advisory lock. Lock
+paths are stable `<path>.lock` files next to their target (for example,
+`.newgit/txn/LOCK.lock`); they remain on disk. New files are empty; legacy
+owner text is ignored and is not a live-lock indicator. The OS releases lock
+ownership when its process/handle exits, so there is no
+300-second stale-age wait. If `lock_wait_ms` expires, identify the active
+NewGit process and let it finish or stop it safely. All concurrent processes
+must use the same lock protocol; stop older binaries before upgrading. Never
+delete a `.lock` file by hand. `newgit verify` ignores persistent transaction
+lock sidecars, including legacy owner text, and reports unrecovered journals.
 
 ### Push rejected (exit 5, "non-fast-forward")
 The remote ref moved since you observed it. `newgit pull <remote>` then

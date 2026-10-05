@@ -267,7 +267,40 @@ is individually consistent, but a mutation between advertisement and
 upload-pack can still make the two request-local views differ. No cache or
 generation counter was added.
 
-## Environment (as measured)
+### Kernel advisory-lock implementation check (2026-10-05)
+
+Reproduced the ignored release benchmark after replacing the unlinkable lock
+reclaimer with the stable `fs4` advisory-lock implementation. Command:
+
+```sh
+cargo test --release --locked --lib \
+  remote::git_http::benchmark::live_git_transfer_baseline -- --ignored --nocapture
+```
+
+Environment: Git 2.43.0; Rust 1.99.0; Linux 6.18.38+ x86_64; Intel Xeon @
+2.50 GHz, 8 online logical CPUs, 24,788,980 kB reported memory. Shared host,
+warm page cache, no eviction. Same deterministic 80/800-commit fixture and
+four-client workloads as above. The benchmark also prints per-sample and phase
+timings; this table retains key measurements. It is one sample per batch, not a
+capacity or statistical claim.
+
+| Workload | 80 commits | 800 commits |
+|---|---:|---:|
+| Direct projection median / lock wait / lock hold | 124.14 / 0.03 / 123.96 ms | 895.14 / 0.03 / 894.95 ms |
+| Four simultaneous full clones: batch / response bytes | 1,591.22 ms / 5,947,936 B | 11,394.95 ms / 42,171,046 B |
+| Four clones plus delayed writer: batch / writer wait+commit | 1,605.98 / 204.41 ms | 11,392.73 / 915.46 ms |
+
+All clone HTTP responses succeeded. Relative to the earlier single post-guard
+run using the old lock path (`1,617.14 ms` and `11,186.67 ms` for the two
+four-client batches), the new run moved by −1.60% and +1.86%. Direct projection
+medians moved by +2.33% and −2.58%; the measured uncontended lock wait was
+0.03 ms. These small, mixed, single-run differences cannot establish a causal
+performance change from `fs4` and are within shared-host variability. They show
+no obvious whole-request regression in this sample; reader-reader serialization
+remains the dominant observed tradeoff at 800 commits (about 11.4 seconds for
+four concurrent clones).
+
+## Core benchmark environment (as measured — 2026-10-04)
 
 ```
 cpu: Intel(R) Xeon(R) Processor @ 2.60GHz   (shared-cloud vCPU, 1 core visible)

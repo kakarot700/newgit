@@ -26,8 +26,8 @@ pub struct Limits {
     pub max_depth: usize,
     /// How long to wait for locks (ms).
     pub lock_wait_ms: u64,
-    /// When a lock is considered stale (s).
-    pub lock_stale_s: u64,
+    /// Grace period before abandoned object-store temporary files are swept (s).
+    pub temp_file_grace_s: u64,
     /// Max objects transferred in one remote batch.
     pub max_batch_objects: usize,
     /// Max HTTP request body (bytes).
@@ -44,7 +44,7 @@ impl Default for Limits {
             max_path_component: 255,
             max_depth: 64,
             lock_wait_ms: 10_000,
-            lock_stale_s: 300,
+            temp_file_grace_s: 300,
             max_batch_objects: 4096,
             max_request_bytes: 512 << 20,
         }
@@ -64,7 +64,10 @@ impl Limits {
             ),
             ("max_depth".into(), self.max_depth.to_string()),
             ("lock_wait_ms".into(), self.lock_wait_ms.to_string()),
-            ("lock_stale_s".into(), self.lock_stale_s.to_string()),
+            (
+                "temp_file_grace_s".into(),
+                self.temp_file_grace_s.to_string(),
+            ),
             (
                 "max_batch_objects".into(),
                 self.max_batch_objects.to_string(),
@@ -78,6 +81,7 @@ impl Limits {
 
     pub fn from_map(m: &BTreeMap<String, String>) -> Result<Limits> {
         let mut l = Limits::default();
+        let mut saw_temp_file_grace = false;
         for (k, v) in m {
             let n = v
                 .parse::<u64>()
@@ -100,7 +104,15 @@ impl Limits {
                     l.max_depth = n as usize
                 }
                 "lock_wait_ms" => l.lock_wait_ms = n,
-                "lock_stale_s" => l.lock_stale_s = n,
+                "temp_file_grace_s" | "lock_stale_s" => {
+                    if saw_temp_file_grace {
+                        return Err(Error::Config(
+                            "specify only one of temp_file_grace_s and legacy lock_stale_s".into(),
+                        ));
+                    }
+                    l.temp_file_grace_s = n;
+                    saw_temp_file_grace = true;
+                }
                 "max_batch_objects" => l.max_batch_objects = n as usize,
                 "max_request_bytes" => l.max_request_bytes = n,
                 other => return Err(Error::Config(format!("unknown config key {other:?}"))),
@@ -232,5 +244,18 @@ mod tests {
         assert!(RepoConfig::parse("format_version = 99\n").is_err());
         assert!(RepoConfig::parse("format_version = x\n").is_err());
         assert!(RepoConfig::parse("format_version = 1\nmax_depth = 0\n").is_err());
+    }
+
+    #[test]
+    fn legacy_lock_stale_key_migrates_to_temp_file_grace() {
+        let parsed = RepoConfig::parse("format_version = 1\nlock_stale_s = 17\n").unwrap();
+        assert_eq!(parsed.limits.temp_file_grace_s, 17);
+        let serialized = parsed.serialize();
+        assert!(serialized.contains("temp_file_grace_s = 17"));
+        assert!(!serialized.contains("lock_stale_s ="));
+        assert!(RepoConfig::parse(
+            "format_version = 1\nlock_stale_s = 17\ntemp_file_grace_s = 18\n"
+        )
+        .is_err());
     }
 }

@@ -74,8 +74,9 @@ without any AI involvement.
 ```
 
 Dependency policy: runtime deps are `sha2`, `flate2` (pure-Rust backend),
-`serde`/`serde_json`, `thiserror`, and `tempfile` for securely allocated
-per-request Git views — see DECISIONS.md D-002 and D-019. `forbid(unsafe_code)`.
+`serde`/`serde_json`, `thiserror`, `tempfile` for private Git views, `getrandom`
+for OS CSPRNG access, and `fs4` for kernel-managed locks — see DECISIONS.md
+D-002, D-019, D-022, and D-023. `forbid(unsafe_code)`.
 
 ## 3. Storage & durability
 
@@ -83,7 +84,8 @@ Spec: **docs/STORAGE_FORMAT.md** (normative).
 
 * Content-addressed objects, immutable, self-verifying (trailing SHA-256).
 * Writes: temp → fsync → rename → fsync(dir). Readers verify digest + id.
-* Refs: small files updated under `O_EXCL` locks with compare-and-swap.
+* Refs: small files updated under stable, kernel-managed advisory locks with
+  compare-and-swap; the OS releases lock ownership when its process exits.
 * Transactions: write-ahead journal with **idempotent redo recovery**;
   multi-ref updates are all-or-nothing even if the process dies mid-flight.
 * Index: pure cache; deleting it is always safe (invariant).

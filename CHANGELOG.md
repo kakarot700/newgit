@@ -6,13 +6,18 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
 
 ### Added
 - A portability pass replaces the Unix-only `/dev/urandom` token source with
-  the OS CSPRNG, isolates Git subprocess config with the native null device,
+  the OS CSPRNG, isolates Git subprocess config with a real empty config file,
   rejects Windows-reserved paths before checkout writes, preflights unsupported
   non-Unix symlinks and case-colliding trees, and adds a Windows process-tree
   deadline regression. Native CI is now defined for Linux x86_64/ARM64, macOS
-  x86_64/ARM64, and Windows x86_64/ARM64; each job builds and tests natively
-  and uploads a binary with checksum and OS/architecture/source/toolchain
-  metadata. Configuration is not treated as a passing platform result.
+  x86_64/ARM64, and Windows x86_64/ARM64; each job builds and tests natively,
+  runs its staged CLI, and uploads a target-specific tar bundle with checksum
+  and OS/architecture/source/toolchain metadata. Configuration is not treated
+  as a passing platform result.
+- Lock ownership now uses stable `fs4` kernel advisory locks instead of
+  unlinkable PID/age files. This fixes a stale-reclaimer race found by the
+  native ARM64 Linux chaos run and removes non-Linux crash-recovery age delays;
+  `lock_stale_s` remains a config-read alias for object-temp cleanup only.
 - Smart-HTTP advertisement and upload-pack now build from a recovered committed
   NewGit view: projection construction holds the shared transaction/GC lock
   across refs, HEAD, history, and reachable-object export. A Linux real-Git race

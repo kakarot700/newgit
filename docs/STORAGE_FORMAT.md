@@ -152,6 +152,16 @@ Storage path: `objects/<hex[0..2]>/<hex[2..64]>`. Writes: temp file in the
 same directory → write → fsync → rename → fsync(dir). Temps match
 `*.tmp.<pid>.<nanos>.<ctr>` and are swept when stale.
 
+Coordination uses a whole-file OS advisory lock on a stable sidecar named by
+appending `.lock` to the protected path. The sidecar persists after use; new
+sidecars are empty, and NewGit never reads or writes their contents. Owner text
+left by older versions may remain but is ignored. The kernel releases ownership
+when the owning process/handle exits. Symlink and special-file sidecars are
+rejected; NewGit never unlinks a lock sidecar, and concurrent processes must
+use the same lock protocol. `lock_wait_ms` bounds acquisition. The legacy config key
+`lock_stale_s` is accepted as an alias for `temp_file_grace_s`, which controls
+stale object-temp cleanup only; it no longer controls lock reclamation.
+
 ## 5. Repository layout (v1)
 
 ```

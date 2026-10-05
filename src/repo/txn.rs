@@ -105,7 +105,6 @@ fn acquire_global_lock(ng: &Path, limits: &Limits) -> Result<fsx::FileLock> {
     fsx::FileLock::acquire(
         &txn_dir(ng).join("LOCK"),
         Duration::from_millis(limits.lock_wait_ms),
-        Duration::from_secs(limits.lock_stale_s),
     )
 }
 

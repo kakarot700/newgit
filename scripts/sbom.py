@@ -129,11 +129,12 @@ w(f"""
 
 ## Policy notes
 
-* **6 direct runtime dependency families** (flate2, getrandom, serde/serde_json,
-  sha2, tempfile, thiserror; seven crate entries) — the D-002 budget. `getrandom`
-  was already in the locked runtime closure through `tempfile` and is now a
-  direct dependency for portable OS CSPRNG access (D-022). No git/path/patched
-  sources: all crates.io.
+* **7 direct runtime dependency families** (flate2, fs4, getrandom,
+  serde/serde_json, sha2, tempfile, thiserror; eight crate entries) — the D-002
+  budget. `getrandom` was already in the locked runtime closure through
+  `tempfile` and is now a direct dependency for portable OS CSPRNG access
+  (D-022); `fs4` provides cross-platform kernel advisory locks (D-023). No
+  git/path/patched sources: all crates.io.
 * flate2 uses its **pure-Rust** backend (miniz_oxide) — no C/libz linkage;
   sha2 uses runtime CPU feature detection (cpufeatures), no bundled asm.
 * `#![forbid(unsafe_code)]` covers newgit's own code; unsafe inside the

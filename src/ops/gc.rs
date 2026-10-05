@@ -72,11 +72,9 @@ pub fn gc(repo: &Repo, opts: &GcOpts) -> Result<GcReport> {
 
     let ng = repo.ng().to_path_buf();
     fsx::ensure_dir(&ng.join("txn"))?;
-    let (wait_ms, stale_s) = (repo.limits().lock_wait_ms, repo.limits().lock_stale_s);
     let _lock = fsx::FileLock::acquire(
         &ng.join("txn").join("LOCK"),
-        Duration::from_millis(wait_ms),
-        Duration::from_secs(stale_s),
+        Duration::from_millis(repo.limits().lock_wait_ms),
     )?;
 
     let max_object_bytes = repo.limits().max_object_bytes;

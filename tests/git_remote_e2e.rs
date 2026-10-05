@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::git_config_null_device;
+use common::git_config_file;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -94,8 +94,9 @@ fn commit(
 fn git(args: &[&str]) -> Output {
     let out = Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -113,8 +114,9 @@ fn git(args: &[&str]) -> Output {
 fn git_fails(args: &[&str]) -> Output {
     let out = Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -599,8 +601,9 @@ fn smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed
                     "refs/heads/left",
                     "refs/heads/right",
                 ])
-                .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-                .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+                .env("GIT_CONFIG_GLOBAL", git_config_file())
+                .env("GIT_CONFIG_SYSTEM", git_config_file())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_TERMINAL_PROMPT", "0")
                 .output()
                 .unwrap();

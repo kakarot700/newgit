@@ -2,6 +2,31 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-023 · Kernel-managed cross-platform advisory locks (2026-10-05)
+**Context:** The second native matrix run exposed a Linux ARM64 race in the
+old `O_EXCL` stale-lock reclaimer: concurrent recovery readers could each
+decide that a dead holder was reclaimable, unlink/recreate the lock between
+waiters, and observe a journal disappear during recovery. The age-only
+non-Linux fallback also delayed crash recovery and could steal a long-lived
+lock.
+**Decision:** Replace unlinkable PID/age lock files with `fs4` whole-file OS
+advisory locks on stable `.lock` paths. `lock_wait_ms` bounds acquisition; the
+kernel releases ownership when the process/handle exits. New code never reads
+or writes sidecar contents; new files are empty, legacy owner text may remain,
+and lock paths are never unlinked. The old config key `lock_stale_s` remains a read alias for the
+object-temp cleanup grace, now named `temp_file_grace_s`, and serialization
+uses the new key. Git subprocesses use an actual empty config file, not a
+platform null device.
+**Rationale:** Kernel ownership removes check-then-unlink races and the
+non-Linux age lease while retaining bounded waits and immediate crash release.
+The failure came from production synchronization, not only a test assumption.
+**Consequences:** All cooperating NewGit processes must use this same lock
+protocol during concurrent access; stop older binaries before upgrading.
+Stable lock paths persist; verification ignores their contents, including any
+legacy owner text. Native hosted validation is
+required for every OS/architecture; network-filesystem lock behavior remains
+unestablished. `fs4` is an explicit runtime dependency; see D-002.
+
 ## D-021 · Lock-protected committed view per smart-HTTP projection (2026-10-05)
 **Context:** The pre-D-021 projection-cache audit found that readers could
 overlap sequential multi-ref journal apply/recovery, initialization wrote the
@@ -17,15 +42,15 @@ Do not add a cache or generation counter. Each stateless request independently
 gets a committed view; no claim that advertisement and upload-pack share one
 generation without an explicit session token.
 **Rationale:** Transactions, generic FILE/FDEL ops, recovery, and GC already
-serialize on this lock. On Linux, a live recorded holder is not reclaimed just
-for exceeding the stale age. The new real-Git race test pauses a live two-ref
+serialize on this lock. The original PID/age lock implementation was later
+found to have a stale-reclaimer race and is superseded by D-023. The new real-Git race test pauses a live two-ref
 transaction after ref 1, confirms direct and HTTP readers block, kills the
 holder, and verifies journal recovery yields both refs before advertisements
 and pack data return.
 **Consequences:** Correctness is request-local and Linux-tested, not a
 cross-request pin; arbitrary out-of-band filesystem writes remain outside the
-cooperative lock model. Non-Linux stale-age behavior and network filesystems are
-not established. Exclusive locking serializes projections, writers, and GC.
+cooperative lock model. Kernel-lock behavior on network filesystems is not
+established. Exclusive locking serializes projections, writers, and GC.
 One warm-cache shared-host benchmark observed four-clone batches grow from the
 historical 0.65 s to 1.62 s (80 commits) and 3.18 s to 11.19 s (800 commits);
 delayed writer transaction wall time, including wait and commit, was 99 ms and
@@ -34,9 +59,9 @@ delayed writer transaction wall time, including wait and commit, was 99 ms and
 
 ## D-022 · Native cross-platform hardening and evidence-gated support (2026-10-05)
 **Context:** The portability audit found a `/dev/urandom` token source, Unix-only Git config null paths in subprocess fixtures, Windows path aliases not rejected at the filesystem boundary, and no Windows process-tree timeout regression. A Linux-only CI job could not establish the mission's Linux/macOS/Windows x64/ARM64 targets.
-**Decision:** Use the already-locked `getrandom` OS CSPRNG as a direct runtime dependency; preflight all checkout paths and unsupported non-Unix symlinks before writes; reject Windows-reserved path components; prevent case-folded tree collisions on Windows and macOS; use platform-native Git config null devices; and test Windows `taskkill /T` descendant cleanup. Add a six-runner native Actions matrix that runs formatting, Clippy, all debug tests, and a release build, then stages a target-specific binary, checksum, and explicit OS/architecture/toolchain/source metadata.
+**Decision:** Use the already-locked `getrandom` OS CSPRNG as a direct runtime dependency; preflight all checkout paths and unsupported non-Unix symlinks before writes; reject Windows-reserved path components; prevent case-folded tree collisions on Windows and macOS; isolate Git subprocesses with a real empty config file; and test Windows `taskkill /T` descendant cleanup. Add a six-runner native Actions matrix that runs formatting, Clippy, all debug tests, and a release build; stages and executes the target binary; and uploads it in a permission-preserving tar bundle with checksum and explicit OS/architecture/toolchain/source metadata.
 **Rationale:** Portability needs native executable tests, not cross-compilation-only claims or `cfg` guards that leave behavior broken. `getrandom` was already present in the runtime dependency closure through `tempfile`; promoting it adds no new locked transitive crates and removes a Unix-only security dependency.
-**Consequences:** Windows symlink checkout remains explicitly unsupported; path collision checks do not model every Unicode normalization rule; Windows token-file ACLs are inherited; directory fsync remains best-effort; non-Linux stale-lock reclamation remains age-based. A matrix definition is not evidence of support: each target is verified only by its actual native job on the exact commit.
+**Consequences:** Windows symlink checkout remains explicitly unsupported; path collision checks do not model every Unicode normalization rule; Windows token-file ACLs are inherited; directory fsync remains best-effort. The initial stale-age lock protocol is superseded by D-023. A matrix definition is not evidence of support: each target is verified only by its actual native job on the exact commit.
 
 ## D-020 · Defer smart-HTTP projection caching until canonical generations are safe (2026-10-05)
 **Context (pre-D-021):** An 800-commit unchanged smart-HTTP fetch returns 219 bytes but
@@ -101,15 +126,16 @@ so redo re-appends are invisible. Corrupt journals are quarantined
 **Consequences:** Simple, testable all-or-nothing semantics; `execute()`
 returns error before the journal only on CAS failure (no effects at all).
 
-## D-008 · Lock reclamation by holder liveness (Iteration 2)
+## D-008 · Lock reclamation by holder liveness (Iteration 2; superseded by D-023)
 **Context:** `abort()`/SIGKILL never runs destructors, so O_EXCL lock files
 outlive their holders and blocked recovery for the full stale timeout (5 min)
 in tests — and would in production crashes too.
 **Decision:** Lock files record `pid`/`time`. On contention, reclaim iff the
 recorded pid is provably dead (Linux `/proc/<pid>` probe) or age exceeds the
 stale timeout. Non-Linux platforms fall back to the timeout (conservative).
-**Consequences:** Fast crash recovery; pid-reuse can only delay reclamation
-(never steal a live lock). Tested: `dead_holder_lock_is_reclaimed`,
+**Consequences:** This PID/age-based design was superseded by D-023 after a
+native ARM64 race showed check-then-unlink reclamation was not mutually
+exclusive between recoverers. Historical tests: `dead_holder_lock_is_reclaimed`,
 `live_holder_lock_is_not_stolen`.
 
 ## D-007 · Git interoperability via fast-export/fast-import (Iteration 1)
@@ -167,8 +193,10 @@ sha1↔nid map file (documented).
 **Context:** Supply-chain security + build speed on 2 CPUs.
 **Decision:** Runtime deps: `sha2`, `flate2` (pure-Rust `rust_backend`, no C),
 `serde`+`serde_json`, `thiserror`, `tempfile` (private temporary Git views;
-added later by D-019), and `getrandom` (the OS CSPRNG for bearer tokens; promoted
-from the existing runtime closure by D-022). Dev deps: `proptest`. No CLI
+added later by D-019), `getrandom` (the OS CSPRNG for bearer tokens; promoted
+from the existing runtime closure by D-022), and `fs4` (cross-platform kernel
+advisory locks; D-023). This is eight crate entries in seven dependency
+families. Dev deps: `proptest`. No CLI
 framework (hand-rolled parser), no HTTP framework (hand-rolled HTTP/1.1 in
 iteration 9), no async runtime.
 **Rationale:** Every dependency is small, boring, and justified; fewer CVE

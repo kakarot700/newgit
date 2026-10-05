@@ -34,7 +34,9 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"newgit-{version}-{args.target}" + (".exe" if args.binary.suffix.lower() == ".exe" else "")
     staged_binary = output_dir / filename
-    shutil.copyfile(args.binary, staged_binary)
+    shutil.copy2(args.binary, staged_binary)
+    if args.binary.suffix.lower() != ".exe" and (staged_binary.stat().st_mode & 0o111) == 0:
+        raise SystemExit(f"staged POSIX binary is not executable: {staged_binary}")
     digest = hashlib.sha256(staged_binary.read_bytes()).hexdigest()
 
     metadata = {

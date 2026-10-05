@@ -145,7 +145,7 @@ impl Repo {
         let r = txn::recover(&self.ng, &self.config.limits)?;
         let swept = self
             .objects
-            .sweep_temp_files(self.config.limits.lock_stale_s)?;
+            .sweep_temp_files(self.config.limits.temp_file_grace_s)?;
         Ok((r, swept))
     }
 

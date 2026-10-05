@@ -31,12 +31,15 @@ const CLONE_SAMPLES: usize = 3;
 const CONCURRENT_CLONES: usize = 4;
 static CLOCK_TICKS_PER_SECOND: OnceLock<Option<f64>> = OnceLock::new();
 
-fn git_config_null_device() -> &'static str {
-    if cfg!(windows) {
-        "NUL"
-    } else {
-        "/dev/null"
-    }
+fn git_config_file() -> &'static Path {
+    static CONFIG: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+    let (_, path) = CONFIG.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("could not create isolated Git config directory");
+        let path = dir.path().join("empty.gitconfig");
+        std::fs::write(&path, b"").expect("could not create empty Git config");
+        (dir, path)
+    });
+    path.as_path()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -349,8 +352,9 @@ fn build_small_repo(root: &Path) -> (Repo, ObjectId) {
 fn run_git(args: &[String]) -> Output {
     Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -456,8 +460,9 @@ fn run_timed_git(args: &[String]) -> (Duration, Output, GitResources) {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
     for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_TEMPLATE_DIR"] {
         command.env_remove(key);

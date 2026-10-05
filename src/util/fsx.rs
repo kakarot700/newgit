@@ -3,15 +3,15 @@
 //! Rules enforced here (see docs/STORAGE_FORMAT.md):
 //! * Files are written via temp-file + fsync + rename + dir-fsync, so a reader
 //!   never observes a partial file and a crash never loses a completed rename.
-//! * Mutual exclusion uses `O_CREAT|O_EXCL` lock files containing pid+time,
-//!   with an explicit stale-lock timeout (locks are never silently stolen
-//!   before the timeout).
+//! * Mutual exclusion uses kernel-managed advisory locks on stable `.lock`
+//!   files. The OS releases a lock when its handle closes, including on process
+//!   death; the stable path is never unlinked while waiters may have it open.
 //! * Path safety helpers reject traversal, absolute paths, and NUL bytes.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
 
@@ -85,74 +85,56 @@ pub fn temp_sibling(path: &Path) -> Result<PathBuf> {
     Ok(path.with_file_name(name))
 }
 
-/// An advisory exclusive lock backed by an O_EXCL file.
+/// An advisory exclusive lock backed by a stable, kernel-managed lock file.
 ///
-/// The lock file records `pid`, creation time, and an optional label so that
-/// operators (and `newgit verify`) can diagnose stuck locks. Stale locks older
-/// than `stale_after` may be reclaimed; this is logged by callers.
+/// The `.lock` path is deliberately persistent: unlinking a locked file could
+/// let a later process lock a different inode while existing waiters still
+/// reference the old one. The file contents are never read or written; kernel
+/// ownership controls exclusion and is released automatically when the process
+/// exits.
 #[derive(Debug)]
 pub struct FileLock {
     path: PathBuf,
+    file: File,
 }
 
 impl FileLock {
     /// Try to acquire `<path>.lock`. Returns Ok(lock) or Err(LockBusy).
-    /// `wait`: total time to keep retrying; `stale_after`: reclaim threshold.
-    pub fn acquire(path: &Path, wait: Duration, stale_after: Duration) -> Result<FileLock> {
+    /// `wait` is the total time to keep retrying the kernel lock.
+    pub fn acquire(path: &Path, wait: Duration) -> Result<FileLock> {
         let lock_path = lock_path_for(path);
-        let deadline = SystemTime::now() + wait;
+        if let Some(parent) = lock_path.parent() {
+            ensure_dir(parent)?;
+        }
+        ensure_regular_lock_file(&lock_path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| Error::io(&lock_path, e))?;
+        ensure_regular_lock_file(&lock_path)?;
+        let deadline = Instant::now() + wait;
         loop {
-            match try_create_lock(&lock_path) {
+            match fs4::FileExt::try_lock(&file) {
                 Ok(()) => {
-                    if let Some(parent) = lock_path.parent() {
-                        fsync_dir(parent)?;
-                    }
-                    return Ok(FileLock { path: lock_path });
+                    return Ok(FileLock {
+                        path: lock_path,
+                        file,
+                    });
                 }
-                Err(e) => {
-                    // Inspect the existing lock: reclaim it when the holder
-                    // is provably dead (recorded pid not alive) or when it
-                    // is older than the stale timeout. Aborted/killed
-                    // processes never run Drop, so this reclamation is the
-                    // crash-recovery path for locks.
-                    let age = lock_age(&lock_path);
-                    let holder = read_lock_info(&lock_path);
-                    let timed_out = age.map(|a| a > stale_after).unwrap_or(false);
-                    let reclaimable = match holder {
-                        Some((pid, _)) => {
-                            #[cfg(target_os = "linux")]
-                            {
-                                // On Linux, a live PID is authoritative: an
-                                // old lock may still protect a long transaction
-                                // or projection and must not be stolen by age.
-                                pid != std::process::id() && !pid_alive(pid)
-                            }
-                            #[cfg(not(target_os = "linux"))]
-                            {
-                                let _ = pid;
-                                timed_out
-                            }
-                        }
-                        None => timed_out,
-                    };
-                    if reclaimable {
-                        // Reclaim: remove and retry once.
-                        let _ = std::fs::remove_file(&lock_path);
-                        if try_create_lock(&lock_path).is_ok() {
-                            return Ok(FileLock { path: lock_path });
-                        }
-                    }
-                    if SystemTime::now() >= deadline {
+                Err(fs4::TryLockError::WouldBlock) => {
+                    let now = Instant::now();
+                    if now >= deadline {
                         return Err(Error::LockBusy(format!(
-                            "{} (held for {:?}, holder pid {:?})",
-                            lock_path.display(),
-                            age.unwrap_or(Duration::ZERO),
-                            holder.map(|(pid, _)| pid)
+                            "{} (kernel advisory lock is held)",
+                            lock_path.display()
                         )));
                     }
-                    drop(e);
-                    std::thread::sleep(Duration::from_millis(5));
+                    std::thread::sleep((deadline - now).min(Duration::from_millis(5)));
                 }
+                Err(fs4::TryLockError::Error(e)) => return Err(Error::io(&lock_path, e)),
             }
         }
     }
@@ -164,10 +146,19 @@ impl FileLock {
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-        if let Some(parent) = self.path.parent() {
-            let _ = fsync_dir(parent);
-        }
+        let _ = fs4::FileExt::unlock(&self.file);
+    }
+}
+
+fn ensure_regular_lock_file(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+        Ok(_) => Err(Error::Invalid(format!(
+            "lock path is not a regular file: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::io(path, error)),
     }
 }
 
@@ -175,53 +166,6 @@ pub fn lock_path_for(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".lock");
     PathBuf::from(s)
-}
-
-fn try_create_lock(lock_path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut f = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(lock_path)?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    writeln!(f, "pid={} time={}", std::process::id(), now)?;
-    f.sync_all()?;
-    Ok(())
-}
-
-fn lock_age(lock_path: &Path) -> Option<Duration> {
-    let m = std::fs::metadata(lock_path).ok()?;
-    let t = m.modified().ok()?;
-    SystemTime::now().duration_since(t).ok()
-}
-
-/// Parse `pid=<n> time=<secs>` from a lock file.
-fn read_lock_info(lock_path: &Path) -> Option<(u32, u64)> {
-    let text = std::fs::read_to_string(lock_path).ok()?;
-    let mut pid = None;
-    let mut time = None;
-    for part in text.split_whitespace() {
-        if let Some(v) = part.strip_prefix("pid=") {
-            pid = v.parse::<u32>().ok();
-        } else if let Some(v) = part.strip_prefix("time=") {
-            time = v.parse::<u64>().ok();
-        }
-    }
-    Some((pid?, time.unwrap_or(0)))
-}
-
-/// Is a process with this pid currently alive? Linux-only `/proc` probe.
-#[cfg(target_os = "linux")]
-fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Read a file fully, rejecting files larger than `max` before reading.
@@ -391,77 +335,74 @@ mod tests {
     fn lock_is_exclusive() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("res");
-        let _l1 = FileLock::acquire(&p, Duration::ZERO, Duration::from_secs(60)).unwrap();
-        let r = FileLock::acquire(&p, Duration::from_millis(20), Duration::from_secs(60));
+        let l1 = FileLock::acquire(&p, Duration::ZERO).unwrap();
+        let lock_path = l1.path().to_path_buf();
+        assert!(std::fs::read_to_string(&lock_path).unwrap().is_empty());
+        let r = FileLock::acquire(&p, Duration::from_millis(20));
         assert!(matches!(r, Err(Error::LockBusy(_))));
-        drop(_l1);
-        let _l2 =
-            FileLock::acquire(&p, Duration::from_millis(100), Duration::from_secs(60)).unwrap();
+        drop(l1);
+        assert!(lock_path.exists(), "stable lock inode path must persist");
+        assert_eq!(std::fs::read(&lock_path).unwrap(), b"");
+        let _l2 = FileLock::acquire(&p, Duration::from_millis(100)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_rejects_symlink_sidecar_without_modifying_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let protected = dir.path().join("protected");
+        std::fs::write(&target, b"preserve this data").unwrap();
+        std::os::unix::fs::symlink(&target, lock_path_for(&protected)).unwrap();
+
+        let result = FileLock::acquire(&protected, Duration::ZERO);
+        assert!(matches!(result, Err(Error::Invalid(_))));
+        assert_eq!(std::fs::read(&target).unwrap(), b"preserve this data");
     }
 
     #[test]
-    fn dead_holder_lock_is_reclaimed() {
-        // Linux can prove the synthetic pid is dead and reclaims immediately.
-        // Other platforms intentionally use the configured stale-age fallback.
+    fn lock_rejects_nonregular_sidecar() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("res");
-        let lp = lock_path_for(&p);
-        std::fs::write(&lp, "pid=99999999 time=1").unwrap();
-        let start = std::time::Instant::now();
-        let stale_after = if cfg!(target_os = "linux") {
-            Duration::from_secs(3600)
-        } else {
-            Duration::ZERO
-        };
-        let _l = FileLock::acquire(&p, Duration::from_millis(500), stale_after).unwrap();
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "dead-holder lock must be reclaimed within the documented policy"
-        );
+        let resource = dir.path().join("directory");
+        std::fs::create_dir(lock_path_for(&resource)).unwrap();
+
+        let result = FileLock::acquire(&resource, Duration::ZERO);
+        assert!(matches!(result, Err(Error::Invalid(_))));
     }
 
     #[test]
-    fn live_holder_lock_is_not_stolen() {
-        // Our own pid is provably alive: the lock must NOT be reclaimed by
-        // the pid rule; acquisition times out with LockBusy.
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("res");
-        let lp = lock_path_for(&p);
-        std::fs::write(&lp, format!("pid={} time=1", std::process::id())).unwrap();
-        let r = FileLock::acquire(&p, Duration::from_millis(50), Duration::from_secs(3600));
-        assert!(matches!(r, Err(Error::LockBusy(_))));
-    }
+    fn concurrent_lock_waiters_never_overlap() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn stale_age_does_not_steal_lock_from_live_holder() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("res");
-        let lp = lock_path_for(&p);
-        std::fs::write(&lp, format!("pid={} time=1", std::process::id())).unwrap();
-        let file = File::open(&lp).unwrap();
-        file.set_modified(filetime_past()).unwrap();
-        let r = FileLock::acquire(&p, Duration::from_millis(50), Duration::from_millis(1));
-        assert!(matches!(r, Err(Error::LockBusy(_))));
-    }
-
-    #[test]
-    fn stale_lock_is_reclaimed() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("res");
-        let lp = lock_path_for(&p);
-        std::fs::write(&lp, b"pid=999999 time=0").unwrap();
-        // backdate
-        let old = filetime_past();
-        let f = File::open(&lp).unwrap();
-        f.set_modified(old).ok();
-        drop(f);
-        let _l =
-            FileLock::acquire(&p, Duration::from_millis(100), Duration::from_millis(1)).unwrap();
-    }
-
-    fn filetime_past() -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(1)
+        let path = Arc::new(dir.path().join("shared"));
+        let active = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(6));
+        let workers: Vec<_> = (0..6)
+            .map(|_| {
+                let path = Arc::clone(&path);
+                let active = Arc::clone(&active);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    for _ in 0..25 {
+                        let _lock =
+                            FileLock::acquire(path.as_ref(), Duration::from_secs(5)).unwrap();
+                        assert_eq!(
+                            active.fetch_add(1, Ordering::SeqCst),
+                            0,
+                            "two threads held one kernel lock simultaneously"
+                        );
+                        std::thread::yield_now();
+                        assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
     }
 
     #[test]

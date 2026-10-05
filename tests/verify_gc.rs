@@ -81,6 +81,23 @@ fn clean_repo_verifies_ok() {
     assert!(rep.objects_checked >= live.len());
 }
 
+#[test]
+fn verify_ignores_idle_persistent_transaction_lock_file() {
+    let (_d, repo, _) = seeded();
+    let lock = repo.ng().join("txn").join("LOCK.lock");
+    assert!(lock.is_file(), "kernel lock sidecar must remain on disk");
+    assert_eq!(std::fs::read(&lock).unwrap(), b"");
+    std::fs::write(&lock, b"legacy pid=123 time=0\n").unwrap();
+    let rep = verify(&repo, &VerifyOpts { deep: false });
+    assert!(
+        !rep.issues
+            .iter()
+            .any(|issue| issue.code == "txn.lock_present"),
+        "lock sidecar contents are not live-lock evidence: {:?}",
+        rep.issues
+    );
+}
+
 // ─────────────────────────── verify: corruption ───────────────────────────
 
 #[test]

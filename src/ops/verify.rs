@@ -717,15 +717,10 @@ fn verify_txn_dir(repo: &Repo, rep: &mut VerifyReport) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             if name.ends_with(".lock") {
-                rep.issues.push(Issue {
-                    path: Some(e.path().to_string_lossy().to_string()),
-                    ..warn(
-                        "txn.lock_present",
-                        format!(
-                            "lock file present: {name} (held or stale; stale locks auto-reclaim by pid/age)"
-                        ),
-                    )
-                });
+                // Stable advisory-lock sidecars persist by design. New code
+                // never reads or writes their contents; legacy owner text is
+                // not evidence that a kernel lock is currently held.
+                continue;
             } else if name.ends_with(".journal") {
                 rep.issues.push(Issue {
                     path: Some(e.path().to_string_lossy().to_string()),

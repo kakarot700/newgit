@@ -62,7 +62,6 @@ impl AuditLog {
         let lock = fsx::FileLock::acquire(
             &fsx::lock_path_for(&self.path),
             Duration::from_millis(2_000),
-            Duration::from_secs(30),
         )?;
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()

@@ -2,8 +2,9 @@
 
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use newgit::object::ObjectId;
 use newgit::repo::Repo;
@@ -21,12 +22,15 @@ pub fn faultlab_bin() -> String {
         .expect("Cargo must provide CARGO_BIN_EXE_newgit-faultlab for integration tests")
 }
 
-pub fn git_config_null_device() -> &'static str {
-    if cfg!(windows) {
-        "NUL"
-    } else {
-        "/dev/null"
-    }
+pub fn git_config_file() -> &'static Path {
+    static CONFIG: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+    let (_, path) = CONFIG.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("could not create isolated Git config directory");
+        let path = dir.path().join("empty.gitconfig");
+        std::fs::write(&path, b"").expect("could not create empty Git config");
+        (dir, path)
+    });
+    path.as_path()
 }
 
 /// Run faultlab in a child process; `faults` sets NEWGIT_FAULTS.

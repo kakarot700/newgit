@@ -170,17 +170,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 
 ## Iteration 14 — Cross-platform hardening and native CI evidence  [~] · 2026-10-05
 - IMPLEMENTED: Replace the `/dev/urandom` bearer-token source with the portable OS
-  CSPRNG; make isolated Git subprocess config use the host null device; add
+  CSPRNG; isolate Git subprocesses with a real empty config file on every host; add
   Windows path/reserved-name checks and checkout preflight; refuse unsupported
   non-Unix symlink checkout before writes; add case-collision and Windows
   process-tree regressions.
 - IMPLEMENTED: Add native GitHub Actions jobs for Linux x86_64/ARM64, macOS x86_64/
   ARM64, and Windows x86_64/ARM64. Each job runs fmt, warnings-denied Clippy,
-  the full test suite, release build, and uploads a target-named binary with
-  SHA-256 and build metadata. `dist` is gated on the complete matrix.
-- HOSTED RESULT: First exact-SHA run `37259546829` on `de72d2c72f883626dbe0abc82774d112f421d219` passed both Linux targets, dependency/SBOM checks, and the common format/lint/test/build job; CodeQL `37259546815` passed. Both macOS targets and Windows x86_64 failed chaos tests because the test attempted recovery before the configured non-Linux stale age; Windows ARM64 failed a Git symbolic-HEAD projection test. Release packaging was skipped.
-- FOLLOW-UP: The non-Linux chaos fixture now simulates elapsed stale age only for the lock abandoned by its terminated test child; production lock behavior is unchanged. The Windows ARM64 assertion now includes Git stdout/stderr. Linux debug/release tests and all five cross-target Clippy checks pass locally; the exact native rerun is pending.
+  the full test suite, release build, stages and runs the native CLI, then
+  uploads a target-named tar bundle containing its binary, SHA-256, and build
+  metadata. `dist` is gated on the complete matrix.
+- HOSTED RESULT: First exact-SHA run `37259546829` on `de72d2c72f883626dbe0abc82774d112f421d219` passed both Linux targets, dependency/SBOM checks, and the common format/lint/test/build job; CodeQL `37259546815` passed. The test-only follow-up `eeb6e09351531f6320543c6775adbe02ed69797e` then passed Linux x86_64, shared checks, dependency/SBOM, and CodeQL `37260495354`, but Linux ARM64 exposed a real stale-reclaimer race (a journal disappeared during concurrent recovery); macOS and Windows x86_64 retained the age-fallback test failures; Windows ARM64 showed that `NUL` is not a valid Git config pathname. Release packaging was skipped on both failed matrices.
+- CURRENT FIX: Replace unlinkable O_EXCL PID/age locks with stable `fs4` kernel advisory locks and switch Git isolation fixtures to real empty config files. Sidecar contents are never read/written; symlink paths are rejected with a Unix target-preservation test, while non-regular sidecars have an all-platform regression. Artifact testing found and fixed lost POSIX execute permissions: CI now runs the staged binary and uploads a permission-preserving tar bundle. Linux debug/release suites pass 323 tests each (0 failures, 1 ignored); warnings-denied Clippy passes on Linux plus all five non-host targets; 20/20 mid-apply repeats and 5/5 six-seed chaos-suite repeats pass; RustSec, cargo-deny, SBOM drift, and the Linux staged/tar-extracted artifact smoke test pass. Exact native retest is pending.
 - BOUNDARY: Linux local checks do not establish the other five hosts. Per-target
   support is evidenced only by that target's successful native job on the exact pushed
-  commit; Unicode path normalization, Windows ACLs, non-Linux stale-lock age
-  behavior, and platform-specific directory durability remain documented.
+  commit; Unicode path normalization, Windows ACLs, mixed-version lock protocol,
+  network-filesystem locking, and platform-specific directory durability remain documented.

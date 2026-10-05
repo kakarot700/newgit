@@ -29,8 +29,9 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .arg("-C")
         .arg(dir)
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn git");
     assert!(
@@ -111,8 +112,9 @@ fn rich_git_repo(dir: &Path) {
         .env("GIT_COMMITTER_NAME", "Committer Different")
         .env("GIT_COMMITTER_EMAIL", "committer@example.net")
         .env("GIT_COMMITTER_DATE", "2021-06-16T09:00:00-08:00")
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
     assert!(
@@ -723,8 +725,9 @@ fn non_utf8_git_commit_message_is_lossily_converted_and_flagged() {
         .arg("-C")
         .arg(&gdir)
         .args(["hash-object", "-t", "commit", "-w", "--stdin"])
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1244,8 +1247,9 @@ fn sha256_git_import_export_roundtrips_semantically() {
         .arg("-C")
         .arg(&probe_dir)
         .args(["init", "--quiet", "--bare", "--object-format=sha256"])
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn Git SHA-256 capability probe");
     if !probe.status.success() {
@@ -1268,8 +1272,9 @@ fn sha256_git_import_export_roundtrips_semantically() {
         .arg("-C")
         .arg(&gdir)
         .args(["init", "--quiet", "--object-format=sha256", "-b", "master"])
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn git init");
     assert!(
@@ -2063,8 +2068,9 @@ fn git_namespace_refs_are_reported_and_not_exported_as_branches() {
         .arg("ls-remote")
         .arg(&gdir)
         .env("GIT_NAMESPACE", namespace)
-        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
-        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn namespaced git ls-remote");
     assert!(

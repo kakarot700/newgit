@@ -61,12 +61,6 @@ jobs:
         run: cargo test --release --locked
       - name: Build release binaries
         run: cargo build --release --locked
-      - name: Upload primary CLI binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: newgit-linux-x86_64
-          path: target/release/newgit
-          if-no-files-found: error
 
   platform-matrix:
     name: Native ${{ matrix.target }} checks
@@ -156,12 +150,21 @@ jobs:
       - name: Native release build
         run: cargo build --release --locked
       - name: Stage binary with checksum and build metadata
-        run: ${{ matrix.python }} scripts/ci_artifact.py --binary "${{ matrix.binary }}" --target "${{ matrix.target }}" --os "${{ matrix.os }}" --architecture "${{ matrix.architecture }}" --output "artifacts/${{ matrix.target }}"
-      - name: Upload native CI binary and metadata
+        run: |
+          artifact_dir="artifacts/${{ matrix.target }}"
+          ${{ matrix.python }} scripts/ci_artifact.py --binary "${{ matrix.binary }}" --target "${{ matrix.target }}" --os "${{ matrix.os }}" --architecture "${{ matrix.architecture }}" --output "$artifact_dir"
+          binary=$("${{ matrix.python }}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["binary"])' "$artifact_dir/build-metadata.json")
+          if [ "${{ matrix.os }}" != "windows" ]; then
+            test -x "$artifact_dir/$binary"
+          fi
+          "$artifact_dir/$binary" --version
+          tar -czf "artifacts/newgit-${{ matrix.target }}.tar.gz" -C "$artifact_dir" .
+          tar -tzf "artifacts/newgit-${{ matrix.target }}.tar.gz" >/dev/null
+      - name: Upload native CI bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: newgit-${{ matrix.target }}
-          path: artifacts/${{ matrix.target }}/
+          path: artifacts/newgit-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   security:

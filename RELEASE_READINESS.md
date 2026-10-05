@@ -63,7 +63,7 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 ## SECURITY
 - [x] threat model — THREAT_MODEL.md (surfaces A–G + §E2 UI/MCP; it9 pending rows resolved it10)
 - [x] path safety + parser hardening tests — iteration 1
-- [x] dependency review + SBOM + cargo-audit/deny — iteration 11 ✅ (SBOM.md committed w/ CI drift gate; cargo-audit RUN: 1290 advisories × 63 crates → zero findings; cargo-deny 0.20.2 RUN: advisories/bans/licenses/sources all ok, zero warnings; all 8 runtime build.rs scripts read — rustc probes only, no network; KL #38: snapshots vs that day's DB, CI re-runs both)
+- [x] dependency review + SBOM + cargo-audit/deny — SBOM.md committed w/ CI drift gate; cargo-audit RUN 2026-10-05: 1,290 advisories × 64 locked crates → zero findings; cargo-deny 0.20.2: advisories/bans/licenses/sources all ok; runtime build-script audit remains recorded in THREAT_MODEL §G; CI re-runs both audits)
 - [x] no unsafe code (`#![forbid(unsafe_code)]`), no implicit execution — DESIGN + iteration 1
 - [x] access control (remote authn/authz) tested — iteration 9 ✅ (bearer tokens hashed at rest, roles read<write<admin, invalid-token-never-anonymous, authz before every mutation, audit log of every request incl. failures; tested in remote_e2e + cli_e2e exit-code contracts)
 
@@ -83,10 +83,10 @@ Honest gate checklist; `[x]` only with evidence (test/command reference).
 
 ## RELEASE
 - [x→partial] clean reproducible build + artifacts + checksums — iteration 11 ✅ (two clean release builds bit-identical same-host, sha256 recorded; scripts/dist.sh tarball + SHA256SUMS verified with `sha256sum -c`; cross-host reproducibility NOT claimed — KL #37)
-- [x] Native CI matrix and release gate defined — `.github/workflows/ci.yml`; actions pinned, least-privilege permissions; Linux x86_64/ARM64, macOS Intel/ARM64, Windows x86_64/ARM64. Each native job runs fmt, Clippy, the full debug suite, a release build, and uploads a checksummed binary with OS/architecture/build metadata. `dist` is gated on all six. The current tagged release archives remain Linux x86_64 GNU; other native binaries are CI artifacts.
+- [x] Native CI matrix and release gate defined — `.github/workflows/ci.yml`; actions pinned, least-privilege permissions; Linux x86_64/ARM64, macOS Intel/ARM64, Windows x86_64/ARM64. Each native job runs fmt, Clippy, the full debug suite, a release build, executes its staged CLI, and uploads a target-specific tar bundle with a checksummed binary and OS/architecture/build metadata. `dist` is gated on all six. The current tagged release archives remain Linux x86_64 GNU; other native binaries are CI verification artifacts.
 - **Per-commit support evidence:** classify a target as supported only after its native job passes on that exact source SHA. Workflow configuration, cross-target compilation, and prior Linux-only runs do not establish other targets; inspect the actual Actions result before release.
-- [ ] Latest six-target exact-SHA matrix green — first portability run `37259546829` on `de72d2c72f883626dbe0abc82774d112f421d219` passed both Linux jobs and dependency/SBOM checks, but failed on both macOS and both Windows jobs; reproducible packaging was skipped. Follow-up test changes require their own full hosted run.
+- [ ] Latest six-target exact-SHA matrix green — follow-up run `37260495371` on `eeb6e09351531f6320543c6775adbe02ed69797e` passed Linux x86_64, shared checks, and dependency/SBOM checks, but failed Linux ARM64 with a journal-disappearance lock race, macOS and Windows x86_64 with age-fallback chaos tests, and Windows ARM64 because `NUL` was used as a Git config pathname; reproducible packaging was skipped. The current kernel-lock and real-empty-config fix requires a new full hosted run.
 - [x] CI green on hosted runner — CI run 37182199247 on commit `afa94c4`, with applicable check, security, and reproducible-distribution jobs successful
 - [x] CodeQL analysis — run 37182199239 completed successfully on the same commit
-- [x] CodeQL on first portability implementation — run 37259546815 completed successfully on `de72d2c72f883626dbe0abc82774d112f421d219`; a later implementation SHA still needs its own analysis.
+- [x] CodeQL on portability implementation and follow-up — runs 37259546815 and 37260495354 completed successfully on their respective exact SHAs; the current kernel-lock implementation still needs its own analysis.
 - [x] tag-release workflow is configured to publish only on `v*` tags after the `dist` job; main-push preflight is not itself a test of tag publication

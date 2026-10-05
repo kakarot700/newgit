@@ -208,16 +208,20 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     them individually consistent but different. No projection cache or durable
     generation counter exists; the lock closes the partial-view race, not the
     cache invalidation problem. Arbitrary filesystem edits outside NewGit APIs
-    are not coordinated. Non-Linux platforms do not probe recorded-PID liveness;
-    they reclaim a lock only after the configured `lock_stale_s` age (default
-    300 seconds). The default `lock_wait_ms` is 10 seconds, so an immediate
-    `Repo::open` after a crash can return `LockBusy`; retry after the stale-age
-    threshold to trigger recovery. A legitimate holder that exceeds that age
-    may also be reclaimed. Network-filesystem lock/atomicity behavior is
-    unverified. Git projections still rematerialize
-    the complete reachable view per request, and temporary disk/peak-memory
-    quotas are not separately enforced. Cached views, if ever added, must
-    remain disposable derived data, never canonical state.
+    are not coordinated. Lock acquisition uses a kernel-managed advisory lock
+    on a stable `.lock` path; the OS releases ownership when the process/handle
+    exits. New sidecars remain empty; legacy owner text may persist but is
+    ignored, and lock files are never deleted. The
+    default `lock_wait_ms` is 10 seconds; if it expires, a process still owns
+    the lock or the filesystem did not honor the request. All concurrent
+    NewGit processes must use the same lock protocol; stop older binaries
+    before upgrading or running them beside this version. Network-filesystem
+    lock/atomicity behavior is unverified. The legacy config key `lock_stale_s`
+    is accepted as an alias for `temp_file_grace_s`, which now controls
+    object-temp cleanup only. Git projections still rematerialize the complete
+    reachable view per request, and temporary disk/peak-memory quotas are not
+    separately enforced. Cached views, if ever added, must remain disposable
+    derived data, never canonical state.
 25. Non-UTF-8 git commit messages become lossy-converted and are flagged
     (`extras.git_message_lossy`); a real Git plumbing fixture verifies the raw
     source bytes, fast-export payload, replacement text, marker, and lossy export
