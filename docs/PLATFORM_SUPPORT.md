@@ -17,6 +17,21 @@ The authoritative evidence for a commit is its actual native matrix run in [GitH
 
 Current tagged release archives are Linux x86_64 GNU only. The native per-target CI binaries are verification artifacts and are not currently published as release archives.
 
+## First exact-SHA matrix result (2026-10-05)
+
+The first six-target run was for commit `de72d2c72f883626dbe0abc82774d112f421d219`: [CI run 37259546829](https://github.com/kakarot700/newgit/actions/runs/37259546829). These results apply to that SHA only; a test-only follow-up is pending its own native run.
+
+| Target | Result on `de72d2c` |
+|---|---|
+| Linux x86_64 | Passed; artifact SHA-256 and metadata verified |
+| Linux ARM64 | Passed; artifact SHA-256 and metadata verified |
+| macOS Intel x86_64 | Failed in the chaos suite: test retried recovery before the configured age-only stale-lock threshold |
+| macOS Apple silicon ARM64 | Failed in the chaos suite: same stale-lock-age test assumption |
+| Windows x86_64 | Failed in the chaos suite: same stale-lock-age test assumption |
+| Windows ARM64 | Failed in `upload_pack_projection_preserves_head_and_objects_without_checkout` at the Git `symbolic-ref HEAD` check; the follow-up captures Git stderr for diagnosis |
+
+The common format/lint/test/build job and dependency/SBOM checks passed. [CodeQL run 37259546815](https://github.com/kakarot700/newgit/actions/runs/37259546815) passed on the same SHA. Release packaging was skipped because four platform jobs failed. The Windows process-tree deadline regression passed in both Windows jobs despite their other test failures. Until a later exact-SHA matrix passes, do not treat these partial results as broad cross-platform support evidence.
+
 ## Known platform boundaries
 
 * Git tree modes preserve executable-bit metadata across import/export. Unix checkout applies executable permissions; Windows files do not have the same executable-bit behavior.

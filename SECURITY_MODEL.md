@@ -60,9 +60,12 @@ directory they are pointed at.
 8. Scope: each HTTP request has its own committed snapshot; no protocol token
    pins advertisement and upload-pack to one generation. The exclusive guard
    serializes projections, writers, and GC. Arbitrary filesystem edits outside
-   NewGit's APIs are not coordinated. Non-Linux stale-age reclamation and
-   network-filesystem lock/atomicity semantics are not established; a holder
-   exceeding the configured stale timeout may not retain the same guarantee.
+   NewGit's APIs are not coordinated. Linux uses recorded-PID liveness; other
+   targets use the configured stale-age fallback (defaults: `lock_stale_s` 300
+   seconds, `lock_wait_ms` 10 seconds). An immediate open after a crash may
+   return `LockBusy` until the stale age is reached and the caller retries; a
+   live holder exceeding that age may be reclaimed. Network-filesystem
+   lock/atomicity semantics are not established.
 
 ### Platform-specific guarantees and limits
 

@@ -722,7 +722,13 @@ fn upload_pack_projection_preserves_head_and_objects_without_checkout() {
         "symbolic-ref".into(),
         "HEAD".into(),
     ]);
-    assert!(head_ref.status.success());
+    assert!(
+        head_ref.status.success(),
+        "git symbolic-ref HEAD failed (exit {:?}); stdout: {}; stderr: {}",
+        head_ref.status.code(),
+        String::from_utf8_lossy(&head_ref.stdout),
+        String::from_utf8_lossy(&head_ref.stderr)
+    );
     assert_eq!(
         String::from_utf8_lossy(&head_ref.stdout).trim(),
         "refs/heads/main"

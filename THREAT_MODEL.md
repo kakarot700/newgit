@@ -30,7 +30,7 @@ Each threat: vector → impact → mitigation → test that proves it.
 | Windows device aliases, ADS/reserved characters, trailing dot/space, or case-colliding checkout paths | Windows-specific component rejection plus whole-tree preflight; case-collision preflight on Windows/macOS | `path_checks` Windows cases; `checkout_rejects_windows_reserved_paths_before_writing` (Windows); `checkout_rejects_case_collisions_before_writing` (Windows/macOS) |
 | TOCTOU on file reads (file swapped mid-read) | content hashed from the bytes actually read; index is a cache; snapshot atomicity via tmp+rename | crash tests (it2/3) |
 | Resource exhaustion via huge files/many files | configurable limits; enforced before allocation | `limits_enforced` ✅; walk limits (it3) |
-| Stale lock DoS or age-based theft during a long projection | bounded wait; on Linux, age alone cannot reclaim a lock whose recorded holder PID is alive; non-Linux uses the configured stale-age fallback | `stale_lock_is_reclaimed`, `stale_age_does_not_steal_lock_from_live_holder` (Linux) ✅; non-Linux long-holder behavior is not established |
+| Stale lock DoS or age-based theft during a long projection | bounded wait; on Linux, age alone cannot reclaim a lock whose recorded holder PID is alive; non-Linux uses the configured stale-age fallback (300 seconds by default), so a crashed lock may require a later retry and a live holder past the threshold may be reclaimed | `stale_lock_is_reclaimed`, `stale_age_does_not_steal_lock_from_live_holder` (Linux) ✅; first native non-Linux chaos run exposed an early-retry test assumption; follow-up native run pending |
 
 ## C. Concurrency / crash
 

@@ -125,9 +125,31 @@ fn ws_files_dir(root: &Path, ws: &str) -> std::path::PathBuf {
         .join("files")
 }
 
+/// Non-Linux targets cannot prove that a recorded PID has exited; they reclaim
+/// a lock only after its configured stale age. Backdate a lock left by the
+/// already-terminated fault child so chaos recovery stays deterministic rather
+/// than sleeping for the production 300-second stale interval. The filesystem
+/// stale-age rule itself is covered separately by `util::fsx` tests.
+#[cfg(not(target_os = "linux"))]
+fn age_abandoned_lock_for_stale_fallback(root: &Path, ctx: &str) {
+    let lock_path = root.join(".newgit").join("txn").join("LOCK.lock");
+    if !lock_path.exists() {
+        return;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_path)
+        .unwrap_or_else(|error| panic!("{ctx}: could not open abandoned lock: {error}"));
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    file.set_times(std::fs::FileTimes::new().set_modified(old))
+        .unwrap_or_else(|error| panic!("{ctx}: could not age abandoned lock: {error}"));
+}
+
 /// All invariants that must hold after every step (killed or not).
 fn assert_repo_healthy(root: &Path, ctx: &str, live_ws: &[String]) {
     // (1) open auto-recovers
+    #[cfg(not(target_os = "linux"))]
+    age_abandoned_lock_for_stale_fallback(root, ctx);
     let repo = match Repo::open(root) {
         Ok(r) => r,
         Err(e) => panic!("{ctx}: Repo::open failed after crash: {e}"),

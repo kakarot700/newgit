@@ -208,10 +208,13 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     them individually consistent but different. No projection cache or durable
     generation counter exists; the lock closes the partial-view race, not the
     cache invalidation problem. Arbitrary filesystem edits outside NewGit APIs
-    are not coordinated. The tested lock behavior is Linux with local
-    filesystem semantics; on non-Linux platforms, a recorded holder may be
-    reclaimed by the configured stale-age fallback, and network-filesystem
-    lock/atomicity behavior is unverified. Git projections still rematerialize
+    are not coordinated. Non-Linux platforms do not probe recorded-PID liveness;
+    they reclaim a lock only after the configured `lock_stale_s` age (default
+    300 seconds). The default `lock_wait_ms` is 10 seconds, so an immediate
+    `Repo::open` after a crash can return `LockBusy`; retry after the stale-age
+    threshold to trigger recovery. A legitimate holder that exceeds that age
+    may also be reclaimed. Network-filesystem lock/atomicity behavior is
+    unverified. Git projections still rematerialize
     the complete reachable view per request, and temporary disk/peak-memory
     quotas are not separately enforced. Cached views, if ever added, must
     remain disposable derived data, never canonical state.

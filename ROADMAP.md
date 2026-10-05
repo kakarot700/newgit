@@ -178,8 +178,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
   ARM64, and Windows x86_64/ARM64. Each job runs fmt, warnings-denied Clippy,
   the full test suite, release build, and uploads a target-named binary with
   SHA-256 and build metadata. `dist` is gated on the complete matrix.
-- PENDING: Hosted execution of all six native jobs on the exact pushed commit;
-  do not infer any target's support from workflow configuration or compilation.
+- HOSTED RESULT: First exact-SHA run `37259546829` on `de72d2c72f883626dbe0abc82774d112f421d219` passed both Linux targets, dependency/SBOM checks, and the common format/lint/test/build job; CodeQL `37259546815` passed. Both macOS targets and Windows x86_64 failed chaos tests because the test attempted recovery before the configured non-Linux stale age; Windows ARM64 failed a Git symbolic-HEAD projection test. Release packaging was skipped.
+- FOLLOW-UP: The non-Linux chaos fixture now simulates elapsed stale age only for the lock abandoned by its terminated test child; production lock behavior is unchanged. The Windows ARM64 assertion now includes Git stdout/stderr. Linux debug/release tests and all five cross-target Clippy checks pass locally; the exact native rerun is pending.
 - BOUNDARY: Linux local checks do not establish the other five hosts. Per-target
   support is evidenced only by that target's successful native job on the exact pushed
   commit; Unicode path normalization, Windows ACLs, non-Linux stale-lock age
