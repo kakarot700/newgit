@@ -130,6 +130,71 @@ fn as_text(output: &Output) -> &str {
     std::str::from_utf8(&output.stdout).unwrap()
 }
 
+fn read_http_status(stream: &mut TcpStream) -> u16 {
+    const MAX_HEADER_BYTES: usize = 64 * 1024;
+    const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let header_end = loop {
+        let n = stream.read(&mut chunk).unwrap_or_else(|error| {
+            panic!(
+                "HTTP status response read failed before complete headers ({} bytes received): {error}",
+                response.len()
+            )
+        });
+        assert_ne!(n, 0, "HTTP response closed before complete headers");
+        response.extend_from_slice(&chunk[..n]);
+        if let Some(position) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            assert!(
+                position <= MAX_HEADER_BYTES,
+                "HTTP status response headers exceeded {MAX_HEADER_BYTES} bytes"
+            );
+            break position + 4;
+        }
+        assert!(
+            response.len() <= MAX_HEADER_BYTES,
+            "HTTP status response headers exceeded {MAX_HEADER_BYTES} bytes"
+        );
+    };
+    let header = std::str::from_utf8(&response[..header_end - 4])
+        .expect("HTTP response headers must be ASCII/UTF-8");
+    let mut lines = header.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split_ascii_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .expect("HTTP response must start with a numeric status");
+    let content_length = lines
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().expect("valid Content-Length"))
+        })
+        .expect("HTTP response must include Content-Length");
+    assert!(
+        content_length <= MAX_BODY_BYTES,
+        "HTTP status response body exceeded {MAX_BODY_BYTES} bytes"
+    );
+    let response_end = header_end
+        .checked_add(content_length)
+        .expect("HTTP response length must not overflow");
+    while response.len() < response_end {
+        let n = stream.read(&mut chunk).unwrap_or_else(|error| {
+            panic!(
+                "HTTP status response body incomplete ({} of {content_length} body bytes received): {error}",
+                response.len().saturating_sub(header_end)
+            )
+        });
+        assert_ne!(
+            n, 0,
+            "HTTP response closed before its declared {content_length}-byte body completed"
+        );
+        response.extend_from_slice(&chunk[..n]);
+    }
+    status
+}
+
 fn raw_git_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
     let mut stream = TcpStream::connect(addr).unwrap();
     let auth = authorization
@@ -140,18 +205,7 @@ fn raw_git_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
         "GET /info/refs?service=git-upload-pack HTTP/1.1\r\nHost: {addr}\r\n{auth}Connection: close\r\n\r\n"
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    let headers = String::from_utf8_lossy(&response);
-    headers
-        .lines()
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap()
+    read_http_status(&mut stream)
 }
 
 fn raw_git_receive_get_status(addr: SocketAddr, authorization: Option<&str>) -> u16 {
@@ -164,17 +218,7 @@ fn raw_git_receive_get_status(addr: SocketAddr, authorization: Option<&str>) -> 
         "GET /info/refs?service=git-receive-pack HTTP/1.1\r\nHost: {addr}\r\n{auth}Connection: close\r\n\r\n"
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    String::from_utf8_lossy(&response)
-        .lines()
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap()
+    read_http_status(&mut stream)
 }
 
 fn raw_git_receive_advertisement(addr: SocketAddr, authorization: &str) -> Vec<u8> {

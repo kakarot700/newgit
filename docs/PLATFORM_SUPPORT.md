@@ -58,7 +58,13 @@ Commit `6990dcc4387990b75711dbaa56c5f1e21efc105d` ran as [CI 37264636052](https:
 
 Commit `ef77bff94c76b48d1295d9c2a1989ce5c184e3a4` ran as [CI 37265829724](https://github.com/kakarot700/newgit/actions/runs/37265829724); [CodeQL 37265829698](https://github.com/kakarot700/newgit/actions/runs/37265829698) passed on the same SHA. Linux x86_64/ARM64 and macOS x86_64/ARM64 native jobs passed. Both Windows jobs failed eight `git_compat` tests: seven clean-worktree or byte assertions observed CRLF output, and one fixture attempted to create a quoted filename, which Windows rejects. The shared format/lint/test/build and dependency/SBOM jobs passed; reproducible release packaging was skipped.
 
-The current local correction pins `core.autocrlf=false` in the newly exported repository (not in user/global config) to prevent default host-wide CRLF conversion (file-specific `.gitattributes` rules still apply), and uses Windows-valid Unicode filenames while keeping literal quote/backslash path assertions Unix-only. Local Linux debug/release suites and cross-target Clippy pass, but this candidate has not yet run on hosted Windows. The exact-SHA matrix remains failed and no new platform support is certified.
+The follow-up `ece651f` run below exercised the local correction on both Windows targets: all 28 `git_compat` tests passed on each. That later matrix still failed in a separate raw HTTP status-probe E2E; the Content-Length status-reader correction for that probe remains pending hosted verification.
+
+## Windows raw HTTP status-probe exact-SHA result (2026-10-05)
+
+Commit `ece651fd69a7694830bc11097bdc5d46f91074c5` ran as [CI 37267038929](https://github.com/kakarot700/newgit/actions/runs/37267038929); [CodeQL 37267038890](https://github.com/kakarot700/newgit/actions/runs/37267038890) passed on the same SHA. Linux x86_64/ARM64 and macOS x86_64/ARM64 native jobs passed; the shared format/lint/test/build and dependency/SBOM jobs also passed. Both Windows jobs passed all 28 Git compatibility tests, including the prior checkout-policy correction, but failed the real-Git smart-HTTP E2E when `TcpStream::read_to_end` in the raw `/info/refs` status probes returned WSAECONNRESET (10054) while waiting for EOF. The logs did not record how many response bytes arrived. Reproducible release packaging was skipped.
+
+The current local test-only correction reads the declared Content-Length response body and still fails on truncated headers/body; it does not change server runtime behavior. It has passed the Linux debug/release suites and cross-target Clippy, but it has not yet run on hosted Windows. No full matrix or release package is certified for this candidate.
 
 ## Known platform boundaries
 
