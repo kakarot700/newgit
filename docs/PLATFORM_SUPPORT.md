@@ -143,8 +143,25 @@ passed. The follow-up changes only test portability/timing and documentation;
 production behavior is unchanged. Release readiness remains pending.
 
 
-## Current exact-SHA native evidence — Windows deadline follow-up (`c20ecff`)
+## Last fully green exact-SHA native evidence before the newer docs head (`c20ecff`)
 
 On exact SHA `c20ecff6b5a28f98f7cb9a95fc0053563ab5c949`, [CI run 37380464977 attempt 2](https://github.com/kakarot700/newgit/actions/runs/37380464977/attempts/2) passed all six native targets and their full test/build/artifact steps. Both Windows jobs passed the focused request-deadline regression before the full suite: [Windows x86_64 job 112005430166](https://github.com/kakarot700/newgit/actions/runs/37380464977/job/112005430166) and [Windows ARM64 job 112005430010](https://github.com/kakarot700/newgit/actions/runs/37380464977/job/112005430010). Their complete suites, including real-Git force-push coverage, passed. Linux x86_64/ARM64 and macOS x86_64/ARM64 also passed in that run.
 
-The shared checks, dependency/SBOM job, and dependent reproducible distribution-package gate passed on the same SHA; the exact-SHA [CodeQL run 37380465174](https://github.com/kakarot700/newgit/actions/runs/37380465174) passed. Attempt 1's force-push HTTP 408 remains in the record; the logs do not expose per-request idle duration, and the passing same-SHA retry is not used to erase or relabel that failure. The Windows-specific peer-EOF handling is test-only; production code and timeout policy are unchanged.
+The shared checks, dependency/SBOM job, and dependent reproducible distribution-package gate passed on the same SHA; the exact-SHA [CodeQL run 37380465174](https://github.com/kakarot700/newgit/actions/runs/37380465174) passed. Attempt 1's force-push HTTP 408 remains in the record; the logs do not expose per-request idle duration, and the passing same-SHA retry is not used to erase or relabel that failure. The Windows-specific peer-EOF handling is test-only; production code and timeout policy are unchanged. This is the last fully green checkpoint before the later `97ea454` exact-SHA failures below.
+
+## Newer exact-SHA results — documentation head `97ea454` (2026-10-06)
+
+The tested SHA `97ea454fbbf141e7be2c7a6b9380f5eb5706bdc9` changed documentation only. [CI run 37383408644 attempt 1](https://github.com/kakarot700/newgit/actions/runs/37383408644/attempts/1) and its single complete unchanged-SHA rerun, [attempt 2](https://github.com/kakarot700/newgit/actions/runs/37383408644/attempts/2), produced these native outcomes:
+
+| Target | Attempt 1 | Attempt 2 |
+|---|---|---|
+| Linux x86_64 | Passed | Passed |
+| Linux ARM64 | Passed | Passed |
+| macOS Intel x86_64 | Passed | Passed |
+| macOS Apple silicon ARM64 | Passed | Passed |
+| Windows ARM64 | Passed | Passed |
+| Windows x86_64 | Failed: partial-clone lazy checkout reset; 49,116 body bytes remained | Failed: post-push `git fetch --prune` returned HTTP 408 |
+
+The focused Windows request-deadline regression passed on both Windows architectures in both attempts. Attempt 2 also passed the partial-clone and force-push E2Es; a different real-Git smart-HTTP roundtrip E2E then failed during the post-push fetch. Its [Windows x86_64 job log](https://github.com/kakarot700/newgit/actions/runs/37383408644/job/112014012577) shows the HTTP 408; attempt 1's [Windows x86_64 job log](https://github.com/kakarot700/newgit/actions/runs/37383408644/job/112010728915) shows the reset. The other five native jobs uploaded their CI bundles in attempt 2; Windows x86_64 failed before release build/staging/upload.
+
+Shared formatting/lint/test/build and dependency/SBOM checks passed in both attempts. [CodeQL run 37383408628](https://github.com/kakarot700/newgit/actions/runs/37383408628) passed on the same SHA. The dependent `dist` package job was skipped in both attempts because the native matrix was not green; no package or checksum result is claimed for `97ea454`. The logs do not provide per-request elapsed or idle duration, so the reset/408 are not attributed to a demonstrated 30-second timeout or called confirmed CI flakes. Release readiness remains pending; no production behavior changed, and the published `d272bef` implementation, `v0.1.0` tag, and history/tag positions remain unchanged. No `v0.1.1` is created.

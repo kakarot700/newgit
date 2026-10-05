@@ -99,6 +99,7 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   The earlier same-SHA Linux timing-bound miss and Windows force-push HTTP 408
   remain recorded in `TEST_MATRIX.md`; the Windows log did not provide the
   request's idle duration. No production code, timeout, version, or tag changed.
+
 - `import-git` now inspects ref object types before invoking `fast-export` and
   refuses ordinary refs that target non-commit objects, naming the ref/type and
   leaving refs untouched. Git 2.43.0 silently omits lightweight blob/tree refs,
@@ -122,6 +123,19 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   Git C-quoting for quotes or backslashes. A real-Git import/export regression
   covers both sides of a rename and compares path names, modes, and blob IDs at
   every commit; it caught the previous `é` → `Ã©` pathname corruption.
+
+### Verification notes
+- On docs-only SHA `97ea454fbbf141e7be2c7a6b9380f5eb5706bdc9`, CI attempt 1 failed
+  Windows x86_64's partial-clone lazy checkout with a connection reset and 49,116
+  body bytes still expected. The one complete unchanged-SHA attempt 2 failed a
+  different Windows x86_64 real-Git E2E when post-push `git fetch --prune`
+  received HTTP 408; the partial-clone, force-push, and focused deadline tests
+  passed on attempt 2. The other five native targets, shared checks, and
+  dependency/SBOM passed; [CodeQL 37383408628](https://github.com/kakarot700/newgit/actions/runs/37383408628)
+  passed on the same SHA. The dependent package job was skipped on both attempts.
+  Request-level elapsed/idle duration is not logged, so neither a 30-second
+  timeout nor a transient-flake explanation is claimed. These outcomes and the
+  immutable-history/release boundary are detailed in `TEST_MATRIX.md`.
 
 ### Added
 - A real Git SSH-signed annotated-tag regression verifies the source signature,
