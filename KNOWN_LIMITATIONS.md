@@ -11,8 +11,11 @@ Honest, current list. Anything not listed here that fails is a bug — report it
    characters, or every operating system. No surrogate-escape mapping yet.
 2. **No staging area.** Snapshots capture whole workspaces (DECISIONS D-006).
 3. **Symlinks are stored, never followed.** A symlink is a blob containing its
-   target string; checkout recreates the link (unix). No submodule/subrepo
-   concept in v1.
+   target string; Unix checkout recreates it. Non-Unix checkout refuses a tree
+   containing symlinks before writing any destination paths. Windows snapshot
+   capture depends on host symlink privilege/availability; a real Git index
+   fixture separately tests symlink-object interoperability without requiring
+   the fixture itself to create a host symlink. No submodule/subrepo concept in v1.
 4. **No object signing yet.** Actor pubkeys are metadata; signature
    verification is roadmap (SECURITY_MODEL §2).
 5. **Timestamps are wall-clock claims**, not trusted ordering. History order
@@ -292,3 +295,13 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     checksum verification. CodeQL run 37182199239 on that commit completed
     successfully. These results apply to the tested commit/platform; see the
     Actions page for current status and do not infer future advisory coverage.
+39. **Cross-platform filesystem semantics remain bounded.** Native CI is defined
+    for Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64/ARM64; a
+    platform is only verified when its native job actually passes. Windows
+    executable bits are not represented by ordinary filesystem permissions;
+    Git tree executable modes are preserved through the Git index, not asserted
+    as Windows file attributes. Windows token-file ACLs are inherited and not
+    tightened by NewGit. Directory fsync is best-effort, stale-lock reclamation
+    outside Linux falls back to age, and case-collision preflight does not model
+    every Unicode normalization/case-folding rule of every filesystem. These
+    limitations are not waived by successful compilation alone.

@@ -215,21 +215,13 @@ fn read_lock_info(lock_path: &Path) -> Option<(u32, u64)> {
     Some((pid?, time.unwrap_or(0)))
 }
 
-/// Is a process with this pid currently alive?
-/// Linux: /proc probe. Elsewhere: conservatively assume alive (reclamation
-/// then relies on the stale timeout — documented in STORAGE_FORMAT.md).
+/// Is a process with this pid currently alive? Linux-only `/proc` probe.
+#[cfg(target_os = "linux")]
 fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
-    #[cfg(target_os = "linux")]
-    {
-        Path::new(&format!("/proc/{pid}")).exists()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        true
-    }
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Read a file fully, rejecting files larger than `max` before reading.
@@ -252,6 +244,12 @@ pub fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
 pub fn check_rel_path(p: &str, max_component: usize) -> Result<()> {
     if p.is_empty() {
         return Err(Error::Invalid("empty path".into()));
+    }
+    #[cfg(windows)]
+    if p.contains('\\') {
+        return Err(Error::Invalid(format!(
+            "backslash is not a portable repository path separator: {p:?}"
+        )));
     }
     if p.as_bytes().contains(&0) {
         return Err(Error::Invalid(format!("path contains NUL byte: {p:?}")));
@@ -278,6 +276,8 @@ pub fn check_rel_path(p: &str, max_component: usize) -> Result<()> {
                         "drive-letter path component: {p:?}"
                     )));
                 }
+                #[cfg(windows)]
+                check_windows_component(s, p)?;
                 if s.len() > max_component {
                     return Err(Error::Limit(format!(
                         "path component longer than {max_component} bytes in {p:?}"
@@ -298,6 +298,47 @@ pub fn check_rel_path(p: &str, max_component: usize) -> Result<()> {
     }
     if depth == 0 {
         return Err(Error::Invalid(format!("empty path: {p:?}")));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn check_windows_component(component: &str, path: &str) -> Result<()> {
+    if component
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return Err(Error::Invalid(format!(
+            "Windows-reserved character in repository path: {path:?}"
+        )));
+    }
+    if component.ends_with('.') || component.ends_with(' ') {
+        return Err(Error::Invalid(format!(
+            "Windows path component ends in a dot or space: {path:?}"
+        )));
+    }
+    let device = component
+        .split('.')
+        .next()
+        .unwrap_or(component)
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    let numbered_device = ["COM", "LPT"].iter().any(|prefix| {
+        device.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    });
+    if matches!(
+        device.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered_device
+    {
+        return Err(Error::Invalid(format!(
+            "Windows device name is not a repository path: {path:?}"
+        )));
     }
     Ok(())
 }
@@ -360,20 +401,22 @@ mod tests {
 
     #[test]
     fn dead_holder_lock_is_reclaimed() {
-        // Simulates a lock left behind by an aborted/killed process:
-        // the recorded pid is beyond any possible Linux pid (pid_max ≤ 2^22),
-        // so the holder is provably dead and the lock must be reclaimed
-        // *without* waiting for the stale timeout.
+        // Linux can prove the synthetic pid is dead and reclaims immediately.
+        // Other platforms intentionally use the configured stale-age fallback.
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("res");
         let lp = lock_path_for(&p);
         std::fs::write(&lp, "pid=99999999 time=1").unwrap();
         let start = std::time::Instant::now();
-        let _l =
-            FileLock::acquire(&p, Duration::from_millis(500), Duration::from_secs(3600)).unwrap();
+        let stale_after = if cfg!(target_os = "linux") {
+            Duration::from_secs(3600)
+        } else {
+            Duration::ZERO
+        };
+        let _l = FileLock::acquire(&p, Duration::from_millis(500), stale_after).unwrap();
         assert!(
             start.elapsed() < Duration::from_secs(1),
-            "dead-holder lock must be reclaimed immediately"
+            "dead-holder lock must be reclaimed within the documented policy"
         );
     }
 
@@ -439,6 +482,27 @@ mod tests {
         assert!(safe_join(&root, "../evil.txt", 255).is_err());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_unrepresentable_path_names_are_rejected() {
+        for path in [
+            r"dir\child",
+            "file:alternate-stream",
+            "CON",
+            "CONIN$",
+            "CONOUT$.txt",
+            "nul.txt",
+            "COM1",
+            "LPT9.log",
+            "COM¹",
+            "LPT².txt",
+            "name.",
+            "name ",
+        ] {
+            assert!(check_rel_path(path, 255).is_err(), "accepted {path:?}");
+        }
+    }
+
     #[test]
     fn symlink_escape_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
@@ -448,7 +512,16 @@ mod tests {
         std::fs::create_dir(&outside).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-        #[cfg(unix)]
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(&outside, root.join("link")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("Skipping symlink-escape filesystem assertion; Windows symlink creation unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("Windows symlink creation failed: {error}"),
+        }
+        #[cfg(any(unix, windows))]
         {
             let r = safe_join(&root, "link/evil.txt", 255);
             assert!(r.is_err(), "symlink escape must be rejected");

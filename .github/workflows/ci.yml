@@ -68,6 +68,102 @@ jobs:
           path: target/release/newgit
           if-no-files-found: error
 
+  platform-matrix:
+    name: Native ${{ matrix.target }} checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            os: linux
+            architecture: x86_64
+            binary: target/release/newgit
+            python: python3
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            os: linux
+            architecture: aarch64
+            binary: target/release/newgit
+            python: python3
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            os: macos
+            architecture: x86_64
+            binary: target/release/newgit
+            python: python3
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            os: macos
+            architecture: aarch64
+            binary: target/release/newgit
+            python: python3
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            os: windows
+            architecture: x86_64
+            binary: target/release/newgit.exe
+            python: python
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            os: windows
+            architecture: aarch64
+            binary: target/release/newgit.exe
+            python: python
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Check Git interoperability prerequisites
+        run: |
+          command -v git
+          command -v ssh-keygen
+          ${{ matrix.python }} - <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          text = subprocess.check_output(["git", "--version"], text=True)
+          match = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+          if match is None:
+              raise SystemExit(f"could not parse installed Git version: {text.strip()}")
+          version = tuple(map(int, match.groups()))
+          print(f"Git {'.'.join(map(str, version))}; SSH tag fixture requires Git >= 2.34.0")
+          if version < (2, 34, 0):
+              sys.exit("Git >= 2.34.0 is required for the SSH-signed interoperability fixtures")
+          PY
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Native unit and integration tests
+        run: cargo test --locked
+      - name: Native release build
+        run: cargo build --release --locked
+      - name: Stage binary with checksum and build metadata
+        run: ${{ matrix.python }} scripts/ci_artifact.py --binary "${{ matrix.binary }}" --target "${{ matrix.target }}" --os "${{ matrix.os }}" --architecture "${{ matrix.architecture }}" --output "artifacts/${{ matrix.target }}"
+      - name: Upload native CI binary and metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: newgit-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}/
+          if-no-files-found: error
+
   security:
     name: Dependency and SBOM checks
     runs-on: ubuntu-24.04
@@ -106,7 +202,7 @@ jobs:
   dist:
     name: Reproducible release package
     if: github.event_name == 'push'
-    needs: [checks, security]
+    needs: [checks, security, platform-matrix]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

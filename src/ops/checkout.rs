@@ -71,16 +71,14 @@ pub fn checkout_tree(
     mut index: Option<&mut Index>,
 ) -> Result<CheckoutReport> {
     let mut report = CheckoutReport::default();
-    if !dest.exists() {
-        fsx::ensure_dir(dest)?;
-    }
-    if !dest.is_dir() {
+    let dest_exists = dest.exists();
+    if dest_exists && !dest.is_dir() {
         return Err(Error::Invalid(format!(
             "checkout destination is not a directory: {}",
             dest.display()
         )));
     }
-    if mode == CheckoutMode::FreshWorkspace {
+    if dest_exists && mode == CheckoutMode::FreshWorkspace {
         let mut it = std::fs::read_dir(dest).map_err(|e| Error::io(dest, e))?;
         if it.next().is_some() {
             return Err(Error::Invalid(format!(
@@ -91,8 +89,23 @@ pub fn checkout_tree(
     }
     let entries = flatten_tree(repo, root)?;
     let limits = repo.limits().clone();
+    for (rel, _, _) in &entries {
+        fsx::check_rel_path(rel, limits.max_path_component)?;
+    }
+    check_case_insensitive_collisions(&entries)?;
+    #[cfg(not(unix))]
+    if entries
+        .iter()
+        .any(|(_, mode, _)| *mode == EntryMode::Symlink)
+    {
+        return Err(Error::Invalid(
+            "symlink checkout is only supported on unix".into(),
+        ));
+    }
+    if !dest_exists {
+        fsx::ensure_dir(dest)?;
+    }
     for (rel, emode, oid) in entries {
-        fsx::check_rel_path(&rel, limits.max_path_component)?;
         check_no_symlink_components(dest, &rel)?;
         ensure_dirs_safe(dest, &rel)?;
         let target = dest.join(&rel);
@@ -117,6 +130,7 @@ pub fn checkout_tree(
             Err(e) => return Err(Error::io(&target, e)),
         }
         match emode {
+            #[cfg(unix)]
             EntryMode::Symlink => {
                 let obj = repo.objects.get(&oid)?;
                 let content = obj.as_blob()?;
@@ -124,18 +138,8 @@ pub fn checkout_tree(
                     oid,
                     reason: "symlink blob is not utf-8".into(),
                 })?;
-                #[cfg(unix)]
-                {
-                    std::os::unix::fs::symlink(target_str, &target)
-                        .map_err(|e| Error::io(&target, e))?;
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = target_str;
-                    return Err(Error::Invalid(
-                        "symlink checkout is only supported on unix".into(),
-                    ));
-                }
+                std::os::unix::fs::symlink(target_str, &target)
+                    .map_err(|e| Error::io(&target, e))?;
                 report.symlinks += 1;
                 if let Some(idx) = index.as_deref_mut() {
                     let (sec, nsec) = mtime_of_file(&target);
@@ -150,6 +154,13 @@ pub fn checkout_tree(
                         },
                     );
                 }
+            }
+            #[cfg(not(unix))]
+            EntryMode::Symlink => {
+                let _ = oid;
+                return Err(Error::Invalid(
+                    "symlink checkout is only supported on unix".into(),
+                ));
             }
             EntryMode::File | EntryMode::Executable => {
                 let obj = repo.objects.get(&oid)?;
@@ -188,6 +199,41 @@ pub fn checkout_tree(
     // fsync the destination tree (best effort, parents included)
     fsx::fsync_dir(dest)?;
     Ok(report)
+}
+
+/// Windows and the default macOS filesystems are commonly case-insensitive.
+/// Reject a tree whose distinct paths would alias there before writing any
+/// entry. This is intentionally conservative on case-sensitive macOS volumes.
+#[cfg(any(windows, target_os = "macos"))]
+fn check_case_insensitive_collisions(entries: &[(String, EntryMode, ObjectId)]) -> Result<()> {
+    let mut seen = std::collections::HashMap::<String, String>::new();
+    for (path, _, _) in entries {
+        let mut original = String::new();
+        let mut folded = String::new();
+        for component in path.split('/') {
+            if !original.is_empty() {
+                original.push('/');
+                folded.push('/');
+            }
+            original.push_str(component);
+            folded.extend(component.chars().flat_map(char::to_lowercase));
+            if let Some(previous) = seen.get(&folded) {
+                if previous != &original {
+                    return Err(Error::Invalid(format!(
+                        "paths {previous:?} and {original:?} collide on a case-insensitive filesystem"
+                    )));
+                }
+            } else {
+                seen.insert(folded.clone(), original.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn check_case_insensitive_collisions(_entries: &[(String, EntryMode, ObjectId)]) -> Result<()> {
+    Ok(())
 }
 
 /// Create parent directories of `rel` under `dest` one component at a time,

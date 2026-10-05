@@ -29,8 +29,8 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .arg("-C")
         .arg(dir)
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .output()
         .expect("spawn git");
     assert!(
@@ -51,6 +51,8 @@ fn init_git(dir: &Path) {
     git(dir, &["config", "user.name", "Test Author"]);
     git(dir, &["config", "user.email", "author@example.com"]);
     git(dir, &["config", "commit.gpgsign", "false"]);
+    #[cfg(windows)]
+    git(dir, &["config", "core.symlinks", "false"]);
 }
 
 fn commit(dir: &Path, msg: &str) {
@@ -62,6 +64,17 @@ fn write(dir: &Path, rel: &str, content: &[u8]) {
     let p = dir.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, content).unwrap();
+}
+
+fn git_symlink(dir: &Path, path: &str, target: &str) {
+    // Stage mode 120000 directly: the Git tree fixture must not depend on the
+    // host granting symlink-creation privilege (notably on Windows).
+    let blob_path = ".newgit-symlink-target";
+    write(dir, blob_path, target.as_bytes());
+    let blob = git_out(dir, &["hash-object", "-w", blob_path]);
+    std::fs::remove_file(dir.join(blob_path)).unwrap();
+    let cache_info = format!("120000,{},{}", blob.trim(), path);
+    git(dir, &["update-index", "--add", "--cacheinfo", &cache_info]);
 }
 
 /// A rich git repo: merges, tags, binaries, symlink, exec bit, unicode,
@@ -79,8 +92,9 @@ fn rich_git_repo(dir: &Path) {
         "h\u{00e9}llo \u{00fc}nicode.txt",
         "namaste world\n".as_bytes(),
     );
-    std::os::unix::fs::symlink("a.txt", dir.join("link.txt")).unwrap();
     git(dir, &["add", "-A"]);
+    git_symlink(dir, "link.txt", "a.txt");
+    git(dir, &["checkout-index", "--force", "--", "link.txt"]);
     // one-shot second author + timezone + DIFFERENT committer (env-scoped)
     let o = Command::new("git")
         .arg("-C")
@@ -97,8 +111,8 @@ fn rich_git_repo(dir: &Path) {
         .env("GIT_COMMITTER_NAME", "Committer Different")
         .env("GIT_COMMITTER_EMAIL", "committer@example.net")
         .env("GIT_COMMITTER_DATE", "2021-06-16T09:00:00-08:00")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .output()
         .unwrap();
     assert!(
@@ -501,13 +515,24 @@ fn export_roundtrip_matches_git() {
         git_out(&outdir, &["symbolic-ref", "HEAD"]).trim(),
         "refs/heads/master"
     );
-    // symlink + exec bit survived on disk
-    assert!(outdir
-        .join("link.txt")
-        .symlink_metadata()
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    // Git preserves mode 120000; Windows may materialize its configured
+    // core.symlinks=false fallback as a regular file containing the target.
+    let link = outdir.join("link.txt");
+    let link_meta = std::fs::symlink_metadata(&link).unwrap();
+    #[cfg(unix)]
+    {
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(std::fs::read_link(link).unwrap(), Path::new("a.txt"));
+    }
+    #[cfg(windows)]
+    {
+        if link_meta.file_type().is_symlink() {
+            assert_eq!(std::fs::read_link(link).unwrap(), Path::new("a.txt"));
+        } else {
+            assert!(link_meta.is_file(), "unexpected Git symlink fallback");
+            assert_eq!(std::fs::read(link).unwrap(), b"a.txt");
+        }
+    }
 }
 
 #[test]
@@ -515,11 +540,17 @@ fn quoted_utf8_git_paths_roundtrip_without_changing_names() {
     let d = tempfile::tempdir().unwrap();
     let gdir = d.path().join("g");
     init_git(&gdir);
+    #[cfg(unix)]
     let first_path = "café \"quoted\"\\name.txt";
+    #[cfg(windows)]
+    let first_path = "café \"quoted\".txt";
     write(&gdir, first_path, b"first content\n");
     commit(&gdir, "quoted UTF-8 path root");
 
+    #[cfg(unix)]
     let second_path = "quoted \"résumé\"\\file.txt";
+    #[cfg(windows)]
+    let second_path = "quoted \"résumé\".txt";
     git(&gdir, &["mv", first_path, second_path]);
     write(&gdir, second_path, b"renamed content\n");
     commit(&gdir, "rename quoted UTF-8 path");
@@ -535,6 +566,7 @@ fn quoted_utf8_git_paths_roundtrip_without_changing_names() {
         "UTF-8 path was not C-quoted"
     );
     assert!(fast_export.contains("\\\""), "quote was not C-escaped");
+    #[cfg(unix)]
     assert!(fast_export.contains("\\\\"), "backslash was not C-escaped");
 
     let (_nd, repo) = temp_repo();
@@ -691,8 +723,8 @@ fn non_utf8_git_commit_message_is_lossily_converted_and_flagged() {
         .arg("-C")
         .arg(&gdir)
         .args(["hash-object", "-t", "commit", "-w", "--stdin"])
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1212,8 +1244,8 @@ fn sha256_git_import_export_roundtrips_semantically() {
         .arg("-C")
         .arg(&probe_dir)
         .args(["init", "--quiet", "--bare", "--object-format=sha256"])
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .output()
         .expect("spawn Git SHA-256 capability probe");
     if !probe.status.success() {
@@ -1236,8 +1268,8 @@ fn sha256_git_import_export_roundtrips_semantically() {
         .arg("-C")
         .arg(&gdir)
         .args(["init", "--quiet", "--object-format=sha256", "-b", "master"])
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .output()
         .expect("spawn git init");
     assert!(
@@ -2031,8 +2063,8 @@ fn git_namespace_refs_are_reported_and_not_exported_as_branches() {
         .arg("ls-remote")
         .arg(&gdir)
         .env("GIT_NAMESPACE", namespace)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .output()
         .expect("spawn namespaced git ls-remote");
     assert!(

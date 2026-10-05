@@ -4,12 +4,21 @@
 //! run as child processes over loopback TCP; assertions inspect actual Git
 //! refs, commits, trees, and blob bytes rather than canned protocol replies.
 
+mod common;
+
+use common::git_config_null_device;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
+use std::process::{Command, Output};
+#[cfg(target_os = "linux")]
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use newgit::object::types::{Actor, ActorKind, EntryMode, Object, Snapshot};
 use newgit::object::ObjectId;
@@ -85,8 +94,8 @@ fn commit(
 fn git(args: &[&str]) -> Output {
     let out = Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -104,8 +113,8 @@ fn git(args: &[&str]) -> Output {
 fn git_fails(args: &[&str]) -> Output {
     let out = Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -215,10 +224,14 @@ fn raw_git_receive_post_status(addr: SocketAddr, authorization: &str, body: &[u8
         .unwrap()
 }
 
+#[cfg(target_os = "linux")]
+const SNAPSHOT_READER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(130);
+
+#[cfg(target_os = "linux")]
 fn raw_git_http_response(addr: SocketAddr, request: &[u8]) -> (u16, Vec<u8>) {
     let mut stream = TcpStream::connect(addr).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
+        .set_read_timeout(Some(SNAPSHOT_READER_RESPONSE_TIMEOUT))
         .unwrap();
     stream.write_all(request).unwrap();
     let mut response = Vec::new();
@@ -239,6 +252,7 @@ fn raw_git_http_response(addr: SocketAddr, request: &[u8]) -> (u16, Vec<u8>) {
     (status, response[headers_end + 4..].to_vec())
 }
 
+#[cfg(target_os = "linux")]
 fn raw_git_upload_advertisement(addr: SocketAddr) -> (u16, Vec<u8>) {
     raw_git_http_response(
         addr,
@@ -249,6 +263,7 @@ fn raw_git_upload_advertisement(addr: SocketAddr) -> (u16, Vec<u8>) {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn raw_git_upload_pack(addr: SocketAddr, request_body: &[u8]) -> (u16, Vec<u8>) {
     let request = format!(
         "POST /git-upload-pack HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/x-git-upload-pack-request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -259,6 +274,7 @@ fn raw_git_upload_pack(addr: SocketAddr, request_body: &[u8]) -> (u16, Vec<u8>) 
     raw_git_http_response(addr, &bytes)
 }
 
+#[cfg(target_os = "linux")]
 fn advertised_git_refs(advertisement: &[u8]) -> Vec<(String, String)> {
     let mut refs = Vec::new();
     let mut position = 0;
@@ -297,6 +313,7 @@ fn advertised_git_refs(advertisement: &[u8]) -> Vec<(String, String)> {
     refs
 }
 
+#[cfg(target_os = "linux")]
 fn upload_pack_want(oid: &str) -> Vec<u8> {
     let line = format!("want {oid}\n");
     let mut request = format!("{:04x}{line}", line.len() + 4).into_bytes();
@@ -305,6 +322,7 @@ fn upload_pack_want(oid: &str) -> Vec<u8> {
     request
 }
 
+#[cfg(target_os = "linux")]
 fn child_snapshot(repo: &Repo, message: &str, bytes: &[u8], parent: ObjectId) -> ObjectId {
     let author = actor(repo);
     let blob = repo.objects.put_blob(bytes).unwrap();
@@ -388,10 +406,11 @@ fn ambient_git_environment_cannot_redirect_or_run_template_hooks() {
     let hooks_dir = template_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir).unwrap();
     let hook_marker = root.join("ambient-template-hook-ran");
+    let hook_marker_name = hook_marker.file_name().unwrap().to_string_lossy();
     let hook_path = hooks_dir.join("post-checkout");
     std::fs::write(
         &hook_path,
-        format!("#!/bin/sh\nprintf ran > '{}'\n", hook_marker.display()),
+        format!("#!/bin/sh\nprintf ran > '{hook_marker_name}'\n"),
     )
     .unwrap();
     #[cfg(unix)]
@@ -400,6 +419,7 @@ fn ambient_git_environment_cannot_redirect_or_run_template_hooks() {
         std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let child = Command::new(std::env::current_exe().unwrap())
+        .current_dir(&root)
         .args([
             "--exact",
             "ambient_git_environment_cannot_redirect_or_run_template_hooks",
@@ -579,8 +599,8 @@ fn smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed
                     "refs/heads/left",
                     "refs/heads/right",
                 ])
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+                .env("GIT_CONFIG_SYSTEM", git_config_null_device())
                 .env("GIT_TERMINAL_PROMPT", "0")
                 .output()
                 .unwrap();
@@ -634,21 +654,21 @@ fn smart_http_projection_waits_for_mid_apply_recovery_and_exports_only_committed
         );
 
         let direct_advertisement = advertisement_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(SNAPSHOT_READER_RESPONSE_TIMEOUT)
             .expect("direct advertisement must finish after recovery")
             .unwrap();
         let direct_pack = projection_pack_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(SNAPSHOT_READER_RESPONSE_TIMEOUT)
             .expect("direct upload-pack must finish after recovery")
             .unwrap();
         let (http_ad_status, http_advertisement) = http_advertisement_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(SNAPSHOT_READER_RESPONSE_TIMEOUT)
             .expect("HTTP advertisement must finish after recovery");
         let (http_pack_status, http_pack) = http_pack_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(SNAPSHOT_READER_RESPONSE_TIMEOUT)
             .expect("HTTP upload-pack must finish after recovery");
         let git_ls_remote = git_ls_remote_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(SNAPSHOT_READER_RESPONSE_TIMEOUT)
             .expect("real Git ls-remote must finish after recovery");
 
         let direct_refs = advertised_git_refs(&direct_advertisement)

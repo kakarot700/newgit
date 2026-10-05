@@ -280,19 +280,56 @@ mod tests {
             std::os::unix::fs::symlink("script.sh", root.join("link")).unwrap();
             std::os::unix::fs::symlink("../escape", root.join("link2")).unwrap();
         }
+        #[cfg(windows)]
+        let symlinks_available = {
+            let link = root.join("link");
+            let link2 = root.join("link2");
+            match std::os::windows::fs::symlink_file("script.sh", &link) {
+                Ok(()) => match std::os::windows::fs::symlink_file("../escape", &link2) {
+                    Ok(()) => true,
+                    Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                        std::fs::remove_file(link).unwrap();
+                        eprintln!("Windows symlink creation unavailable: {error}");
+                        false
+                    }
+                    Err(error) => panic!("Windows symlink creation failed: {error}"),
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("Windows symlink creation unavailable: {error}");
+                    false
+                }
+                Err(error) => panic!("Windows symlink creation failed: {error}"),
+            }
+        };
         let rep = walk(root, &IgnoreSet::empty(), &Limits::default()).unwrap();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let by: std::collections::HashMap<_, _> = rep
                 .entries
                 .iter()
                 .map(|e| (e.rel.clone(), e.clone()))
                 .collect();
+            #[cfg(unix)]
             assert_eq!(by["script.sh"].mode, EntryMode::Executable);
-            assert_eq!(by["link"].mode, EntryMode::Symlink);
-            assert_eq!(by["link"].symlink_target.as_deref(), Some("script.sh"));
-            // symlink targets are recorded verbatim, never followed
-            assert_eq!(by["link2"].symlink_target.as_deref(), Some("../escape"));
+            #[cfg(windows)]
+            assert_eq!(by["script.sh"].mode, EntryMode::File);
+            #[cfg(unix)]
+            {
+                assert_eq!(by["link"].mode, EntryMode::Symlink);
+                assert_eq!(by["link"].symlink_target.as_deref(), Some("script.sh"));
+                // symlink targets are recorded verbatim, never followed
+                assert_eq!(by["link2"].symlink_target.as_deref(), Some("../escape"));
+            }
+            #[cfg(windows)]
+            if symlinks_available {
+                assert_eq!(by["link"].mode, EntryMode::Symlink);
+                assert_eq!(by["link"].symlink_target.as_deref(), Some("script.sh"));
+                // symlink targets are recorded verbatim, never followed
+                assert_eq!(by["link2"].symlink_target.as_deref(), Some("../escape"));
+            } else {
+                assert!(!by.contains_key("link"));
+                assert!(!by.contains_key("link2"));
+            }
         }
         assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     }

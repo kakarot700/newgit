@@ -56,7 +56,7 @@ The object format and repository layout are documented in [ARCHITECTURE.md](ARCH
 ## Requirements
 
 - Rust and Cargo. The repository pins its development toolchain in `rust-toolchain.toml` (currently Rust 1.99.0); `rustup` can install it automatically when entering the checkout. `Cargo.toml` declares Rust 1.80 as the package minimum, but CI uses the pinned toolchain rather than separately testing that minimum.
-- A system `git` executable is needed for `import-git`/`export-git` and the Git smart-HTTP read adapter. Conversion requires Git 2.20 or newer; the live adapter's recorded end-to-end environment is Git 2.43.0 on Linux, and no broader minimum-version/platform matrix is claimed. Other NewGit operations do not use Git.
+- A system `git` executable is needed for `import-git`/`export-git` and the Git smart-HTTP adapter. Conversion requires Git 2.20 or newer; detailed local end-to-end evidence uses Git 2.43.0/Linux, while native CI runs the Git test suite on its listed hosts and requires Git 2.34.0 or newer for SSH-signature fixtures. Other NewGit operations do not use Git.
 
 ## Build and install
 
@@ -73,7 +73,7 @@ newgit --help
 
 Prebuilt Linux x86_64 GNU archives and SHA-256 sidecars are published on [GitHub Releases](https://github.com/kakarot700/newgit/releases). Verify the downloaded archive against its sidecar before extracting it.
 
-The pinned toolchain is installed by `rustup` when Cargo first runs in the checkout. To verify the exact toolchain explicitly, run `rustup toolchain install 1.99.0 --component rustfmt --component clippy` first. The current CI and clean-checkout validation target Linux x86_64; other operating systems and architectures are not claimed as verified yet.
+The pinned toolchain is installed by `rustup` when Cargo first runs in the checkout. To verify the exact toolchain explicitly, run `rustup toolchain install 1.99.0 --component rustfmt --component clippy` first. Native CI targets Linux x86_64/ARM64, macOS Intel/ARM64, and Windows x86_64/ARM64. These targets are verified only when their native job passes on the exact commit; see the [platform support matrix](docs/PLATFORM_SUPPORT.md). Current tagged release archives are Linux x86_64 GNU only.
 
 ## Quick start
 

@@ -42,7 +42,10 @@ directory they are pointed at.
 3. Canonical-form strictness: non-minimal varints, trailing bytes, unsorted
    sets, duplicate parents ⇒ hard errors.
 4. Path grammar: no absolute paths, `..`, `.`, NUL, control chars, drive
-   letters; per-component length caps; symlink-escape check on join.
+   letters; per-component length caps; symlink-escape check on join. Windows
+   filesystem paths additionally reject reserved characters/device names and
+   trailing dots/spaces; checkout preflights all tree paths and case-folded
+   collisions on Windows/default macOS targets before writing.
 5. Config: unknown keys/versions rejected (fail loudly, not silently ignore).
 6. Locks: `O_EXCL` creation; Linux does not reclaim a lock with a live recorded
    PID merely because it is old. On non-Linux platforms, a recorded lock falls
@@ -60,6 +63,24 @@ directory they are pointed at.
    NewGit's APIs are not coordinated. Non-Linux stale-age reclamation and
    network-filesystem lock/atomicity semantics are not established; a holder
    exceeding the configured stale timeout may not retain the same guarantee.
+
+### Platform-specific guarantees and limits
+
+* Bearer tokens use `getrandom`'s OS CSPRNG on every target; failure is loud
+  and never falls back to a weaker source. Token digests, not raw tokens, are
+  persisted. The token file receives best-effort mode `0600` on Unix; Windows
+  inherits the parent directory's ACL, which NewGit does not inspect or tighten.
+* Git subprocess deadlines use a fresh process group plus `kill` on Unix and
+  `taskkill /T /F` on Windows. Separate platform-gated tests exercise descendant
+  cleanup; each native runner must pass its own test before that platform is
+  treated as verified.
+* Windows checkout rejects unsupported symlinks before writing any paths.
+  Windows path aliases/reserved names are rejected; case-collision preflight
+  is conservative but does not model every filesystem's Unicode normalization
+  or case-folding rules.
+* File contents are synced before rename. Directory sync is best-effort because
+  not all target filesystems/platforms support opening and syncing directories;
+  power-loss durability therefore depends on the host filesystem semantics.
 
 ## 5. Resource limits (configurable, `.newgit/config`)
 

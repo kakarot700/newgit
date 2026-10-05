@@ -139,6 +139,11 @@ fn exec_bits_and_symlinks_roundtrip() {
     let (_d, repo) = temp_repo();
     let author = repo.default_actor().unwrap();
     write(repo.root(), "run.sh", b"#!/bin/sh\necho hi\n");
+    write(
+        repo.root(),
+        "aaa-first.txt",
+        b"preflight must precede writes",
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -150,10 +155,34 @@ fn exec_bits_and_symlinks_roundtrip() {
         std::os::unix::fs::symlink("run.sh", repo.root().join("link")).unwrap();
         std::os::unix::fs::symlink("../outside-target", repo.root().join("dirlink")).unwrap();
     }
+    #[cfg(windows)]
+    let symlinks_available = {
+        let link = repo.root().join("link");
+        let dirlink = repo.root().join("dirlink");
+        match std::os::windows::fs::symlink_file("run.sh", &link) {
+            Ok(()) => match std::os::windows::fs::symlink_file("../outside-target", &dirlink) {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    std::fs::remove_file(link).unwrap();
+                    eprintln!("Windows symlink creation unavailable: {error}");
+                    false
+                }
+                Err(error) => panic!("Windows symlink creation failed: {error}"),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("Windows symlink creation unavailable: {error}");
+                false
+            }
+            Err(error) => panic!("Windows symlink creation failed: {error}"),
+        }
+    };
     let out = snapshot(&repo, &req("main", "exec+links", author, 7)).unwrap();
     let flat = flatten_tree(&repo, out.root).unwrap();
     let modes: BTreeMap<_, _> = flat.iter().map(|(p, m, _)| (p.clone(), *m)).collect();
+    #[cfg(unix)]
     assert_eq!(modes["run.sh"], EntryMode::Executable);
+    #[cfg(not(unix))]
+    assert_eq!(modes["run.sh"], EntryMode::File);
     #[cfg(unix)]
     {
         assert_eq!(modes["link"], EntryMode::Symlink);
@@ -177,6 +206,110 @@ fn exec_bits_and_symlinks_roundtrip() {
             assert_ne!(m.permissions().mode() & 0o111, 0, "exec bit restored");
         }
     }
+    #[cfg(windows)]
+    {
+        if symlinks_available {
+            assert_eq!(modes["link"], EntryMode::Symlink);
+            assert_eq!(modes["dirlink"], EntryMode::Symlink);
+        } else {
+            assert!(!modes.contains_key("link"));
+            assert!(!modes.contains_key("dirlink"));
+        }
+    }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn checkout_rejects_symlink_trees_before_writing() {
+    let (_d, repo) = temp_repo();
+    let plain = repo.objects.put_blob(b"must not be written").unwrap();
+    let target = repo.objects.put_blob(b"target").unwrap();
+    let tree = Tree::new(vec![
+        TreeEntry {
+            name: "aaa-first.txt".into(),
+            mode: EntryMode::File,
+            oid: plain,
+        },
+        TreeEntry {
+            name: "link".into(),
+            mode: EntryMode::Symlink,
+            oid: target,
+        },
+    ])
+    .unwrap();
+    let root = repo.objects.put(&Object::Tree(tree)).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let dest = parent.path().join("missing-workspace");
+    let result = checkout_tree(&repo, root, &dest, CheckoutMode::FreshWorkspace, None);
+    assert!(
+        matches!(&result, Err(Error::Invalid(message)) if message.contains("symlink checkout is only supported on unix")),
+        "{result:?}"
+    );
+    assert!(
+        !dest.exists(),
+        "rejected tree must not create the destination"
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn checkout_rejects_case_collisions_before_writing() {
+    let (_d, repo) = temp_repo();
+    let upper = repo.objects.put_blob(b"upper").unwrap();
+    let lower = repo.objects.put_blob(b"lower").unwrap();
+    let tree = Tree::new(vec![
+        TreeEntry {
+            name: "Name.txt".into(),
+            mode: EntryMode::File,
+            oid: upper,
+        },
+        TreeEntry {
+            name: "name.txt".into(),
+            mode: EntryMode::File,
+            oid: lower,
+        },
+    ])
+    .unwrap();
+    let root = repo.objects.put(&Object::Tree(tree)).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let result = checkout_tree(&repo, root, dest.path(), CheckoutMode::FreshWorkspace, None);
+    assert!(
+        matches!(&result, Err(Error::Invalid(message)) if message.contains("case-insensitive filesystem")),
+        "{result:?}"
+    );
+    assert!(std::fs::read_dir(dest.path()).unwrap().next().is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn checkout_rejects_windows_reserved_paths_before_writing() {
+    let (_d, repo) = temp_repo();
+    let valid = repo
+        .objects
+        .put_blob(b"would otherwise be written first")
+        .unwrap();
+    let invalid = repo.objects.put_blob(b"reserved path").unwrap();
+    let tree = Tree::new(vec![
+        TreeEntry {
+            name: "a-valid.txt".into(),
+            mode: EntryMode::File,
+            oid: valid,
+        },
+        TreeEntry {
+            name: "z:invalid.txt".into(),
+            mode: EntryMode::File,
+            oid: invalid,
+        },
+    ])
+    .unwrap();
+    let root = repo.objects.put(&Object::Tree(tree)).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let result = checkout_tree(&repo, root, dest.path(), CheckoutMode::FreshWorkspace, None);
+    assert!(
+        matches!(&result, Err(Error::Invalid(message)) if message.contains("Windows-reserved character")),
+        "{result:?}"
+    );
+    assert!(std::fs::read_dir(dest.path()).unwrap().next().is_none());
 }
 
 #[test]
@@ -303,6 +436,15 @@ fn checkout_refuses_symlink_component_traversal() {
     std::fs::create_dir(&outside).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&outside, dest.join("sub")).unwrap();
+    #[cfg(windows)]
+    match std::os::windows::fs::symlink_dir(&outside, dest.join("sub")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("Skipping destination-symlink fixture; Windows symlink creation unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("Windows symlink creation failed: {error}"),
+    }
     let root = Tree::new(vec![
         link_entry,
         TreeEntry {
@@ -317,12 +459,10 @@ fn checkout_refuses_symlink_component_traversal() {
     let root = root.unwrap();
     let root_oid = repo.objects.put(&Object::Tree(root)).unwrap();
     let r = checkout_tree(&repo, root_oid, &dest, CheckoutMode::Overwrite, None);
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     assert!(matches!(r, Err(Error::Invalid(_))), "{r:?}");
-    #[cfg(not(unix))]
-    let _ = (r, outside);
     // nothing escaped
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     assert!(!outside.join("evil.txt").exists());
 }
 

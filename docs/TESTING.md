@@ -24,6 +24,18 @@ The PR-only dependency-review job and tag-only release job were skipped on
 this push event; a version tag invokes a separate release workflow gated on
 the functional, security, and distribution jobs.
 
+The native `platform-matrix` job is defined for Linux x86_64 (`ubuntu-24.04`),
+Linux ARM64 (`ubuntu-24.04-arm`), macOS Intel (`macos-15-intel`), macOS ARM64
+(`macos-15`), Windows x86_64 (`windows-2025`), and Windows ARM64
+(`windows-11-arm`). Each runner checks formatting, warnings-denied Clippy,
+`cargo test --locked`, and `cargo build --release --locked`; distribution is
+gated on all six. Each job stages its native CLI with a SHA-256 file and JSON
+metadata for target, OS, architecture, source commit, Rust, and Git versions.
+These runner definitions are not themselves test evidence: consult the exact
+commit's Actions run and do not call a target verified unless its native job
+completed successfully. Git E2E behavior and platform-specific edge cases are
+limited to what each job actually executes.
+
 The C-quoted UTF-8 Git-path implementation, commit
 `b4e1ca5dd12b2d816fbd05f03416dc903a4a014a`, passed [GitHub CI run
 37202630994](https://github.com/kakarot700/newgit/actions/runs/37202630994) and

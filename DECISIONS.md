@@ -32,6 +32,12 @@ delayed writer transaction wall time, including wait and commit, was 99 ms and
 873 ms. These are single-run observations, not capacity claims; see
 `docs/BENCHMARKS.md`. No persistent cache or generation was added.
 
+## D-022 · Native cross-platform hardening and evidence-gated support (2026-10-05)
+**Context:** The portability audit found a `/dev/urandom` token source, Unix-only Git config null paths in subprocess fixtures, Windows path aliases not rejected at the filesystem boundary, and no Windows process-tree timeout regression. A Linux-only CI job could not establish the mission's Linux/macOS/Windows x64/ARM64 targets.
+**Decision:** Use the already-locked `getrandom` OS CSPRNG as a direct runtime dependency; preflight all checkout paths and unsupported non-Unix symlinks before writes; reject Windows-reserved path components; prevent case-folded tree collisions on Windows and macOS; use platform-native Git config null devices; and test Windows `taskkill /T` descendant cleanup. Add a six-runner native Actions matrix that runs formatting, Clippy, all debug tests, and a release build, then stages a target-specific binary, checksum, and explicit OS/architecture/toolchain/source metadata.
+**Rationale:** Portability needs native executable tests, not cross-compilation-only claims or `cfg` guards that leave behavior broken. `getrandom` was already present in the runtime dependency closure through `tempfile`; promoting it adds no new locked transitive crates and removes a Unix-only security dependency.
+**Consequences:** Windows symlink checkout remains explicitly unsupported; path collision checks do not model every Unicode normalization rule; Windows token-file ACLs are inherited; directory fsync remains best-effort; non-Linux stale-lock reclamation remains age-based. A matrix definition is not evidence of support: each target is verified only by its actual native job on the exact commit.
+
 ## D-020 · Defer smart-HTTP projection caching until canonical generations are safe (2026-10-05)
 **Context (pre-D-021):** An 800-commit unchanged smart-HTTP fetch returns 219 bytes but
 measures 1,944.18 ms median, including 1,830.84 ms for two temporary Git
@@ -160,10 +166,11 @@ sha1↔nid map file (documented).
 ## D-002 · Minimal dependency set (Iteration 1)
 **Context:** Supply-chain security + build speed on 2 CPUs.
 **Decision:** Runtime deps: `sha2`, `flate2` (pure-Rust `rust_backend`, no C),
-`serde`+`serde_json`, `thiserror`, and `tempfile` (private temporary Git views;
-added later by D-019). Dev deps: `proptest`. No CLI framework (hand-rolled
-parser), no HTTP framework (hand-rolled HTTP/1.1 in iteration 9), no async
-runtime.
+`serde`+`serde_json`, `thiserror`, `tempfile` (private temporary Git views;
+added later by D-019), and `getrandom` (the OS CSPRNG for bearer tokens; promoted
+from the existing runtime closure by D-022). Dev deps: `proptest`. No CLI
+framework (hand-rolled parser), no HTTP framework (hand-rolled HTTP/1.1 in
+iteration 9), no async runtime.
 **Rationale:** Every dependency is small, boring, and justified; fewer CVE
 surfaces; reproducible builds easier.
 **Consequences:** We own more code (parser, HTTP) — mitigated by dedicated

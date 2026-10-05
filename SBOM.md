@@ -12,6 +12,7 @@ Cargo.lock (committed; registry checksums).
 | crate | req | class |
 |---|---|---|
 | flate2 | ^1 | runtime |
+| getrandom | ^0.4 | runtime |
 | proptest | ^1 | dev (tests only) |
 | serde | ^1 | runtime |
 | serde_json | ^1 | runtime |
@@ -74,9 +75,11 @@ autocfg 1.5.1, bit-set 0.8.0, bit-vec 0.8.0, fnv 1.0.7, getrandom 0.3.4, num-tra
 
 ## Policy notes
 
-* **5 direct runtime dependencies** (flate2, serde, serde_json, sha2,
-  thiserror) — the D-002 budget; every transitive addition needs a
-  D-002-level justification. No git/path/patched sources: all crates.io.
+* **6 direct runtime dependency families** (flate2, getrandom, serde/serde_json,
+  sha2, tempfile, thiserror; seven crate entries) — the D-002 budget. `getrandom`
+  was already in the locked runtime closure through `tempfile` and is now a
+  direct dependency for portable OS CSPRNG access (D-022). No git/path/patched
+  sources: all crates.io.
 * flate2 uses its **pure-Rust** backend (miniz_oxide) — no C/libz linkage;
   sha2 uses runtime CPU feature detection (cpufeatures), no bundled asm.
 * `#![forbid(unsafe_code)]` covers newgit's own code; unsafe inside the

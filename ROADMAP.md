@@ -167,3 +167,20 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (with test evidence).
 - DONE: `TEST_MATRIX.md`, `ARCHITECTURE.md`, `DECISIONS.md`, security/threat
   models, limitations, compatibility matrix, and changelog record the new
   invariant and residual cross-request/platform boundaries.
+
+## Iteration 14 — Cross-platform hardening and native CI evidence  [~] · 2026-10-05
+- IMPLEMENTED: Replace the `/dev/urandom` bearer-token source with the portable OS
+  CSPRNG; make isolated Git subprocess config use the host null device; add
+  Windows path/reserved-name checks and checkout preflight; refuse unsupported
+  non-Unix symlink checkout before writes; add case-collision and Windows
+  process-tree regressions.
+- IMPLEMENTED: Add native GitHub Actions jobs for Linux x86_64/ARM64, macOS x86_64/
+  ARM64, and Windows x86_64/ARM64. Each job runs fmt, warnings-denied Clippy,
+  the full test suite, release build, and uploads a target-named binary with
+  SHA-256 and build metadata. `dist` is gated on the complete matrix.
+- PENDING: Hosted execution of all six native jobs on the exact pushed commit;
+  do not infer any target's support from workflow configuration or compilation.
+- BOUNDARY: Linux local checks do not establish the other five hosts. Per-target
+  support is evidenced only by that target's successful native job on the exact pushed
+  commit; Unicode path normalization, Windows ACLs, non-Linux stale-lock age
+  behavior, and platform-specific directory durability remain documented.

@@ -21,6 +21,14 @@ pub fn faultlab_bin() -> String {
         .expect("Cargo must provide CARGO_BIN_EXE_newgit-faultlab for integration tests")
 }
 
+pub fn git_config_null_device() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
+}
+
 /// Run faultlab in a child process; `faults` sets NEWGIT_FAULTS.
 pub fn run_faultlab(repo_root: &Path, args: &[&str], faults: Option<&str>) -> Output {
     let mut cmd = Command::new(faultlab_bin());

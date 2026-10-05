@@ -196,7 +196,10 @@ pub(crate) fn terminate_process_tree(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::io::BufRead;
+    #[cfg(windows)]
+    use std::io::Write;
     use std::process::Stdio;
     use std::time::Instant;
 
@@ -240,5 +243,68 @@ mod tests {
             gone,
             "descendant process {child_pid} survived timeout cleanup"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn deadline_kills_and_reaps_windows_process_tree() {
+        const CHILD_MODE: &str = "NEWGIT_WINDOWS_PROCESS_TREE_HELPER";
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--nocapture", "windows_process_tree_descendant_helper"])
+            .env(CHILD_MODE, "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let started = Instant::now();
+        let managed = ManagedChild::spawn(&mut command, Some(Duration::from_secs(3))).unwrap();
+        let (output, timed_out) = managed.wait_with_output().unwrap();
+        assert!(timed_out, "watchdog did not report the expired deadline");
+        assert!(
+            !output.status.success(),
+            "timed-out process exited successfully"
+        );
+        assert!(started.elapsed() < Duration::from_secs(8));
+
+        let child_pid = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix("NEWGIT_DESCENDANT_PID="))
+            .expect("child test did not report the descendant PID")
+            .to_string();
+        let is_alive = format!(
+            "if (Get-Process -Id {child_pid} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}"
+        );
+        let mut gone = false;
+        for _ in 0..50 {
+            let status = Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", &is_alive])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            if status.success() {
+                gone = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            gone,
+            "descendant process {child_pid} survived timeout cleanup"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_tree_descendant_helper() {
+        if std::env::var_os("NEWGIT_WINDOWS_PROCESS_TREE_HELPER").is_none() {
+            return;
+        }
+        let mut descendant = Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .spawn()
+            .unwrap();
+        println!("NEWGIT_DESCENDANT_PID={}", descendant.id());
+        std::io::stdout().flush().unwrap();
+        let _ = descendant.wait();
     }
 }

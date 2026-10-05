@@ -31,6 +31,14 @@ const CLONE_SAMPLES: usize = 3;
 const CONCURRENT_CLONES: usize = 4;
 static CLOCK_TICKS_PER_SECOND: OnceLock<Option<f64>> = OnceLock::new();
 
+fn git_config_null_device() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct TransferStats {
     responses: u64,
@@ -341,8 +349,8 @@ fn build_small_repo(root: &Path) -> (Repo, ObjectId) {
 fn run_git(args: &[String]) -> Output {
     Command::new("git")
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -448,8 +456,8 @@ fn run_timed_git(args: &[String]) -> (Duration, Output, GitResources) {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+        .env("GIT_CONFIG_SYSTEM", git_config_null_device())
         .env("GIT_TERMINAL_PROMPT", "0");
     for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_TEMPLATE_DIR"] {
         command.env_remove(key);

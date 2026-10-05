@@ -70,20 +70,16 @@ pub fn hash_token(raw: &str) -> String {
     hex::encode(&h.finalize())
 }
 
-/// Generate a 32-byte random token (base64url-ish standard alphabet).
-/// Uses the OS CSPRNG (/dev/urandom) — no dependency (D-002). Platforms
-/// without it get a loud error rather than weak randomness.
+/// Generate a 32-byte random token (base64url-ish standard alphabet) from the
+/// platform OS CSPRNG. Failure is loud; never fall back to weak randomness.
 pub fn generate_token() -> Result<String> {
-    use std::io::Read;
     let mut buf = [0u8; 32];
-    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| {
+    getrandom::fill(&mut buf).map_err(|e| {
         Error::Auth(format!(
-            "cannot generate a secure token: OS CSPRNG unavailable ({e}); \
-             supply --token explicitly"
+            "cannot generate a secure token: OS CSPRNG failed ({e}); \
+             no token was generated"
         ))
     })?;
-    f.read_exact(&mut buf)
-        .map_err(|e| Error::Auth(format!("OS CSPRNG read failed: {e}")))?;
     if buf.iter().all(|b| *b == 0) {
         return Err(Error::Auth("OS CSPRNG returned all-zero bytes".into()));
     }

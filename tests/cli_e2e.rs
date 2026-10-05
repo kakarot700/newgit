@@ -1,6 +1,9 @@
 //! End-to-end CLI tests: drive the real binary in a subprocess, assert on
 //! stdout/stderr/exit codes and on-disk state (TEST_MATRIX "E2E").
 
+mod common;
+
+use common::git_config_null_device;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -926,8 +929,8 @@ fn import_export_git_cli() {
             .arg("-C")
             .arg(&gdir)
             .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", git_config_null_device())
+            .env("GIT_CONFIG_SYSTEM", git_config_null_device())
             .output()
             .unwrap();
         assert!(
