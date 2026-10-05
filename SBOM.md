@@ -9,17 +9,17 @@ Cargo.lock (committed; registry checksums).
 
 ## Direct dependencies (Cargo.toml)
 
-| crate | req | class |
-|---|---|---|
-| flate2 | ^1 | runtime |
-| fs4 | ^1.1 | runtime |
-| getrandom | ^0.4 | runtime |
-| proptest | ^1 | dev (tests only) |
-| serde | ^1 | runtime |
-| serde_json | ^1 | runtime |
-| sha2 | ^0.10 | runtime |
-| tempfile | ^3 | runtime |
-| thiserror | ^2 | runtime |
+| crate | req | class | justification |
+|---|---|---|---|
+| flate2 | ^1 | runtime | zlib envelope compression/decompression with the pure-Rust backend |
+| fs4 | ^1.1 | runtime | whole-file cross-platform advisory locks on stable sidecar files |
+| getrandom | ^0.4 | runtime | operating-system CSPRNG for bearer-token generation |
+| proptest | ^1 | dev (tests only) | property-based tests for parsers, canonical encodings, and invariants (dev only) |
+| serde | ^1 | runtime | derive and serialize typed protocol, configuration, and domain structures |
+| serde_json | ^1 | runtime | JSON encoding for CLI output, configuration, and remote protocol messages |
+| sha2 | ^0.10 | runtime | SHA-256 content identifiers, envelope integrity checks, and checksums |
+| tempfile | ^3 | runtime | private temporary files/directories for Git projections and safe staging |
+| thiserror | ^2 | runtime | derive consistent typed errors and diagnostic source chains |
 
 ## Runtime closure (33 crates — compiled into / linked by the binary)
 
@@ -79,7 +79,8 @@ autocfg 1.5.1, bit-set 0.8.0, bit-vec 0.8.0, fnv 1.0.7, getrandom 0.3.4, num-tra
 
 * **7 direct runtime dependency families** (flate2, fs4, getrandom,
   serde/serde_json, sha2, tempfile, thiserror; eight crate entries) — the D-002
-  budget. `getrandom` was already in the locked runtime closure through
+  budget. Every direct dependency's purpose is recorded above, and this
+  generator fails closed if the manifest and purpose map drift. `getrandom` was already in the locked runtime closure through
   `tempfile` and is now a direct dependency for portable OS CSPRNG access
   (D-022); `fs4` provides cross-platform kernel advisory locks (D-023). No
   git/path/patched sources: all crates.io.

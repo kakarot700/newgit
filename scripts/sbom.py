@@ -73,6 +73,25 @@ dev_all = walk(dev_roots, block_dev=False)
 dev_only = {i for i in dev_all if i not in runtime and i not in buildtime} | set(dev_roots)
 dev_only -= {root}
 
+direct_purposes = {
+    "flate2": "zlib envelope compression/decompression with the pure-Rust backend",
+    "fs4": "whole-file cross-platform advisory locks on stable sidecar files",
+    "getrandom": "operating-system CSPRNG for bearer-token generation",
+    "proptest": "property-based tests for parsers, canonical encodings, and invariants (dev only)",
+    "serde": "derive and serialize typed protocol, configuration, and domain structures",
+    "serde_json": "JSON encoding for CLI output, configuration, and remote protocol messages",
+    "sha2": "SHA-256 content identifiers, envelope integrity checks, and checksums",
+    "tempfile": "private temporary files/directories for Git projections and safe staging",
+    "thiserror": "derive consistent typed errors and diagnostic source chains",
+}
+manifest_names = {name for name, _, _ in direct}
+unclassified = manifest_names - direct_purposes.keys()
+stale = direct_purposes.keys() - manifest_names
+if unclassified or stale:
+    raise SystemExit(
+        f"direct-dependency purpose map mismatch: unclassified={sorted(unclassified)}, "
+        f"stale={sorted(stale)}")
+
 
 def rows(ids):
     seen, out = set(), []
@@ -98,11 +117,12 @@ Cargo.lock (committed; registry checksums).
 
 ## Direct dependencies (Cargo.toml)
 
-| crate | req | class |
-|---|---|---|
+| crate | req | class | justification |
+|---|---|---|---|
 """)
 for n, req, k in sorted(direct):
-    w(f"| {n} | {req} | {'dev (tests only)' if k == 'dev' else 'runtime'} |\n")
+    dep_class = "dev (tests only)" if k == "dev" else "runtime"
+    w(f"| {n} | {req} | {dep_class} | {direct_purposes[n]} |\n")
 
 w(f"""
 ## Runtime closure ({len(rows(runtime))} crates — compiled into / linked by the binary)
@@ -131,7 +151,8 @@ w(f"""
 
 * **7 direct runtime dependency families** (flate2, fs4, getrandom,
   serde/serde_json, sha2, tempfile, thiserror; eight crate entries) — the D-002
-  budget. `getrandom` was already in the locked runtime closure through
+  budget. Every direct dependency's purpose is recorded above, and this
+  generator fails closed if the manifest and purpose map drift. `getrandom` was already in the locked runtime closure through
   `tempfile` and is now a direct dependency for portable OS CSPRNG access
   (D-022); `fs4` provides cross-platform kernel advisory locks (D-023). No
   git/path/patched sources: all crates.io.
