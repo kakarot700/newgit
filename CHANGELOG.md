@@ -54,6 +54,14 @@ Format: Keep a Changelog. Versions follow semver once ≥1.0; 0.x = honest WIP.
   locally, while a custom client with write access can submit a non-fast-forward
   command directly. Existing tags cannot be retargeted (even with `--force`);
   annotated tag objects and signed pushes remain unsupported.
+- `newgit serve` accepts repeatable `--protect-ref <exact-git-ref>` options for
+  opt-in admin-only branch/tag protection. Glob and prefix patterns are rejected;
+  valid Git wire aliases that map to the same NewGit canonical ref share the
+  gate, preventing branch/tag mapping bypasses.
+  Protected create/update/delete commands from writer-role tokens return HTTP
+  403 before disposable Git projection/import or canonical object promotion.
+  Real-Git tests cover admin acceptance, writer denial, exact-name boundaries,
+  and refusal of a mixed atomic push without changing refs or object inventory.
 
 ### Fixed
 - `import-git` now inspects ref object types before invoking `fast-export` and

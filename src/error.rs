@@ -75,6 +75,9 @@ pub enum Error {
     #[error("authentication/authorization failure: {0}")]
     Auth(String),
 
+    #[error("authorization denied: {0}")]
+    Forbidden(String),
+
     #[error("protocol error: {0}")]
     Protocol(String),
 
@@ -119,7 +122,7 @@ impl Error {
             Error::CasFailed(_) | Error::LockBusy(_) => exit_code::RACE,
             Error::Conflict(_) => exit_code::CONFLICT,
             Error::Limit(_) => exit_code::LIMIT,
-            Error::Auth(_) => exit_code::AUTH,
+            Error::Auth(_) | Error::Forbidden(_) => exit_code::AUTH,
             Error::Protocol(_) | Error::Git(_) => exit_code::REPO,
             Error::Bug(_) => exit_code::BUG,
         }
@@ -141,7 +144,7 @@ impl Error {
             Error::Verify(_) => "verify",
             Error::Conflict(_) => "conflict",
             Error::Limit(_) => "limit",
-            Error::Auth(_) => "auth",
+            Error::Auth(_) | Error::Forbidden(_) => "auth",
             Error::Protocol(_) => "protocol",
             Error::Git(_) => "git",
             Error::Config(_) => "config",

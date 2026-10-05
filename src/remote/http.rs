@@ -295,6 +295,7 @@ pub fn status_for_error(e: &Error) -> u16 {
     match e {
         Error::Io { source, .. } if source.kind() == std::io::ErrorKind::TimedOut => 504,
         Error::Auth(_) => 401,
+        Error::Forbidden(_) => 403,
         Error::CasFailed(_) | Error::LockBusy(_) | Error::Conflict(_) => 409,
         Error::Limit(_) => 413,
         Error::NotFound(_) | Error::RefNotFound(_) | Error::NotRepo(_) => 404,
@@ -378,6 +379,17 @@ mod tests {
             501
         );
         assert_eq!(parse("GET / HTTP/2.0\r\n\r\n", 1024).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn authenticated_authorization_denials_are_forbidden_not_unauthorized() {
+        assert_eq!(status_for_error(&Error::Auth("invalid token".into())), 401);
+        assert_eq!(
+            status_for_error(&Error::Forbidden("admin required".into())),
+            403
+        );
+        assert_eq!(Error::Forbidden("admin required".into()).category(), "auth");
+        assert_eq!(Error::Forbidden("admin required".into()).exit_code(), 7);
     }
 
     #[test]

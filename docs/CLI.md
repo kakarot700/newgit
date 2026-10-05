@@ -237,6 +237,7 @@ target}}`), `--repo/-C`, `--debug`.
 ```
 newgit serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
              [--max-body BYTES] [--max-threads N]
+             [--protect-ref refs/heads/NAME | refs/tags/NAME]...
 ```
 
 Runs the HTTP/1.1 + JSON protocol-v1 server for the current repo; blocks
@@ -247,6 +248,27 @@ line in scripts/tests. Default bind `127.0.0.1:8787` (loopback only:
 publishing means choosing to). No TLS in v1 — terminate TLS at a reverse
 proxy. Exit 2 on bad flag values, non-zero with `cannot bind …` on an
 occupied port.
+
+`--protect-ref` is repeatable and takes one **exact** supported Git ref name
+under `refs/heads/` or `refs/tags/`, for example:
+
+```sh
+newgit serve --protect-ref refs/heads/main --protect-ref refs/tags/stable
+```
+
+The option is opt-in; with no occurrences, existing write-role push behavior
+is unchanged. When enabled, only an `admin`-role bearer token may create,
+change, or delete that exact ref. A write-role token can still change other
+refs, and existing read/advertisement policy is unchanged. Wildcards, prefixes,
+malformed Git names, and names not representable by NewGit are rejected before
+the server binds; this is not a namespace-wide rule or a path-pattern syntax.
+Because `refs/heads/tags/X` and `refs/tags/X` map to the same canonical NewGit
+ref, an incoming Git name that aliases a configured protected ref also requires
+admin; NewGit cannot store distinct policy targets for that mapping collision.
+Protected changes fail as authorization-denied HTTP 403 requests before Git
+projection/import or canonical object promotion. In a multi-ref request, a
+single protected-ref denial prevents every ref and incoming object in that
+request from being committed.
 
 ### token add|list|remove
 
@@ -328,7 +350,7 @@ token material is ever recorded. `--json` ⇒ `{entries:[…], count:N}`.
 
 ## ui / mcp (iteration 10)
 
-### `newgit ui [--bind host:port] [--token-file P] [--allow-anonymous-read]`
+### `newgit ui [--bind host:port] [--token-file P] [--allow-anonymous-read] [--protect-ref Git-ref…]`
 
 `serve` with the embedded Web UI enabled. Prints the listening line plus
 `web UI: http://HOST:PORT/`; with `--json` the envelope carries

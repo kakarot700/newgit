@@ -54,6 +54,8 @@ pub struct ServerConfig {
     /// Serve the embedded Web UI at `/` (static HTML, no auth — it contains
     /// no data; every data endpoint still enforces roles).
     pub ui: bool,
+    /// Exact Git ref names that only admin-role tokens may change via receive-pack.
+    pub protected_refs: HashSet<String>,
 }
 
 impl Default for ServerConfig {
@@ -66,6 +68,7 @@ impl Default for ServerConfig {
             max_body: 64 * 1024 * 1024,
             max_threads: 32,
             ui: false,
+            protected_refs: HashSet::new(),
         }
     }
 }
@@ -98,6 +101,9 @@ impl ServerHandle {
 
 /// Bind and spawn the accept loop; returns immediately.
 pub fn spawn(cfg: ServerConfig) -> Result<ServerHandle> {
+    for ref_name in &cfg.protected_refs {
+        git_receive::validate_protected_ref(ref_name)?;
+    }
     let listener = TcpListener::bind(&cfg.bind)
         .map_err(|e| Error::Config(format!("cannot bind {}: {e}", cfg.bind)))?;
     let addr = listener
@@ -300,6 +306,7 @@ fn route_git_http(
         .as_ref()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| "anonymous".into());
+    let role = principal.as_ref().map(|p| p.role).unwrap_or(Role::Read);
     let receive_pack = req.path == "/git-receive-pack"
         || (req.path == "/info/refs"
             && req.query.len() == 1
@@ -396,11 +403,17 @@ fn route_git_http(
                 ))
             } else {
                 match git_receive::validate_git_protocol(req.header("git-protocol")) {
-                    Ok(protocol) => {
-                        git_receive::receive_pack(repo, &req.body, protocol, cfg.max_body, &who)
-                            .map(|body| ("application/x-git-receive-pack-result", body))
-                            .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string()))
-                    }
+                    Ok(protocol) => git_receive::receive_pack(
+                        repo,
+                        &req.body,
+                        protocol,
+                        cfg.max_body,
+                        &who,
+                        role,
+                        &cfg.protected_refs,
+                    )
+                    .map(|body| ("application/x-git-receive-pack-result", body))
+                    .map_err(|e| (http::status_for_error(&e), e.category(), e.to_string())),
                     Err(e) => Err((http::status_for_error(&e), e.category(), e.to_string())),
                 }
             }

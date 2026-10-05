@@ -30,7 +30,13 @@ pub(crate) fn dispatch(ctx: &Ctx, cmd: &str, tail: &[String]) -> Result<Output> 
 fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
     let a = Args::parse(
         tail,
-        &["bind", "token-file", "max-body", "max-threads"],
+        &[
+            "bind",
+            "token-file",
+            "max-body",
+            "max-threads",
+            "protect-ref",
+        ],
         COMMON_ALIASES,
     )?;
     a.reject_unknown(&[
@@ -41,6 +47,7 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         "token-file",
         "max-body",
         "max-threads",
+        "protect-ref",
         "allow-anonymous-read",
         "ui",
     ])?;
@@ -63,6 +70,14 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
             .clamp(1, 1024),
         None => 32,
     };
+    let protected_refs = a
+        .values("protect-ref")
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    for ref_name in &protected_refs {
+        crate::remote::git_receive::validate_protected_ref(ref_name)?;
+    }
     let cfg = ServerConfig {
         bind,
         repo_root: repo.root().to_path_buf(),
@@ -71,6 +86,7 @@ fn cmd_serve(ctx: &Ctx, tail: &[String]) -> Result<Output> {
         max_body,
         max_threads,
         ui: a.flag("ui"),
+        protected_refs,
     };
     // Fail fast on an unusable token file BEFORE binding.
     auth::load(&cfg.token_file)?;

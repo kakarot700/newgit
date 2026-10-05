@@ -50,6 +50,39 @@ fn write(dir: &Path, rel: &str, content: &[u8]) {
 }
 
 #[test]
+fn serve_rejects_wildcard_protection_even_when_followed_by_an_exact_ref() {
+    let (_d, dir) = tmp();
+    std::fs::create_dir_all(&dir).unwrap();
+    ok(&dir, &["init"]);
+
+    // Repeated flags are preserved; an invalid first policy entry must not be
+    // silently overwritten by the valid second occurrence.
+    let result = ng(
+        &dir,
+        &[
+            "serve",
+            "--bind",
+            "127.0.0.1:0",
+            "--protect-ref",
+            "refs/heads/*",
+            "--protect-ref",
+            "refs/heads/main",
+        ],
+    );
+    assert_eq!(
+        result.code, 2,
+        "stdout={} stderr={}",
+        result.out, result.err
+    );
+    assert!(
+        result.err.contains("exact valid Git ref")
+            || result.err.contains("exact supported Git ref"),
+        "unexpected diagnostic: {}",
+        result.err
+    );
+}
+
+#[test]
 fn full_workflow_e2e() {
     let (_d, dir) = tmp();
     let proj = dir.join("proj");

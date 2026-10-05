@@ -16,6 +16,7 @@ use crate::error::{Error, Result};
 pub struct Args {
     positional: Vec<String>,
     flags: BTreeMap<String, Option<String>>,
+    value_occurrences: BTreeMap<String, Vec<String>>,
 }
 
 /// (short, long) aliases, e.g. ("m", "message").
@@ -69,6 +70,10 @@ impl Args {
                             }
                         }
                     };
+                    a.value_occurrences
+                        .entry(key.clone())
+                        .or_default()
+                        .push(v.clone());
                     a.flags.insert(key, Some(v));
                 } else {
                     if inline_val.is_some() {
@@ -89,6 +94,10 @@ impl Args {
                         i += 1;
                         match tokens.get(i) {
                             Some(v) => {
+                                a.value_occurrences
+                                    .entry(long.clone())
+                                    .or_default()
+                                    .push(v.clone());
                                 a.flags.insert(long, Some(v.clone()));
                             }
                             None => {
@@ -117,6 +126,15 @@ impl Args {
 
     pub fn opt(&self, key: &str) -> Option<&str> {
         self.flags.get(key).and_then(|v| v.as_deref())
+    }
+
+    /// All values supplied for a value-taking flag, in command-line order.
+    /// `opt()` retains its historical last-value behavior for singular flags.
+    pub fn values(&self, key: &str) -> &[String] {
+        self.value_occurrences
+            .get(key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn req(&self, key: &str) -> Result<&str> {
@@ -207,5 +225,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a.opt("message"), Some("--not-a-flag"));
+    }
+
+    #[test]
+    fn repeated_value_flags_preserve_order_and_last_value_compatibility() {
+        let a = Args::parse(
+            &toks("--protect-ref refs/heads/main --protect-ref=refs/tags/v1"),
+            &["protect-ref"],
+            COMMON_ALIASES,
+        )
+        .unwrap();
+        assert_eq!(
+            a.values("protect-ref"),
+            &["refs/heads/main".to_string(), "refs/tags/v1".to_string()]
+        );
+        assert_eq!(a.opt("protect-ref"), Some("refs/tags/v1"));
     }
 }

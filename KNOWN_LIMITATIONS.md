@@ -111,6 +111,21 @@ Honest, current list. Anything not listed here that fails is a bug — report it
     before object promotion. The receive-pack wire command carries no force flag,
     so a custom write-authenticated client can send the same non-fast-forward
     command without `--force`; explicit-force intent is not server-verifiable.
+    Operators may opt into repeatable `newgit serve --protect-ref <exact-ref>`
+    entries under `refs/heads/` or `refs/tags/`; only an admin-role token may
+    effectively create, update, or delete a protected name. The default set is
+    empty, read/advertisement policy is unchanged, and wildcard/prefix patterns
+    are rejected rather than expanded. This is not a namespace-wide branch
+    policy. Because `refs/heads/tags/X` and `refs/tags/X` map to the same
+    canonical NewGit ref, wire-name aliases share the same protection gate;
+    NewGit cannot store distinct policy targets for that mapping collision. A
+    valid writer receives HTTP 403 for a protected change, and the
+    parsed request is rejected before disposable projection/import or canonical
+    object promotion; tests compare refs and object inventory for rejected
+    single- and mixed-ref pushes. The live Git CLI regression uses Git
+    2.43.0/Linux; it does not establish behavior across other Git program
+    versions. Platform evidence must be read from the exact source SHA's native
+    matrix rather than inferred from this local run or cross-target lint.
     A receive-pack `version=2` request falls back to conventional v0 framing;
     protocol-v2 push itself is not implemented. Signed pushes, receive-pack v2
     framing, Git-over-SSH, and

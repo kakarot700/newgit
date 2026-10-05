@@ -2,6 +2,34 @@
 
 Format: context → decision → rationale → consequences. Newest first.
 
+## D-024 · Opt-in exact protected Git refs require admin (2026-10-05)
+**Context:** The smart-HTTP receive-pack adapter already authenticates write
+requests and commits accepted canonical ref changes transactionally. Operators
+also need a narrowly scoped way to prevent ordinary writer tokens from moving
+selected branch or tag refs without changing the policy for every repository.
+**Decision:** Add repeatable `newgit serve --protect-ref <Git-ref>` settings.
+Each value must be one valid, supported, NewGit-representable exact name under
+`refs/heads/` or `refs/tags/`; wildcards, prefixes, other namespaces, and
+invalid names are refused at configuration/startup. The default set is empty.
+After parsing receive-pack commands, require `Role::Admin` for any effective
+create/update/delete of a protected ref; a no-op does not count as a change.
+Perform this full-command preflight before building the disposable Git view,
+importing objects, or promoting immutable canonical objects. Return HTTP 403
+for an authenticated but unauthorized writer and preserve HTTP 401 for absent
+or invalid credentials. A denied multi-ref request changes no canonical refs.
+**Rationale:** Exact, explicit configuration avoids surprising namespace-wide
+matching, and requiring admin for mutation follows the existing role lattice.
+Checking before import/promotion prevents denied pushes from leaving even
+unreachable canonical objects. Empty-by-default preserves existing deployments.
+**Consequences:** This is an opt-in server setting, not a protocol version
+change or a full Git hosting policy. It does not change reads, ordinary refs,
+force-intent semantics, or the existing receive-pack feature boundary. Git
+wire names that map to the same NewGit canonical ref share the protection
+gate (notably `refs/heads/tags/X` and `refs/tags/X`); NewGit cannot persist a
+separate policy for an unrepresentable alias. The
+live-Git enforcement evidence is limited to Git 2.43.0/Linux until the exact
+source revision's native matrix completes; see TEST_MATRIX.md.
+
 ## D-023 · Kernel-managed cross-platform advisory locks (2026-10-05)
 **Context:** The second native matrix run exposed a Linux ARM64 race in the
 old `O_EXCL` stale-lock reclaimer: concurrent recovery readers could each

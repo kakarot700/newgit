@@ -252,7 +252,8 @@ Git interop (system git required; D-007):
   export-git <target-dir>      stream history out (fast-import; target must be empty)
 
 Remote (HTTP/1.1 + JSON protocol v1; docs/PROTOCOL.md):
-  serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
+  serve [--bind host:port] [--token-file P] [--protect-ref Git-ref…]
+       [--allow-anonymous-read]
                                run the remote server (blocks; Ctrl-C stops)
   remote add <name> <url> [--token T] | list | remove <name>
   push <remote> [refs…] [--all] [--force]
@@ -261,7 +262,8 @@ Remote (HTTP/1.1 + JSON protocol v1; docs/PROTOCOL.md):
   token add <id> --role read|write|admin [--token-file P] [--token RAW]
   token list | remove <id>     server credential management (raw token shown once)
   audit [-n N]                 show the server audit log (who/what/status/when)
-  ui [--bind host:port]        serve with the embedded Web UI enabled at /
+  ui [--bind host:port] [--protect-ref Git-ref…]
+                               serve with the embedded Web UI enabled at /
                                (read-only explorer; same auth as the API)
 
 Agent API (MCP):

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 use crate::object::ObjectId;
+use crate::remote::auth::Role;
 use crate::remote::git_http::{self, TempGitView};
 use crate::repo::txn::{self, Cas, RefLogEntry, TxnOp};
 use crate::repo::Repo;
@@ -82,8 +83,11 @@ pub fn receive_pack(
     git_protocol: Option<&str>,
     max_response_bytes: u64,
     principal: &str,
+    role: Role,
+    protected_refs: &HashSet<String>,
 ) -> Result<Vec<u8>> {
     let pushes = parse_push_command(request)?;
+    authorize_protected_updates(&pushes, protected_refs, role)?;
     for push in &pushes {
         let newgit_ref = git_ref_fallback_newgit_name(&push.ref_name)?;
         crate::repo::refs::check_ref_name(&newgit_ref)?;
@@ -409,6 +413,77 @@ fn validate_sha1(oid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate one exact Git ref name supported by the receive-pack adapter.
+/// Wildcards, prefixes, and other namespaces are not policy patterns here.
+pub fn validate_protected_ref(ref_name: &str) -> Result<()> {
+    if !ref_name.starts_with("refs/heads/") && !ref_name.starts_with("refs/tags/") {
+        return Err(Error::Invalid(format!(
+            "protected ref must be an exact supported Git ref under refs/heads/ or refs/tags/: {ref_name:?}"
+        )));
+    }
+    if ref_name.contains("..") || ref_name.contains("@{") || ref_name == "@" {
+        return Err(Error::Invalid(format!(
+            "protected ref must be an exact valid Git ref name: {ref_name:?}"
+        )));
+    }
+    if ref_name.bytes().any(|byte| {
+        byte <= b' '
+            || byte == 0x7f
+            || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
+    }) {
+        return Err(Error::Invalid(format!(
+            "protected ref must be an exact valid Git ref name: {ref_name:?}"
+        )));
+    }
+    if ref_name.split('/').any(|segment| {
+        segment.is_empty()
+            || segment.starts_with('.')
+            || segment.ends_with('.')
+            || segment.to_ascii_lowercase().ends_with(".lock")
+    }) {
+        return Err(Error::Invalid(format!(
+            "protected ref must be an exact valid Git ref name: {ref_name:?}"
+        )));
+    }
+    let newgit_ref = git_ref_fallback_newgit_name(ref_name)?;
+    crate::repo::refs::check_ref_name(&newgit_ref).map_err(|error| {
+        Error::Invalid(format!(
+            "protected Git ref {ref_name:?} is not representable by NewGit: {error}"
+        ))
+    })
+}
+
+fn authorize_protected_updates(
+    pushes: &[PushCommand],
+    protected_refs: &HashSet<String>,
+    role: Role,
+) -> Result<()> {
+    // Git branch names `refs/heads/tags/X` and tag names `refs/tags/X` both
+    // map to NewGit `refs/tags/X`. Protect the canonical destination too so
+    // an unprotected wire-name alias cannot bypass a protected ref policy.
+    let protected_newgit_refs = protected_refs
+        .iter()
+        .map(|ref_name| {
+            validate_protected_ref(ref_name)?;
+            git_ref_fallback_newgit_name(ref_name)
+        })
+        .collect::<Result<HashSet<_>>>()?;
+    for push in pushes {
+        validate_protected_ref(&push.ref_name)?;
+        let newgit_ref = git_ref_fallback_newgit_name(&push.ref_name)?;
+        if push.old_oid != push.new_oid
+            && protected_newgit_refs.contains(&newgit_ref)
+            && role != Role::Admin
+        {
+            return Err(Error::Forbidden(format!(
+                "admin role is required to change protected Git ref {:?}",
+                push.ref_name
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn git_ref_fallback_newgit_name(ref_name: &str) -> Result<String> {
     if let Some(suffix) = ref_name.strip_prefix("refs/heads/") {
         if suffix.is_empty() {
@@ -692,11 +767,15 @@ fn git_deadline_error() -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_no_ref_name_conflict, parse_push_command, validate_git_protocol,
-        validate_lightweight_tag_target, validate_sha1, ZERO_SHA1,
+        authorize_protected_updates, ensure_no_ref_name_conflict, parse_push_command,
+        validate_git_protocol, validate_lightweight_tag_target, validate_protected_ref,
+        validate_sha1, PushCommand, ZERO_SHA1,
     };
+    use crate::error::Error;
+    use crate::remote::auth::Role;
     use crate::repo::txn::{self, Cas, RefLogEntry, TxnOp};
     use crate::repo::Repo;
+    use std::collections::HashSet;
 
     fn pkt(payload: &[u8]) -> Vec<u8> {
         let length = payload.len() + 4;
@@ -808,6 +887,103 @@ mod tests {
         let parsed = parse_push_command(&body).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].new_oid, new);
+    }
+
+    #[test]
+    fn protected_ref_configuration_accepts_exact_supported_names_only() {
+        for ref_name in [
+            "refs/heads/main",
+            "refs/heads/release/2026.10",
+            "refs/tags/v1.2.3",
+        ] {
+            assert!(validate_protected_ref(ref_name).is_ok(), "{ref_name:?}");
+        }
+        for ref_name in [
+            "main",
+            "refs/remotes/origin/main",
+            "refs/heads/",
+            "refs/heads/*",
+            "refs/heads/main/*",
+            "refs/heads/main?",
+            "refs/heads/.hidden",
+            "refs/heads/a..b",
+            "refs/tags/release.lock",
+        ] {
+            assert!(validate_protected_ref(ref_name).is_err(), "{ref_name:?}");
+        }
+    }
+
+    #[test]
+    fn protected_ref_changes_require_admin_but_noops_and_neighboring_names_do_not() {
+        let protected = HashSet::from([
+            "refs/heads/main".to_string(),
+            "refs/heads/release".to_string(),
+            "refs/tags/release".to_string(),
+        ]);
+        let create = PushCommand {
+            old_oid: ZERO_SHA1.into(),
+            new_oid: "1111111111111111111111111111111111111111".into(),
+            ref_name: "refs/heads/main".into(),
+        };
+        let update = PushCommand {
+            old_oid: "1111111111111111111111111111111111111111".into(),
+            new_oid: "2222222222222222222222222222222222222222".into(),
+            ref_name: "refs/heads/main".into(),
+        };
+        let delete = PushCommand {
+            old_oid: "1111111111111111111111111111111111111111".into(),
+            new_oid: ZERO_SHA1.into(),
+            ref_name: "refs/heads/release".into(),
+        };
+        let mapping_alias = PushCommand {
+            old_oid: ZERO_SHA1.into(),
+            new_oid: "3333333333333333333333333333333333333333".into(),
+            ref_name: "refs/heads/tags/release".into(),
+        };
+        for change in [&create, &update, &delete, &mapping_alias] {
+            assert!(matches!(
+                authorize_protected_updates(std::slice::from_ref(change), &protected, Role::Write),
+                Err(Error::Forbidden(_))
+            ));
+            assert!(authorize_protected_updates(
+                std::slice::from_ref(change),
+                &protected,
+                Role::Admin
+            )
+            .is_ok());
+        }
+
+        let noop = PushCommand {
+            old_oid: create.new_oid.clone(),
+            new_oid: create.new_oid.clone(),
+            ref_name: create.ref_name.clone(),
+        };
+        let neighboring_exact_name = PushCommand {
+            old_oid: ZERO_SHA1.into(),
+            new_oid: create.new_oid,
+            ref_name: "refs/heads/mainline".into(),
+        };
+        assert!(authorize_protected_updates(
+            &[noop, neighboring_exact_name],
+            &protected,
+            Role::Write
+        )
+        .is_ok());
+        assert!(matches!(
+            authorize_protected_updates(
+                &[
+                    update,
+                    PushCommand {
+                        old_oid: ZERO_SHA1.into(),
+                        new_oid: "4444444444444444444444444444444444444444".into(),
+                        ref_name: "refs/heads/other".into(),
+                    },
+                ],
+                &protected,
+                Role::Write
+            ),
+            Err(Error::Forbidden(_))
+        ));
     }
 
     #[test]

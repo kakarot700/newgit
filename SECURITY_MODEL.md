@@ -8,7 +8,7 @@
 | Workspace files | user/agent-written files, symlinks, names | walk-time path validation; symlink policy (recorded as symlink blobs, never followed out of root); size/count limits |
 | CLI input | arguments, prefixes, names | ref/path/name grammars; limit checks; no shell evaluation anywhere |
 | Remote wire | HTTP requests, JSON bodies, object batches | size limits, strict JSON schemas, per-object digest verification, refs CAS, authn/authz before any mutation |
-| Git interop | foreign repos via fast-export; Git smart-HTTP clients via upload-pack and bounded receive-pack | streamed parsing with limits; path/name validation identical to native; fixed Git argv (never a shell); private temporary projection with isolated Git config and cleared repository-redirection environment; write-role authorization and transactional canonical ref updates |
+| Git interop | foreign repos via fast-export; Git smart-HTTP clients via upload-pack and bounded receive-pack | streamed parsing with limits; path/name validation identical to native; fixed Git argv (never a shell); private temporary projection with isolated Git config and cleared repository-redirection environment; write-role authorization, optional exact-ref admin authorization before projection/import, and transactional canonical ref updates |
 | Evidence/evaluation | claims by any actor | honesty flags (`deterministic`, `ai_generated`); policy layer distinguishes them; core never upgrades claims |
 
 ## 2. Identity model
@@ -31,7 +31,11 @@ config and template directories, system config disabled, and Git
 repository-redirection variables cleared; only its private temporary
 projection is served. Receive-pack is used only after write-role authorization,
 runs on this private view, and promotes accepted changes through NewGit
-transactions. Agents get no host access through NewGit beyond the repository
+transactions. Operators may configure exact protected Git refs; each effective
+create/update/delete of one requires an admin-role token, checked across the
+parsed update list before projection, import, or canonical object promotion.
+These protections are opt-in and do not alter read/advertisement authorization.
+Agents get no host access through NewGit beyond the repository
 directory they are pointed at.
 
 ## 4. Input hardening rules (implemented + tested)

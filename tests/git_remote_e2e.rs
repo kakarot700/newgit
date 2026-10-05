@@ -30,6 +30,7 @@ use tempfile::TempDir;
 
 const READ_TOKEN: &str = "git-http-read-test-token";
 const WRITE_TOKEN: &str = "git-http-write-test-token";
+const ADMIN_TOKEN: &str = "git-http-admin-test-token";
 
 fn temp(tag: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
@@ -2097,6 +2098,373 @@ fn real_git_lightweight_tag_pushes_are_transactional_and_bounded() {
     ]);
     let remote_tags = git(&["-c", &read_auth, "ls-remote", "--tags", &url]);
     assert!(!as_text(&remote_tags).contains("refs/tags/v2.0"));
+    server.shutdown();
+}
+
+#[test]
+fn real_git_protected_refs_require_admin_and_reject_mixed_pushes_before_promotion() {
+    let (_dir, root) = temp("protected-refs");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+    let initial = commit(
+        &newgit,
+        "refs/main",
+        "initial snapshot",
+        &[(
+            "README.md",
+            b"protected-ref baseline\n",
+            newgit::object::types::EntryMode::File,
+        )],
+        vec![],
+    );
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set protected-ref test HEAD"),
+        )
+        .unwrap();
+
+    let tokens_path = root.join("tokens.json");
+    let mut tokens = TokenFile::default();
+    tokens.add("git-reader", READ_TOKEN, Role::Read).unwrap();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
+    tokens.add("git-admin", ADMIN_TOKEN, Role::Admin).unwrap();
+    auth::save(&tokens_path, &tokens).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        token_file: tokens_path,
+        protected_refs: [
+            "refs/heads/main".to_string(),
+            "refs/heads/release".to_string(),
+            "refs/tags/release".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let local = root.join("local");
+    let local_str = local.to_str().unwrap();
+    let read_auth = format!("http.extraHeader=Authorization: Bearer {READ_TOKEN}");
+    let write_auth = format!("http.extraHeader=Authorization: Bearer {WRITE_TOKEN}");
+    let admin_auth = format!("http.extraHeader=Authorization: Bearer {ADMIN_TOKEN}");
+    git(&["-c", &read_auth, "clone", "--quiet", &url, local_str]);
+    let listing = git(&["-c", &read_auth, "ls-remote", &url]);
+    assert!(as_text(&listing).contains("refs/heads/main"));
+    git(&["-C", local_str, "config", "user.name", "Protected Ref Test"]);
+    git(&[
+        "-C",
+        local_str,
+        "config",
+        "user.email",
+        "protected-ref@example.test",
+    ]);
+
+    // Protection is exact, not a prefix rule: a neighboring branch remains writable.
+    git(&["-C", local_str, "checkout", "-b", "mainline"]);
+    std::fs::write(local.join("mainline.txt"), b"exact-name neighbor\n").unwrap();
+    git(&["-C", local_str, "add", "mainline.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "mainline update",
+    ]);
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "mainline:refs/heads/mainline",
+    ]);
+    let mainline_tip = newgit.refs.read("refs/mainline").unwrap();
+
+    // A valid writer may not update the protected default branch. Rejection
+    // precedes projection/import, so even incoming objects are not promoted.
+    git(&["-C", local_str, "checkout", "-b", "protected-main", "main"]);
+    std::fs::write(local.join("protected.txt"), b"not yet published\n").unwrap();
+    git(&["-C", local_str, "add", "protected.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "protected main candidate",
+    ]);
+    let refs_before_update_denial = newgit.refs.list(None).unwrap();
+    let objects_before_update_denial = newgit.objects.iter().unwrap();
+    let denied_update = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "protected-main:refs/heads/main",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_update.stderr).is_empty());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), initial);
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_update_denial);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_update_denial);
+    let command = b"1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 refs/heads/main\0report-status\n";
+    let mut raw_update = format!("{:04x}", command.len() + 4).into_bytes();
+    raw_update.extend_from_slice(command);
+    raw_update.extend_from_slice(b"0000");
+    assert_eq!(
+        raw_git_receive_post_status(server.addr(), &format!("Bearer {WRITE_TOKEN}"), &raw_update),
+        403,
+        "an authenticated writer's protected-ref change is Forbidden, not Unauthorized"
+    );
+    // The adapter maps this valid branch name to the same canonical NewGit ref
+    // as protected `refs/tags/release`; the alias must not bypass authorization.
+    let refs_before_alias_denial = newgit.refs.list(None).unwrap();
+    let objects_before_alias_denial = newgit.objects.iter().unwrap();
+    let denied_alias = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "main:refs/heads/tags/release",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_alias.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_alias_denial);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_alias_denial);
+
+    // Protected creates and deletes receive the same admin gate; admin can
+    // create and later delete that exact ref.
+    let refs_before_create_denial = newgit.refs.list(None).unwrap();
+    let objects_before_create_denial = newgit.objects.iter().unwrap();
+    let denied_create = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "main:refs/heads/release",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_create.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_create_denial);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_create_denial);
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "main:refs/heads/release",
+    ]);
+    assert_eq!(newgit.refs.read("refs/release").unwrap(), initial);
+
+    let refs_before_delete_denial = newgit.refs.list(None).unwrap();
+    let objects_before_delete_denial = newgit.objects.iter().unwrap();
+    let denied_delete = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "--delete",
+        "origin",
+        "release",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_delete.stderr).is_empty());
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_delete_denial);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_delete_denial);
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "--delete",
+        "origin",
+        "release",
+    ]);
+    assert!(newgit.refs.read_opt("refs/release").unwrap().is_none());
+
+    // Exact protected lightweight tags use the same role policy. Denied
+    // creation cannot promote the unpushed protected-main commit; admin may
+    // create and later delete the tag.
+    let refs_before_tag_create_denial = newgit.refs.list(None).unwrap();
+    let objects_before_tag_create_denial = newgit.objects.iter().unwrap();
+    let denied_tag_create = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "protected-main:refs/tags/release",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_tag_create.stderr).is_empty());
+    assert_eq!(
+        newgit.refs.list(None).unwrap(),
+        refs_before_tag_create_denial
+    );
+    assert_eq!(
+        newgit.objects.iter().unwrap(),
+        objects_before_tag_create_denial
+    );
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "protected-main:refs/tags/release",
+    ]);
+    let protected_tag_tip = newgit.refs.read("refs/tags/release").unwrap();
+    assert_eq!(
+        newgit
+            .objects
+            .get(&protected_tag_tip)
+            .unwrap()
+            .as_snapshot()
+            .unwrap()
+            .message
+            .trim_end(),
+        "protected main candidate"
+    );
+
+    let refs_before_tag_delete_denial = newgit.refs.list(None).unwrap();
+    let objects_before_tag_delete_denial = newgit.objects.iter().unwrap();
+    let denied_tag_delete = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "--delete",
+        "origin",
+        "refs/tags/release",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_tag_delete.stderr).is_empty());
+    assert_eq!(
+        newgit.refs.list(None).unwrap(),
+        refs_before_tag_delete_denial
+    );
+    assert_eq!(
+        newgit.objects.iter().unwrap(),
+        objects_before_tag_delete_denial
+    );
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "--delete",
+        "origin",
+        "refs/tags/release",
+    ]);
+    assert!(newgit.refs.read_opt("refs/tags/release").unwrap().is_none());
+
+    // Admin may update a protected ref, independent of the writer's refusal.
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "protected-main:refs/heads/main",
+    ]);
+    let accepted_main_tip = newgit.refs.read("refs/main").unwrap();
+    assert_ne!(accepted_main_tip, initial);
+
+    // A mixed atomic request containing one protected change is denied before
+    // either its protected or ordinary sibling ref/object is committed.
+    git(&["-C", local_str, "checkout", "mainline"]);
+    std::fs::write(
+        local.join("mainline-next.txt"),
+        b"atomic sibling candidate\n",
+    )
+    .unwrap();
+    git(&["-C", local_str, "add", "mainline-next.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "mainline atomic candidate",
+    ]);
+    git(&["-C", local_str, "checkout", "protected-main"]);
+    std::fs::write(local.join("protected-next.txt"), b"admin-only follow-up\n").unwrap();
+    git(&["-C", local_str, "add", "protected-next.txt"]);
+    git(&[
+        "-C",
+        local_str,
+        "commit",
+        "--quiet",
+        "-m",
+        "second protected candidate",
+    ]);
+    let refs_before_atomic_denial = newgit.refs.list(None).unwrap();
+    let objects_before_atomic_denial = newgit.objects.iter().unwrap();
+    let denied_atomic = git_fails(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "--atomic",
+        "origin",
+        "protected-main:refs/heads/main",
+        "mainline:refs/heads/mainline",
+    ]);
+    assert!(!String::from_utf8_lossy(&denied_atomic.stderr).is_empty());
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), accepted_main_tip);
+    assert_eq!(newgit.refs.read("refs/mainline").unwrap(), mainline_tip);
+    assert_eq!(newgit.refs.list(None).unwrap(), refs_before_atomic_denial);
+    assert_eq!(newgit.objects.iter().unwrap(), objects_before_atomic_denial);
+
+    // The same writer remains authorized to update the exact unprotected sibling.
+    git(&[
+        "-c",
+        &write_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "mainline:refs/heads/mainline",
+    ]);
+    assert_ne!(newgit.refs.read("refs/mainline").unwrap(), mainline_tip);
+    git(&[
+        "-c",
+        &admin_auth,
+        "-C",
+        local_str,
+        "push",
+        "origin",
+        "protected-main:refs/heads/main",
+    ]);
+    let final_main_tip = newgit.refs.read("refs/main").unwrap();
+    assert_ne!(final_main_tip, accepted_main_tip);
+    assert_eq!(
+        newgit
+            .objects
+            .get(&final_main_tip)
+            .unwrap()
+            .as_snapshot()
+            .unwrap()
+            .message
+            .trim_end(),
+        "second protected candidate"
+    );
     server.shutdown();
 }
 

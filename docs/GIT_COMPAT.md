@@ -7,7 +7,12 @@ the installed `git upload-pack` and `git receive-pack`. NewGit does not
 reimplement Git's pack format. The receive path translates authenticated branch
 creates, fast-forward or explicitly forced non-fast-forward updates, and
 deletions into canonical NewGit refs using one CAS-guarded transaction per
-accepted request. If `git` is not on PATH, conversion and the live Git adapter fail with
+accepted request. Servers may opt into exact protected branch/tag refs with
+repeatable `--protect-ref` flags; changing one requires an admin-role token.
+Patterns are rejected, the default is unprotected, and read authorization is
+unchanged. Wire names that map to the same NewGit canonical ref share the gate
+because NewGit cannot store those aliases separately. If `git` is not on PATH,
+conversion and the live Git adapter fail with
 a clear error; NewGit's native operations and JSON remote remain independent
 of Git.
 

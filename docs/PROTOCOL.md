@@ -10,6 +10,7 @@ encryption; the protocol is proxy-friendly plain HTTP.
 ```
 newgit serve [--bind host:port] [--token-file P] [--allow-anonymous-read]
              [--max-body BYTES] [--max-threads N] [--ui]
+             [--protect-ref refs/heads/NAME | refs/tags/NAME]...
 newgit ui    [...same flags...]        # serve with --ui forced on; prints the UI URL
 ```
 
@@ -118,6 +119,21 @@ requires its old object ID to map to the canonical old tip, then rechecks that
 tip with CAS under the transaction lock before promoting objects. A custom
 write-authenticated client can submit the same non-fast-forward wire command
 without a force flag, so explicit force intent cannot be enforced server-side.
+Operators can additionally repeat `--protect-ref <exact-git-ref>` to require
+the `admin` role for every effective create, update, or delete of the named
+branch or tag. This is opt-in and exact-name only: wildcard/prefix patterns and
+unsupported or non-NewGit-representable names are rejected during server
+configuration; an identical old/new oid is a no-op. The complete parsed update
+list is checked before constructing the disposable Git projection or importing
+objects. Since `refs/heads/tags/X` and `refs/tags/X` map to the same canonical
+NewGit ref, an incoming wire name with that same canonical destination shares
+the protection gate; NewGit cannot store separate policy targets for aliases.
+A protected change by a valid write-role token returns HTTP 403
+(invalid/missing credentials remain 401); a denied mixed or atomic push leaves
+all canonical refs and objects unchanged. Reads and unprotected refs retain
+their existing authorization behavior. Evidence: unit role/ref tests,
+`tests/cli_e2e.rs::serve_rejects_wildcard_protection_even_when_followed_by_an_exact_ref`,
+and `tests/git_remote_e2e.rs::real_git_protected_refs_require_admin_and_reject_mixed_pushes_before_promotion`.
 Signed pushes remain refused. Receive-pack protocol version 2 falls back to v0
 rather than enabling v2 push framing; other unsupported versions are refused. A
 branch such as `refs/heads/main` maps
