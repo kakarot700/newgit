@@ -127,3 +127,17 @@ The Windows-focused tests and both native suites also passed on [attempt 5](http
 Standalone `actionlint` v1.7.7 does not recognize `macos-15-intel` and `windows-11-arm` in its bundled runner-label catalog and reports them as unknown. [GitHub's official runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) lists both as standard hosted labels; the GitHub-hosted jobs above also ran on these labels. An isolated temporary config suppressed only those two runner-label diagnostics, after which actionlint passed the remaining workflow checks. No runner targets or checked-in actionlint configuration were changed.
 
 Subsequent verification on docs-only SHA `ea068dccdbabd2446786de6d6748cca8da8384b2` is not a passing six-target certification: [CI 37372516920 attempt 1](https://github.com/kakarot700/newgit/actions/runs/37372516920/attempts/1) had Windows real-Git transfer failures and no-step shared/CodeQL cancellations; [attempt 2](https://github.com/kakarot700/newgit/actions/runs/37372516920/attempts/2) passed shared checks, dependency/SBOM, Linux x86_64, and both macOS targets, but Windows x86_64/ARM64 failed partial-clone or shallow-fetch transfers with HTTP 408/reset, and ARM64 Linux exceeded a test-only response ceiling by 2.040549 ms. Both focused Windows deadline tests passed; [CodeQL attempt 2](https://github.com/kakarot700/newgit/actions/runs/37372516949/attempts/2) passed. The package job was skipped, not failed or passed. This test-only follow-up widens the ARM64-sensitive ceiling to 1 s; no production timeout, body cap, or server behavior changes. Do not certify a new source SHA until its exact native jobs pass.
+
+## Exact-SHA status — test-only follow-up `3fc2270` (2026-10-06)
+
+[CI 37376156693](https://github.com/kakarot700/newgit/actions/runs/37376156693)
+attempts 1–3 do not certify a passing six-target matrix. Attempt 1 failed a
+Windows ARM64 protected non-fast-forward transfer with HTTP 408; attempt 2 failed
+Windows x86_64 protected-ref deletion with HTTP 408; attempt 3 failed x86_64
+shallow-fetch deepening with HTTP 408 and ARM64 lazy fetch with a connection
+reset while 49,148 body bytes remained. Both Windows-focused deadline tests
+passed on every attempt. The four non-Windows targets passed on attempt 3;
+shared checks and dependency/SBOM passed. `dist` was skipped after each native
+matrix failure. [CodeQL 37376156803](https://github.com/kakarot700/newgit/actions/runs/37376156803)
+passed. The follow-up changes only test portability/timing and documentation;
+production behavior is unchanged. Release readiness remains pending.

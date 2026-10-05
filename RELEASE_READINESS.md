@@ -115,7 +115,7 @@ was cancelled without steps or logs on attempts 4 and 5, so this source revision
 does not have a completed package gate. Keep release readiness pending; the
 existing `v0.1.0` tag was not moved and no `v0.1.1` tag was created.
 
-## Follow-up source-change evidence — deadline-test timing margin (2026-10-06)
+## Follow-up test-only evidence — deadline-test timing margin (2026-10-06)
 
 The docs-only commit `ea068dccdbabd2446786de6d6748cca8da8384b2` was checked by
 [CI run 37372516920](https://github.com/kakarot700/newgit/actions/runs/37372516920)
@@ -135,3 +135,23 @@ unchanged. Local focused/debug/release/format/Clippy checks passed. This does no
 clear the hosted release gate: keep readiness pending until all six native jobs,
 CodeQL, and the exact current-SHA reproducible `dist` job actually pass. Do not
 move `v0.1.0` or create a `v0.1.1` tag for a test-only fix.
+
+## Exact-SHA outcome — test-only follow-up `3fc2270` (2026-10-06)
+
+CI [37376156693](https://github.com/kakarot700/newgit/actions/runs/37376156693)
+attempts 1–3 repeatedly failed Windows real-Git transfers despite passing the
+focused deadline regression on both Windows architectures. Attempt 1 failed
+Windows ARM64 protected non-fast-forward with HTTP 408; attempt 2 failed Windows
+x86_64 protected deletion with HTTP 408; attempt 3 failed x86_64 shallow-fetch
+deepening with HTTP 408 and ARM64 partial-clone lazy fetch with a connection
+reset while 49,148 body bytes remained. The four non-Windows targets passed on
+attempt 3; shared checks and dependency/SBOM passed. The dependent `dist` job was
+skipped on all three attempts because the native matrix failed. CodeQL
+[37376156803](https://github.com/kakarot700/newgit/actions/runs/37376156803)
+passed.
+
+These follow-ups change only Windows test portability and the test timing margin;
+production behavior, timeout policy, limits, and dependencies are unchanged.
+Release readiness remains **pending** because the exact-SHA native matrix did
+not pass and the package gate did not run. Keep `v0.1.0` unchanged; do not create
+`v0.1.1` until a complete exact-SHA release gate succeeds.
