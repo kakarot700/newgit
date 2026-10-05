@@ -188,8 +188,10 @@ fn walk_refs(
         let rel = path
             .strip_prefix(base)
             .map_err(|_| Error::Bug("ref walk prefix mismatch".into()))?
-            .to_string_lossy()
-            .to_string();
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
         if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             // Only descend when the directory can contain the prefix.
             if let Some(p) = prefix {
@@ -274,5 +276,21 @@ mod tests {
         ] {
             assert!(check_ref_name(n).is_err(), "{n:?} should be invalid");
         }
+    }
+
+    #[test]
+    fn nested_ref_listing_uses_platform_independent_slashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ng = dir.path().join(".newgit");
+        let oid = ObjectId::from_bytes([0x2a; 32]);
+        let ref_path = ng.join("refs").join("refs").join("main");
+        std::fs::create_dir_all(ref_path.parent().unwrap()).unwrap();
+        std::fs::write(&ref_path, format!("{}\n", oid.to_hex())).unwrap();
+
+        let refs = RefStore::new(ng, Limits::default());
+        assert_eq!(
+            refs.list(None).unwrap(),
+            vec![("refs/main".to_string(), oid)]
+        );
     }
 }

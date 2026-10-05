@@ -46,6 +46,14 @@ The test-only follow-up commit `eeb6e09351531f6320543c6775adbe02ed69797e` ran as
 
 The Linux ARM64 failure revealed a production check-then-unlink race, not merely a test-timing issue. The current working-tree follow-up replaces O_EXCL stale reclamation with stable kernel advisory locks and uses real empty Git config files. Its native exact-SHA retest is pending; none of the targets is newly certified by this uncommitted fix.
 
+## Kernel-lock exact-SHA matrix result (2026-10-05)
+
+Commit `e3dd818462e338185f2a8cc9a5dd6f740067dbd8` ran as [CI 37263992593](https://github.com/kakarot700/newgit/actions/runs/37263992593); [CodeQL 37263992598](https://github.com/kakarot700/newgit/actions/runs/37263992598) passed on the same SHA. Linux x86_64/ARM64 and macOS x86_64/ARM64 native jobs passed. Both Windows jobs failed the lock exclusivity test because it tried to open/read the sidecar while an exclusive Windows lock handle was live; the test was corrected to inspect the persistent empty sidecar after unlock. Shared dependency/SBOM checks passed; release packaging was skipped.
+
+## Windows ref-list and macOS contention exact-SHA matrix result (2026-10-05)
+
+Commit `6990dcc4387990b75711dbaa56c5f1e21efc105d` ran as [CI 37264636052](https://github.com/kakarot700/newgit/actions/runs/37264636052); [CodeQL 37264635990](https://github.com/kakarot700/newgit/actions/runs/37264635990) passed on the same SHA. Linux x86_64/ARM64 and macOS ARM64 native jobs passed. Windows x86_64/ARM64 failed the CLI E2E because (1) the test asserted LF bytes in a Git worktree that used CRLF, and (2) nested Windows paths were stringified with backslashes, so valid refs were rejected and pulls updated none. macOS x86_64 failed `concurrent_recovery_and_writes` when `Repo::open` returned the documented bounded `LockBusy` error after ten seconds of sustained writer contention and the test unwrapped it. The pending candidate joins ref path components with `/`, asserts canonical Git blob bytes, and retries `LockBusy` in the stress reader while retaining checks for other errors. Dependency/SBOM checks passed; release packaging was skipped. These results do not certify the pending candidate.
+
 ## Known platform boundaries
 
 * Git tree modes preserve executable-bit metadata across import/export. Unix checkout applies executable permissions; Windows files do not have the same executable-bit behavior.

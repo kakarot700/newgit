@@ -994,10 +994,18 @@ fn import_export_git_cli() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "git commit one");
-    assert_eq!(
-        std::fs::read(outdir.join("hello.txt")).unwrap(),
-        b"hello git\n"
+    let blob = Command::new("git")
+        .arg("-C")
+        .arg(&outdir)
+        .args(["cat-file", "blob", "refs/heads/master:hello.txt"])
+        .output()
+        .unwrap();
+    assert!(
+        blob.status.success(),
+        "git cat-file: {}",
+        String::from_utf8_lossy(&blob.stderr)
     );
+    assert_eq!(blob.stdout, b"hello git\n");
 
     // error contracts: not a git repo / occupied target — both usage errors
     let r = ng(&proj, &["import-git", proj.to_str().unwrap()]);
@@ -1114,7 +1122,11 @@ fn remote_cli_push_pull_serve_token_audit() {
     let out = ok(&cli, &["pull", "origin", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["ok"], true);
-    assert_eq!(v["data"]["refs_updated"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        v["data"]["refs_updated"].as_array().unwrap().len(),
+        1,
+        "pull response: {out}"
+    );
     assert!(v["data"]["objects_received"].as_u64().unwrap() > 0);
     let out = ok(&cli, &["history"]);
     assert!(out.contains("srv s1"), "pulled history: {out}");

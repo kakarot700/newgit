@@ -209,18 +209,32 @@ fn concurrent_recovery_and_writes() {
     let stop2 = stop.clone();
     let opener = std::thread::spawn(move || {
         let mut n = 0;
-        while stop2.load(Ordering::Relaxed) == 0 && n < 20 {
-            let r = newgit::repo::Repo::open(&root2).unwrap();
+        while n < 20 && (stop2.load(Ordering::Relaxed) == 0 || n == 0) {
+            let r = match newgit::repo::Repo::open(&root2) {
+                Ok(repo) => repo,
+                Err(newgit::Error::LockBusy(_)) => {
+                    // Lock acquisition is bounded and LockBusy is explicitly
+                    // retryable; sustained writer contention is not corruption.
+                    std::thread::yield_now();
+                    continue;
+                }
+                Err(error) => panic!("repo open failed during concurrent writes: {error:?}"),
+            };
             // every read must be consistent (valid oid or absent)
             let _ = r.refs.read_opt("hammer/h0").unwrap();
             n += 1;
         }
+        n
     });
     for h in handles {
         h.join().unwrap();
     }
     stop.store(1, Ordering::Relaxed);
-    opener.join().unwrap();
+    let successful_opens = opener.join().unwrap();
+    assert!(
+        successful_opens > 0,
+        "recovery reader must complete at least one consistent open"
+    );
     let repo = newgit::repo::Repo::open(&root).unwrap();
     for t in 0..3u64 {
         let oid = repo.refs.read(&format!("hammer/h{t}")).unwrap();
