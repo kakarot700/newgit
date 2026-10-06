@@ -8,6 +8,10 @@ description = "NewGit: an agent-native version-control system"
 readme = "README.md"
 repository = "https://github.com/kakarot700/newgit"
 
+[features]
+default = []
+smart-http-diagnostics = []
+
 [dependencies]
 sha2 = "0.10"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

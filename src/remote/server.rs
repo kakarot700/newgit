@@ -230,6 +230,15 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_default();
+    #[cfg(feature = "smart-http-diagnostics")]
+    let _diagnostic_scope = crate::remote::diagnostics::begin(
+        &peer,
+        IO_TIMEOUT.as_millis() as u64,
+        REQUEST_READ_TIMEOUT.as_millis() as u64,
+        request_deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64,
+    );
     let out_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
@@ -253,20 +262,113 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
     let tokens = auth::load(&cfg.token_file).unwrap_or_default();
     let audit = AuditLog::new(repo.ng());
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "smart-http-diagnostics"))]
     let request_read_started = std::time::Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "request_read_start",
+        &[
+            (
+                "deadline_remaining_ms",
+                json!(request_deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64),
+            ),
+            (
+                "socket_idle_timeout_ms",
+                json!(IO_TIMEOUT.as_millis() as u64),
+            ),
+        ],
+    );
     let req = match http::read_request(&mut r, cfg.max_body) {
         Ok(req) => req,
         Err((status, msg)) => {
+            #[cfg(feature = "smart-http-diagnostics")]
+            let deadline_remaining_ms = request_deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64;
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event(
+                "request_read_end",
+                &[
+                    ("http_status", json!(status)),
+                    ("deadline_remaining_ms", json!(deadline_remaining_ms)),
+                    (
+                        "timeout_reason",
+                        json!(if status == 408 {
+                            if deadline_remaining_ms == 0 {
+                                "absolute_receive_deadline"
+                            } else {
+                                "socket_timeout_or_would_block_before_deadline"
+                            }
+                        } else {
+                            "request_not_fully_read"
+                        }),
+                    ),
+                    (
+                        "read_duration_ms",
+                        json!(request_read_started.elapsed().as_millis() as u64),
+                    ),
+                ],
+            );
             let category = if status == 413 { "limit" } else { "protocol" };
             audit.append("pre-auth", "?", &msg, status, Some(category));
             let body = envelope_err(status, category, &msg);
-            let _ = http::write_response(&mut w, status, "application/json", &body);
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event(
+                "response_start",
+                &[
+                    ("http_status", json!(status)),
+                    ("response_bytes", json!(body.len())),
+                ],
+            );
+            #[cfg(feature = "smart-http-diagnostics")]
+            let response_started = Instant::now();
+            let response_result = http::write_response(&mut w, status, "application/json", &body);
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event(
+                "response_end",
+                &[
+                    ("http_status", json!(status)),
+                    (
+                        "response_duration_ms",
+                        json!(response_started.elapsed().as_millis() as u64),
+                    ),
+                    (
+                        "connection_state",
+                        json!(diagnostic_connection_state(&response_result)),
+                    ),
+                    (
+                        "connection_error_kind",
+                        json!(diagnostic_connection_error_kind(&response_result)),
+                    ),
+                ],
+            );
+            #[cfg(not(feature = "smart-http-diagnostics"))]
+            drop(response_result);
             return;
         }
     };
     #[cfg(test)]
     crate::remote::bench_timing::record("server.request_read", request_read_started.elapsed());
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "request_read_end",
+        &[
+            ("parsed", json!(true)),
+            ("request_body_bytes", json!(req.body.len())),
+            (
+                "deadline_remaining_ms",
+                json!(request_deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64),
+            ),
+            (
+                "read_duration_ms",
+                json!(request_read_started.elapsed().as_millis() as u64),
+            ),
+        ],
+    );
     crate::obs::event(
         "remote_request",
         &[
@@ -278,8 +380,13 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
 
     // Static UI first (no auth: the HTML contains zero data; every data
     // endpoint behind it enforces roles with the user's own token).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "smart-http-diagnostics"))]
     let route_started = std::time::Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "route_start",
+        &[("operation", json!(diagnostic_operation(&req)))],
+    );
     let (status, body, ctype, principal_id, category) =
         if cfg.ui && matches!(req.path.as_str(), "/" | "/index.html") && req.method == "GET" {
             (
@@ -303,6 +410,27 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
         format!("server.route {} {}", req.method, req.path),
         route_started.elapsed(),
     );
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "route_end",
+        &[
+            ("operation", json!(diagnostic_operation(&req))),
+            ("http_status", json!(status)),
+            ("response_body_bytes", json!(body.len())),
+            (
+                "route_duration_ms",
+                json!(route_started.elapsed().as_millis() as u64),
+            ),
+            (
+                "timeout_reason",
+                json!(if status == 504 {
+                    "git_operation_deadline"
+                } else {
+                    "none"
+                }),
+            ),
+        ],
+    );
     #[cfg(test)]
     let audit_started = std::time::Instant::now();
     audit.append(
@@ -314,13 +442,42 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
     );
     #[cfg(test)]
     crate::remote::bench_timing::record("server.audit", audit_started.elapsed());
-    #[cfg(test)]
+    #[cfg(any(test, feature = "smart-http-diagnostics"))]
     let response_write_started = std::time::Instant::now();
-    if ctype.starts_with("application/x-git-") {
-        let _ = http::write_git_response(&mut w, status, ctype, &body);
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "response_start",
+        &[
+            ("http_status", json!(status)),
+            ("response_bytes", json!(body.len())),
+        ],
+    );
+    let response_result = if ctype.starts_with("application/x-git-") {
+        http::write_git_response(&mut w, status, ctype, &body)
     } else {
-        let _ = http::write_response(&mut w, status, ctype, &body);
-    }
+        http::write_response(&mut w, status, ctype, &body)
+    };
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "response_end",
+        &[
+            ("http_status", json!(status)),
+            (
+                "response_duration_ms",
+                json!(response_write_started.elapsed().as_millis() as u64),
+            ),
+            (
+                "connection_state",
+                json!(diagnostic_connection_state(&response_result)),
+            ),
+            (
+                "connection_error_kind",
+                json!(diagnostic_connection_error_kind(&response_result)),
+            ),
+        ],
+    );
+    #[cfg(not(feature = "smart-http-diagnostics"))]
+    drop(response_result);
     #[cfg(test)]
     crate::remote::bench_timing::record("server.response_write", response_write_started.elapsed());
     #[cfg(test)]
@@ -328,6 +485,50 @@ fn handle_conn(stream: TcpStream, cfg: &ServerConfig, request_deadline: Instant)
         format!("server.total {} {}", req.method, req.path),
         connection_started.elapsed(),
     );
+}
+
+#[cfg(feature = "smart-http-diagnostics")]
+fn diagnostic_operation(req: &Request) -> &'static str {
+    match (
+        req.method.as_str(),
+        req.path.as_str(),
+        req.query_get("service"),
+    ) {
+        ("GET", "/info/refs", Some("git-upload-pack")) => "advertise_upload_pack",
+        ("GET", "/info/refs", Some("git-receive-pack")) => "advertise_receive_pack",
+        ("POST", "/git-upload-pack", _) => "upload_pack",
+        ("POST", "/git-receive-pack", _) => "receive_pack",
+        _ => "other",
+    }
+}
+
+#[cfg(feature = "smart-http-diagnostics")]
+fn diagnostic_connection_state(result: &Result<()>) -> &'static str {
+    match result {
+        Ok(()) => "response_flushed",
+        Err(Error::Io { source, .. })
+            if matches!(
+                source.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) =>
+        {
+            "peer_closed_or_reset"
+        }
+        Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::TimedOut => {
+            "response_write_timeout"
+        }
+        Err(_) => "response_write_error",
+    }
+}
+
+#[cfg(feature = "smart-http-diagnostics")]
+fn diagnostic_connection_error_kind(result: &Result<()>) -> Option<String> {
+    match result {
+        Err(Error::Io { source, .. }) => Some(format!("{:?}", source.kind())),
+        _ => None,
+    }
 }
 
 /// Smart-HTTP compatibility boundary. Read and write services share auth but
@@ -1133,13 +1334,18 @@ mod request_deadline_tests {
         assert_eq!(status(&header_response), 408, "{header_response}");
         assert!(header_response.contains("Connection: close\r\n"));
         assert!(
+            header_elapsed >= budget.saturating_sub(Duration::from_millis(50)),
+            "header request timed out before the accept-start deadline: {header_elapsed:?}"
+        );
+        assert!(
             header_elapsed < Duration::from_secs(2),
             "{header_elapsed:?}"
         );
 
+        let body_budget = Duration::from_millis(400);
         let (body_response, body_elapsed) = request_with_budget(
             &cfg,
-            Duration::from_millis(400),
+            body_budget,
             b"POST /v1/have HTTP/1.1\r\nHost: x\r\nContent-Length: 20\r\nConnection: close\r\n\r\n",
             b"01234567890123456789",
             Duration::from_millis(330),
@@ -1147,6 +1353,10 @@ mod request_deadline_tests {
         );
         assert_eq!(status(&body_response), 408, "{body_response}");
         assert!(body_response.contains("Connection: close\r\n"));
+        assert!(
+            body_elapsed >= body_budget.saturating_sub(Duration::from_millis(50)),
+            "body request timed out before the accept-start deadline: {body_elapsed:?}"
+        );
         assert!(body_elapsed < Duration::from_secs(1), "{body_elapsed:?}");
 
         let (normal_response, _) = request_with_budget(

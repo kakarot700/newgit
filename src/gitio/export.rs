@@ -265,11 +265,31 @@ fn export_git_impl(
         isolated_global_config,
         isolated_template_dir,
     );
+    #[cfg(feature = "smart-http-diagnostics")]
+    let init_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[("operation", serde_json::json!("projection_git_init"))],
+    );
     let init_child = ManagedChild::spawn(&mut init_command, remaining(deadline)?)
         .map_err(|e| Error::io(target, e))?;
     let (init, timed_out) = init_child
         .wait_with_output()
         .map_err(|e| Error::io(target, e))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!("projection_git_init")),
+            (
+                "elapsed_ms",
+                serde_json::json!(init_started.elapsed().as_millis()),
+            ),
+            ("exit_code", serde_json::json!(init.status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error("Git repository initialization"));
     }
@@ -310,6 +330,13 @@ fn export_git_impl(
         &mut import_command,
         isolated_global_config,
         isolated_template_dir,
+    );
+    #[cfg(feature = "smart-http-diagnostics")]
+    let import_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[("operation", serde_json::json!("projection_fast_import"))],
     );
     let mut child = ManagedChild::spawn(&mut import_command, remaining(deadline)?)
         .map_err(|e| Error::io(target, e))?;
@@ -366,6 +393,21 @@ fn export_git_impl(
     #[cfg(test)]
     let stage_started = Instant::now();
     let (status, timed_out) = child.wait().map_err(|e| Error::io(target, e))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!("projection_fast_import")),
+            (
+                "elapsed_ms",
+                serde_json::json!(import_started.elapsed().as_millis()),
+            ),
+            ("exit_code", serde_json::json!(status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+            ("commits", serde_json::json!(rep.commits)),
+            ("blobs", serde_json::json!(rep.blobs)),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error("Git fast-import"));
     }
@@ -772,9 +814,46 @@ fn run_git(
     let mut command = Command::new("git");
     command.arg("-C").arg(dir).args(args).stdin(Stdio::null());
     isolate_git_command(&mut command, isolated_global_config, isolated_template_dir);
+    #[cfg(feature = "smart-http-diagnostics")]
+    let operation = match args.first().copied() {
+        Some("config") => "projection_config",
+        Some("symbolic-ref") => "projection_symbolic_ref",
+        Some("reset") => "projection_reset",
+        Some("checkout") => "projection_checkout",
+        Some("update-ref") => "projection_update_ref",
+        _ => "projection_git_helper",
+    };
+    #[cfg(feature = "smart-http-diagnostics")]
+    let subprocess_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[
+            ("operation", serde_json::json!(operation)),
+            (
+                "deadline_remaining_ms",
+                serde_json::json!(deadline.map(|deadline| deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis())),
+            ),
+        ],
+    );
     let child =
         ManagedChild::spawn(&mut command, remaining(deadline)?).map_err(|e| Error::io(dir, e))?;
     let (out, timed_out) = child.wait_with_output().map_err(|e| Error::io(dir, e))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!(operation)),
+            (
+                "elapsed_ms",
+                serde_json::json!(subprocess_started.elapsed().as_millis()),
+            ),
+            ("exit_code", serde_json::json!(out.status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error("Git export command"));
     }

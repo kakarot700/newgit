@@ -23,6 +23,8 @@ pub mod auth;
 #[cfg(test)]
 pub(crate) mod bench_timing;
 pub mod client;
+#[cfg(feature = "smart-http-diagnostics")]
+pub(crate) mod diagnostics;
 pub mod git_http;
 pub mod git_receive;
 pub mod http;

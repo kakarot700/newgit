@@ -150,6 +150,31 @@ jobs:
         run: cargo test --locked --lib remote::server::request_deadline_tests::absolute_request_deadline_covers_headers_and_body_and_allows_normal_requests -- --exact
       - name: Native unit and integration tests
         run: cargo test --locked
+      - name: Repeat Windows x64 smart-HTTP diagnostic E2Es
+        if: always() && matrix.target == 'x86_64-pc-windows-msvc'
+        env:
+          NEWGIT_SMART_HTTP_DIAGNOSTICS: "1"
+        run: |
+          result=0
+          for attempt in 1 2 3; do
+            echo "Windows x64 parallel smart-HTTP diagnostic attempt $attempt/3"
+            cargo test --features smart-http-diagnostics --locked --test git_remote_e2e -- --nocapture || result=1
+          done
+          for test_name in \
+            real_git_partial_clone_omits_blobs_and_lazily_fetches_checkout_content \
+            real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http \
+            real_git_force_push_modes_use_old_tip_cas_and_reject_invalid_atomic_batch \
+            real_git_protected_refs_require_admin_and_reject_mixed_pushes_before_promotion; do
+            for attempt in 1 2 3; do
+              echo "Windows x64 isolated smart-HTTP test=$test_name attempt $attempt/3"
+              cargo test --features smart-http-diagnostics --locked --test git_remote_e2e "$test_name" -- --exact --nocapture --test-threads=1 || result=1
+            done
+          done
+          exit "$result"
+      - name: Windows x64 100x real-Git smart-HTTP stress suite
+        if: always() && matrix.target == 'x86_64-pc-windows-msvc'
+        timeout-minutes: 70
+        run: cargo test --locked --test git_remote_e2e windows_x64_smart_http_100x_stress_suite -- --exact --ignored --nocapture
       - name: Native release build
         run: cargo build --release --locked
       - name: Stage binary with checksum and build metadata

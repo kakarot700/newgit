@@ -24,6 +24,17 @@ pub fn advertise(
     git_protocol: Option<&str>,
     max_response_bytes: u64,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_operation_start",
+        &[
+            ("operation", serde_json::json!("upload_pack_advertise")),
+            (
+                "configured_git_deadline_ms",
+                serde_json::json!(GIT_OPERATION_TIMEOUT.as_millis() as u64),
+            ),
+        ],
+    );
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let view = TempGitView::from_newgit(repo, deadline)?;
     let v2 = git_protocol == Some("version=2");
@@ -67,6 +78,17 @@ pub fn upload_pack(
     request: &[u8],
     max_response_bytes: u64,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_operation_start",
+        &[
+            ("operation", serde_json::json!("upload_pack")),
+            (
+                "configured_git_deadline_ms",
+                serde_json::json!(GIT_OPERATION_TIMEOUT.as_millis() as u64),
+            ),
+        ],
+    );
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let view = TempGitView::from_newgit(repo, deadline)?;
     #[cfg(test)]
@@ -129,8 +151,24 @@ impl TempGitView {
         deadline: Instant,
         materialize_worktree: bool,
     ) -> Result<(Self, crate::gitio::export::ExportReport)> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "smart-http-diagnostics"))]
         let projection_started = Instant::now();
+        #[cfg(feature = "smart-http-diagnostics")]
+        crate::remote::diagnostics::event(
+            "projection_start",
+            &[
+                (
+                    "materialize_worktree",
+                    serde_json::json!(materialize_worktree),
+                ),
+                (
+                    "deadline_remaining_ms",
+                    serde_json::json!(deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()),
+                ),
+            ],
+        );
         #[cfg(test)]
         let setup_started = Instant::now();
         let directory = tempfile::Builder::new()
@@ -156,22 +194,34 @@ impl TempGitView {
         crate::remote::bench_timing::record("projection.tempdir_setup", setup_started.elapsed());
         // The existing exporter handles ref mapping, object construction,
         // merges, tree content, and symbolic HEAD.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "smart-http-diagnostics"))]
         let export_started = Instant::now();
-        #[cfg(test)]
-        let snapshot_wait_started = Instant::now();
         let export = {
             // Refs, HEAD, history, and their objects must all come from one
             // committed state. Recovery is performed while acquiring the
             // same exclusive lock used by transactions and GC.
+            #[cfg(any(test, feature = "smart-http-diagnostics"))]
+            let snapshot_wait_started = Instant::now();
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event("projection_lock_wait_start", &[]);
             let _snapshot = crate::repo::txn::SnapshotReadGuard::acquire(repo.ng(), repo.limits())?;
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event(
+                "projection_lock_acquired",
+                &[(
+                    "lock_wait_ms",
+                    serde_json::json!(snapshot_wait_started.elapsed().as_millis() as u64),
+                )],
+            );
             #[cfg(test)]
             crate::remote::bench_timing::record(
                 "projection.snapshot_lock_wait",
                 snapshot_wait_started.elapsed(),
             );
-            #[cfg(test)]
+            #[cfg(any(test, feature = "smart-http-diagnostics"))]
             let snapshot_hold_started = Instant::now();
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event("projection_export_start", &[]);
             let export = if materialize_worktree {
                 crate::gitio::export::export_git_isolated(
                     repo,
@@ -189,10 +239,24 @@ impl TempGitView {
                     deadline,
                 )
             };
+            #[cfg(any(test, feature = "smart-http-diagnostics"))]
+            let snapshot_hold_elapsed = snapshot_hold_started.elapsed();
+            drop(_snapshot);
+            #[cfg(feature = "smart-http-diagnostics")]
+            crate::remote::diagnostics::event(
+                "projection_lock_released",
+                &[
+                    (
+                        "lock_hold_ms",
+                        serde_json::json!(snapshot_hold_elapsed.as_millis() as u64),
+                    ),
+                    ("export_succeeded", serde_json::json!(export.is_ok())),
+                ],
+            );
             #[cfg(test)]
             crate::remote::bench_timing::record(
                 "projection.snapshot_lock_hold",
-                snapshot_hold_started.elapsed(),
+                snapshot_hold_elapsed,
             );
             export
         };
@@ -204,10 +268,37 @@ impl TempGitView {
             }
             Err(error) => return Err(error),
         };
+        #[cfg(feature = "smart-http-diagnostics")]
+        crate::remote::diagnostics::event(
+            "projection_export_end",
+            &[
+                (
+                    "export_duration_ms",
+                    serde_json::json!(export_started.elapsed().as_millis() as u64),
+                ),
+                (
+                    "refs_exported",
+                    serde_json::json!(export.refs_exported.len()),
+                ),
+                ("commits_exported", serde_json::json!(export.commits)),
+                ("blobs_exported", serde_json::json!(export.blobs)),
+            ],
+        );
         #[cfg(test)]
         crate::remote::bench_timing::record("projection.export_total", export_started.elapsed());
         #[cfg(test)]
         crate::remote::bench_timing::record("projection.total", projection_started.elapsed());
+        #[cfg(feature = "smart-http-diagnostics")]
+        crate::remote::diagnostics::event(
+            "projection_end",
+            &[
+                (
+                    "projection_duration_ms",
+                    serde_json::json!(projection_started.elapsed().as_millis()),
+                ),
+                ("success", serde_json::json!(true)),
+            ],
+        );
         Ok((view, export))
     }
 }
@@ -225,12 +316,32 @@ fn init_empty_view(view: &TempGitView, deadline: Instant) -> Result<()> {
         .env("GIT_CONFIG_GLOBAL", &view.global_config)
         .env("GIT_CONFIG_COUNT", "0");
     isolate_git_environment(&mut command);
+    #[cfg(feature = "smart-http-diagnostics")]
+    let subprocess_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[("operation", serde_json::json!("empty_projection_git_init"))],
+    );
     let mut child =
         crate::util::process::ManagedChild::spawn(&mut command, Some(remaining(deadline)?))
             .map_err(|e| Error::Invalid(format!("cannot initialize empty Git projection: {e}")))?;
     let (status, timed_out) = child
         .wait()
         .map_err(|e| Error::Invalid(format!("could not wait for Git init: {e}")))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!("empty_projection_git_init")),
+            (
+                "elapsed_ms",
+                serde_json::json!(subprocess_started.elapsed().as_millis()),
+            ),
+            ("exit_code", serde_json::json!(status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error());
     }
@@ -326,6 +437,25 @@ fn run_upload_pack(
         command.env_remove("GIT_PROTOCOL");
     }
 
+    #[cfg(feature = "smart-http-diagnostics")]
+    let subprocess_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[
+            ("operation", serde_json::json!("upload_pack")),
+            (
+                "request_bytes",
+                serde_json::json!(request.map_or(0, <[u8]>::len)),
+            ),
+            (
+                "deadline_remaining_ms",
+                serde_json::json!(deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()),
+            ),
+        ],
+    );
     let mut child =
         crate::util::process::ManagedChild::spawn(&mut command, Some(remaining(deadline)?))
             .map_err(|e| Error::Invalid(format!("cannot start Git upload-pack: {e}")))?;
@@ -384,6 +514,28 @@ fn run_upload_pack(
     let (status, timed_out) = child
         .wait()
         .map_err(|e| Error::Invalid(format!("could not wait for Git upload-pack: {e}")))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!("upload_pack")),
+            (
+                "elapsed_ms",
+                serde_json::json!(subprocess_started.elapsed().as_millis()),
+            ),
+            ("output_bytes", serde_json::json!(output.len())),
+            ("exit_code", serde_json::json!(status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+            (
+                "timeout_reason",
+                serde_json::json!(if timed_out {
+                    "git_operation_deadline"
+                } else {
+                    "none"
+                }),
+            ),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error());
     }

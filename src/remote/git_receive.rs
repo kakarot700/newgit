@@ -53,6 +53,17 @@ pub fn advertise(
     git_protocol: Option<&str>,
     max_response_bytes: u64,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_operation_start",
+        &[
+            ("operation", serde_json::json!("receive_pack_advertise")),
+            (
+                "configured_git_deadline_ms",
+                serde_json::json!(GIT_OPERATION_TIMEOUT.as_millis() as u64),
+            ),
+        ],
+    );
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
     let (view, _) = TempGitView::from_newgit_with_export(repo, deadline)?;
     let mut command = receive_pack_command(&view, true, git_protocol);
@@ -108,6 +119,17 @@ pub fn receive_pack(
     }
 
     let deadline = Instant::now() + GIT_OPERATION_TIMEOUT;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_operation_start",
+        &[
+            ("operation", serde_json::json!("receive_pack")),
+            (
+                "configured_git_deadline_ms",
+                serde_json::json!(GIT_OPERATION_TIMEOUT.as_millis() as u64),
+            ),
+        ],
+    );
     let (view, export) = TempGitView::from_newgit_with_export(repo, deadline)?;
     let git_to_newgit: HashMap<String, ObjectId> = export.git_commit_oids.clone();
     let mut updates = Vec::with_capacity(pushes.len());
@@ -627,6 +649,34 @@ fn run_git(
         .checked_duration_since(Instant::now())
         .filter(|duration| !duration.is_zero())
         .ok_or_else(git_deadline_error)?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    let operation = command
+        .get_args()
+        .filter_map(|arg| arg.to_str())
+        .find_map(|arg| match arg {
+            "receive-pack" => Some("receive_pack"),
+            "show-ref" => Some("show_ref"),
+            "cat-file" => Some("cat_file"),
+            _ => None,
+        })
+        .unwrap_or("git_helper");
+    #[cfg(feature = "smart-http-diagnostics")]
+    let subprocess_started = Instant::now();
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_start",
+        &[
+            ("operation", serde_json::json!(operation)),
+            (
+                "request_bytes",
+                serde_json::json!(input.map_or(0, <[u8]>::len)),
+            ),
+            (
+                "deadline_remaining_ms",
+                serde_json::json!(remaining.as_millis()),
+            ),
+        ],
+    );
     let mut child = crate::util::process::ManagedChild::spawn(command, Some(remaining))
         .map_err(|error| Error::Invalid(format!("cannot start Git receive-pack: {error}")))?;
     let mut stdout = child
@@ -667,6 +717,28 @@ fn run_git(
     let (status, timed_out) = child
         .wait()
         .map_err(|error| Error::Invalid(format!("could not wait for Git receive-pack: {error}")))?;
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "git_subprocess_end",
+        &[
+            ("operation", serde_json::json!(operation)),
+            (
+                "elapsed_ms",
+                serde_json::json!(subprocess_started.elapsed().as_millis()),
+            ),
+            ("output_bytes", serde_json::json!(output.len())),
+            ("exit_code", serde_json::json!(status.code())),
+            ("timed_out", serde_json::json!(timed_out)),
+            (
+                "timeout_reason",
+                serde_json::json!(if timed_out {
+                    "git_operation_deadline"
+                } else {
+                    "none"
+                }),
+            ),
+        ],
+    );
     if timed_out {
         return Err(git_deadline_error());
     }

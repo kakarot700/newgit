@@ -13,11 +13,11 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::mpsc;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
-#[cfg(target_os = "linux")]
 use std::time::Instant;
 
 use newgit::object::types::{Actor, ActorKind, EntryMode, Object, Snapshot};
@@ -31,6 +31,86 @@ use tempfile::TempDir;
 const READ_TOKEN: &str = "git-http-read-test-token";
 const WRITE_TOKEN: &str = "git-http-write-test-token";
 const ADMIN_TOKEN: &str = "git-http-admin-test-token";
+static NEXT_DIAGNOSTIC_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+
+fn git_operation(args: &[&str]) -> &'static str {
+    args.iter()
+        .find_map(|arg| match *arg {
+            "clone" => Some("clone"),
+            "fetch" => Some("fetch"),
+            "pull" => Some("pull"),
+            "push" => Some("push"),
+            "checkout" => Some("checkout"),
+            "ls-remote" => Some("ls_remote"),
+            _ => None,
+        })
+        .unwrap_or("other_git")
+}
+
+fn git_command(args: &[&str]) -> (Command, Option<(String, Instant)>) {
+    let mut command = Command::new("git");
+    let diagnostic =
+        std::env::var_os("NEWGIT_SMART_HTTP_DIAGNOSTICS").is_some_and(|value| value == "1");
+    let context = if diagnostic {
+        let id = format!(
+            "git-{}-{}",
+            std::process::id(),
+            NEXT_DIAGNOSTIC_COMMAND_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        command
+            .arg("-c")
+            .arg(format!("http.extraHeader=X-NewGit-Diagnostic-ID: {id}"))
+            .env("GIT_TRACE_CURL", "1");
+        eprintln!(
+            "{}",
+            serde_json::json!({"event":"git_client_start", "client_trace_id":id, "operation":git_operation(args)})
+        );
+        Some((id, Instant::now()))
+    } else {
+        None
+    };
+    command
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", git_config_file())
+        .env("GIT_CONFIG_SYSTEM", git_config_file())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    (command, context)
+}
+
+fn record_git_command_end(context: Option<(String, Instant)>, args: &[&str], output: &Output) {
+    if let Some((id, started)) = context {
+        eprintln!(
+            "{}",
+            serde_json::json!({"event":"git_client_end", "client_trace_id":id, "operation":git_operation(args), "elapsed_ms":started.elapsed().as_millis(), "exit_code":output.status.code()})
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let lower_stderr = stderr.to_ascii_lowercase();
+        if lower_stderr.contains("408")
+            || lower_stderr.contains("request timeout")
+            || lower_stderr.contains("connection reset")
+            || lower_stderr.contains("connection was reset")
+        {
+            let safe_stderr = stderr
+                .lines()
+                .map(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    if lower.contains("authorization:") || lower.contains("proxy-authorization:") {
+                        "<authorization header redacted>"
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            eprintln!(
+                "git_client_error_trace_begin client_trace_id={id}\n{safe_stderr}\ngit_client_error_trace_end client_trace_id={id}"
+            );
+        }
+    }
+}
 
 fn temp(tag: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
@@ -93,16 +173,11 @@ fn commit(
 }
 
 fn git(args: &[&str]) -> Output {
-    let out = Command::new("git")
-        .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_file())
-        .env("GIT_CONFIG_SYSTEM", git_config_file())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let (mut command, diagnostic_context) = git_command(args);
+    let out = command
         .output()
         .unwrap_or_else(|e| panic!("could not spawn git {args:?}: {e}"));
+    record_git_command_end(diagnostic_context, args, &out);
     assert!(
         out.status.success(),
         "git {args:?} failed ({}): {}",
@@ -113,16 +188,11 @@ fn git(args: &[&str]) -> Output {
 }
 
 fn git_fails(args: &[&str]) -> Output {
-    let out = Command::new("git")
-        .args(args)
-        .env("GIT_CONFIG_GLOBAL", git_config_file())
-        .env("GIT_CONFIG_SYSTEM", git_config_file())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let (mut command, diagnostic_context) = git_command(args);
+    let out = command
         .output()
         .unwrap_or_else(|e| panic!("could not spawn git {args:?}: {e}"));
+    record_git_command_end(diagnostic_context, args, &out);
     assert!(!out.status.success(), "git {args:?} unexpectedly succeeded");
     out
 }
@@ -3020,4 +3090,193 @@ fn real_git_partial_clone_omits_blobs_and_lazily_fetches_checkout_content() {
     assert!(missing_after_checkout.contains(&blob_oids[0]));
     assert!(missing_after_checkout.contains(&blob_oids[1]));
     server.shutdown();
+}
+
+fn concurrent_push_fetch_scenario(cycles: usize) {
+    let (_dir, root) = temp("concurrent-push-fetch");
+    let remote_path = root.join("newgit");
+    std::fs::create_dir(&remote_path).unwrap();
+    let newgit = Repo::init(&remote_path).unwrap();
+    let initial = commit(
+        &newgit,
+        "refs/main",
+        "initial concurrent snapshot",
+        &[("tick.txt", b"initial\n", EntryMode::File)],
+        vec![],
+    );
+    newgit
+        .set_head(
+            &Head::Symbolic("refs/main".into()),
+            RefLogEntry::system("set concurrent-test default branch"),
+        )
+        .unwrap();
+    assert_eq!(newgit.refs.read("refs/main").unwrap(), initial);
+
+    let tokens_path = root.join("tokens.json");
+    let mut tokens = TokenFile::default();
+    tokens.add("git-reader", READ_TOKEN, Role::Read).unwrap();
+    tokens.add("git-writer", WRITE_TOKEN, Role::Write).unwrap();
+    auth::save(&tokens_path, &tokens).unwrap();
+    let server = server::spawn(ServerConfig {
+        bind: "127.0.0.1:0".into(),
+        repo_root: remote_path,
+        token_file: tokens_path,
+        ..Default::default()
+    })
+    .unwrap();
+    let url = format!("http://{}/", server.addr());
+    let writer = root.join("writer");
+    let reader = root.join("reader");
+    let writer_path = writer.to_str().unwrap();
+    let reader_path = reader.to_str().unwrap();
+    let read_auth = format!("http.extraHeader=Authorization: Bearer {READ_TOKEN}");
+    let write_auth = format!("http.extraHeader=Authorization: Bearer {WRITE_TOKEN}");
+    git(&["-c", &read_auth, "clone", "--quiet", &url, writer_path]);
+    git(&["-c", &read_auth, "clone", "--quiet", &url, reader_path]);
+    git(&["-C", writer_path, "config", "user.name", "Concurrent Test"]);
+    git(&[
+        "-C",
+        writer_path,
+        "config",
+        "user.email",
+        "concurrent-test@example.test",
+    ]);
+
+    for cycle in 0..cycles {
+        if cycles > 10 && cycle % 10 == 0 {
+            eprintln!("concurrent push/fetch/read cycle {}/{}", cycle + 1, cycles);
+        }
+        let contents = format!("cycle {cycle}\n");
+        std::fs::write(writer.join("tick.txt"), contents).unwrap();
+        git(&["-C", writer_path, "add", "tick.txt"]);
+        let message = format!("concurrent cycle {cycle}");
+        git(&["-C", writer_path, "commit", "--quiet", "-m", &message]);
+
+        let push_args = [
+            "-c",
+            &write_auth,
+            "-C",
+            writer_path,
+            "push",
+            "--quiet",
+            "origin",
+            "HEAD:refs/heads/main",
+        ];
+        let fetch_args = [
+            "-c",
+            &read_auth,
+            "-C",
+            reader_path,
+            "fetch",
+            "--quiet",
+            "origin",
+        ];
+        let listing_args = ["-c", &read_auth, "ls-remote", &url, "refs/heads/main"];
+        std::thread::scope(|scope| {
+            let push = scope.spawn(|| git(&push_args));
+            let fetch = scope.spawn(|| git(&fetch_args));
+            let listing = scope.spawn(|| git(&listing_args));
+            push.join().expect("concurrent Git push panicked");
+            fetch.join().expect("concurrent Git fetch panicked");
+            let listing = listing.join().expect("concurrent ls-remote panicked");
+            let listing = as_text(&listing);
+            assert!(
+                listing
+                    .lines()
+                    .any(|line| line.ends_with("\trefs/heads/main")),
+                "concurrent ls-remote did not return a complete main ref: {listing:?}"
+            );
+        });
+
+        // A final serial fetch must observe the committed push even if the
+        // concurrent fetch linearized just before it.
+        git(&[
+            "-c",
+            &read_auth,
+            "-C",
+            reader_path,
+            "fetch",
+            "--quiet",
+            "origin",
+        ]);
+        let writer_tip = as_text(&git(&["-C", writer_path, "rev-parse", "HEAD"]))
+            .trim()
+            .to_string();
+        let reader_tip = as_text(&git(&[
+            "-C",
+            reader_path,
+            "rev-parse",
+            "refs/remotes/origin/main",
+        ]))
+        .trim()
+        .to_string();
+        assert_eq!(
+            reader_tip, writer_tip,
+            "cycle {cycle} did not converge after fetch"
+        );
+        let server_tip = newgit.refs.read("refs/main").unwrap();
+        match newgit.objects.get(&server_tip).unwrap() {
+            Object::Snapshot(snapshot) => assert_eq!(snapshot.message.trim_end(), message),
+            object => panic!("pushed NewGit ref is not a snapshot: {object:?}"),
+        }
+    }
+    server.shutdown();
+}
+
+#[test]
+fn real_git_concurrent_push_fetch_and_read_is_consistent() {
+    concurrent_push_fetch_scenario(3);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[test]
+#[ignore = "explicit 100x native Windows x64 smart-HTTP stress suite"]
+fn windows_x64_smart_http_100x_stress_suite() {
+    const ITERATIONS: usize = 100;
+    for iteration in 0..ITERATIONS {
+        // Each existing scenario uses ordinary Git over loopback against a
+        // freshly initialized real NewGit repository and independently checks
+        // refs/objects after network operations.
+        eprintln!(
+            "stress case=normal clone/fetch/pull/push iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_clone_fetch_pull_push_and_ls_remote_over_smart_http();
+        eprintln!(
+            "stress case=shallow fetch/deepen/unshallow iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_shallow_clone_deepen_unshallow_and_pull_over_smart_http();
+        eprintln!(
+            "stress case=partial-clone lazy fetch iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_partial_clone_omits_blobs_and_lazily_fetches_checkout_content();
+        eprintln!(
+            "stress case=forced update/atomic push iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_force_push_modes_use_old_tip_cas_and_reject_invalid_atomic_batch();
+        eprintln!(
+            "stress case=tag deletion/atomic multi-ref push iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_lightweight_tag_pushes_are_transactional_and_bounded();
+        eprintln!(
+            "stress case=protected ref push iteration {}/{}",
+            iteration + 1,
+            ITERATIONS
+        );
+        real_git_protected_refs_require_admin_and_reject_mixed_pushes_before_promotion();
+    }
+    eprintln!("Running 100 concurrent push/fetch/read cycles");
+    concurrent_push_fetch_scenario(ITERATIONS);
+    eprintln!(
+        "Windows x64 smart-HTTP stress passed: 100 each normal, shallow, lazy, forced, deletion/atomic, protected; 100 concurrent push/fetch/read cycles; failures=0"
+    );
 }

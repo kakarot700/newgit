@@ -56,13 +56,44 @@ fn read_error_status(error: &std::io::Error) -> u16 {
     }
 }
 
+fn read_error(
+    stage: &'static str,
+    message_stage: &'static str,
+    error: std::io::Error,
+) -> HttpError {
+    #[cfg(not(feature = "smart-http-diagnostics"))]
+    let _ = stage;
+    let status = read_error_status(&error);
+    #[cfg(feature = "smart-http-diagnostics")]
+    crate::remote::diagnostics::event(
+        "http_read_error",
+        &[
+            ("stage", serde_json::json!(stage)),
+            (
+                "error_kind",
+                serde_json::json!(format!("{:?}", error.kind())),
+            ),
+            ("http_status", serde_json::json!(status)),
+            (
+                "timeout_reason",
+                serde_json::json!(match error.kind() {
+                    std::io::ErrorKind::TimedOut => "timed_out_correlate_deadline_remaining",
+                    std::io::ErrorKind::WouldBlock => "would_block_correlate_deadline_remaining",
+                    _ => "not_a_timeout",
+                }),
+            ),
+        ],
+    );
+    err(status, format!("{message_stage}: {error}"))
+}
+
 /// Read one request. `max_body` caps Content-Length AND the actual read.
 pub fn read_request<R: BufRead>(
     r: &mut R,
     max_body: u64,
 ) -> std::result::Result<Request, HttpError> {
     let line = read_bounded_line(r, MAX_REQUEST_LINE)
-        .map_err(|e| err(read_error_status(&e), format!("request line read: {e}")))?;
+        .map_err(|e| read_error("request_line_read", "request line read", e))?;
     let Some(line) = line else {
         return Err(err(400, "empty request (connection closed)"));
     };
@@ -97,7 +128,7 @@ pub fn read_request<R: BufRead>(
     loop {
         let remaining = MAX_HEADER_TOTAL.saturating_sub(header_total);
         let hl = read_bounded_line(r, remaining)
-            .map_err(|e| err(read_error_status(&e), format!("header read: {e}")))?;
+            .map_err(|e| read_error("header_read", "header read", e))?;
         let Some(hl) = hl else {
             return Err(err(400, "connection closed inside headers"));
         };
@@ -124,6 +155,38 @@ pub fn read_request<R: BufRead>(
             return Err(err(400, format!("duplicate singleton HTTP header {k:?}")));
         }
         headers.insert(k, v.trim().to_string());
+    }
+
+    #[cfg(feature = "smart-http-diagnostics")]
+    {
+        let client_trace_id = headers.get("x-newgit-diagnostic-id").map(String::as_str);
+        crate::remote::diagnostics::set_client_trace_id(client_trace_id);
+        let safe_path = match target.split('?').next().unwrap_or_default() {
+            "/info/refs" => "info_refs",
+            "/git-upload-pack" => "git_upload_pack",
+            "/git-receive-pack" => "git_receive_pack",
+            _ => "other",
+        };
+        let service = target
+            .split_once('?')
+            .and_then(|(_, query)| {
+                query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("service="))
+            })
+            .filter(|service| matches!(*service, "git-upload-pack" | "git-receive-pack"));
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<u64>().ok());
+        crate::remote::diagnostics::event(
+            "http_headers_received",
+            &[
+                ("method", serde_json::json!(method)),
+                ("operation", serde_json::json!(safe_path)),
+                ("service", serde_json::json!(service)),
+                ("content_length", serde_json::json!(content_length)),
+            ],
+        );
     }
 
     if headers.contains_key("transfer-encoding") && headers.contains_key("content-length") {
@@ -157,8 +220,7 @@ pub fn read_request<R: BufRead>(
                     return Err(err(413, format!("body {len} exceeds limit {max_body}")));
                 }
                 let mut buf = vec![0u8; len as usize];
-                read_exact(r, &mut buf)
-                    .map_err(|e| err(read_error_status(&e), format!("body read: {e}")))?;
+                read_exact(r, &mut buf).map_err(|e| read_error("body_read", "body read", e))?;
                 buf
             }
         }
