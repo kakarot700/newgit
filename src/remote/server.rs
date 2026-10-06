@@ -133,6 +133,12 @@ fn accept_loop(listener: TcpListener, cfg: ServerConfig, stop: Arc<AtomicBool>) 
         match listener.accept() {
             Ok((stream, _peer)) => {
                 let request_deadline = Instant::now() + REQUEST_READ_TIMEOUT;
+                // Nonblocking listeners can yield nonblocking accepted sockets on Windows;
+                // restore blocking mode so the per-socket read timeout is effective.
+                let stream = match set_accepted_stream_blocking(stream) {
+                    Ok(stream) => stream,
+                    Err(_) => continue,
+                };
                 if active.load(Ordering::Relaxed) >= cfg.max_threads {
                     let mut w = BufWriter::new(stream);
                     let body = envelope_err(429, "limit", "server busy: too many connections");
@@ -158,6 +164,11 @@ fn accept_loop(listener: TcpListener, cfg: ServerConfig, stop: Arc<AtomicBool>) 
             Err(_) => break, // listener dead
         }
     }
+}
+
+fn set_accepted_stream_blocking(stream: TcpStream) -> io::Result<TcpStream> {
+    stream.set_nonblocking(false)?;
+    Ok(stream)
 }
 
 fn envelope_ok(data: Value) -> Vec<u8> {
@@ -1192,6 +1203,48 @@ pub fn listening_line(addr: SocketAddr) -> String {
 #[cfg(test)]
 mod request_deadline_tests {
     use super::*;
+
+    #[test]
+    fn accepted_stream_blocks_until_its_read_timeout() {
+        use std::io::Read;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let accept_deadline = Instant::now() + Duration::from_secs(2);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        && Instant::now() < accept_deadline =>
+                {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("cannot accept loopback connection: {error}"),
+            }
+        };
+        let mut stream = set_accepted_stream_blocking(stream).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+
+        let started = Instant::now();
+        let error = stream.read(&mut [0_u8; 1]).unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ),
+            "unexpected read result after idle wait: {error}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(75),
+            "accepted read returned after {elapsed:?}, before its 100 ms timeout"
+        );
+        drop(client);
+    }
 
     fn test_config(repo_root: PathBuf, token_file: PathBuf) -> ServerConfig {
         ServerConfig {
