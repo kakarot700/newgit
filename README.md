@@ -123,6 +123,8 @@ A self-hosted NewGit server can exchange NewGit objects and refs through its JSO
 
 The embedded UI is read-only. MCP uses stdio and inherits the operating-system privileges of the process that starts it. Consult [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md) when choosing a deployment model.
 
+MCP clients such as Claude Code can use the built-in stdio server directly, with no extra dependency or plugin: `claude mcp add newgit -- newgit mcp`. Any client that speaks stdio JSON-RPC 2.0 works the same way, and NewGit stays usable without an AI model. See the [agent guide](docs/AGENT_GUIDE.md) and the [Claude Code notes](docs/CLAUDE.md).
+
 ## Testing
 
 From the repository root:

@@ -376,7 +376,7 @@ evaluation, proposal) via the identical dispatch code path (`cli::call_json`)
 — same validation, same error categories. Tool failures return
 `isError:true` with the standard `{ok:false,error:{category,message}}`
 envelope as text content. Blocks until stdin EOF (exit 0) or process kill.
-See docs/AGENT_GUIDE.md §3.
+See docs/AGENT_GUIDE.md §3 (client setup incl. Claude Code: §3b, docs/CLAUDE.md).
 
 ## Coming in later iterations
 

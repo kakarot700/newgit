@@ -107,6 +107,24 @@ Security note: the MCP server has the privileges of the process that started
 it (same as the CLI). Run one server per repository/per agent, under that
 agent's OS user. It listens on stdio only — never on a port.
 
+## 3b. Claude Code quickstart
+
+### Claude Code
+
+NewGit's MCP server works natively with Claude Code. No extra dependency.
+
+```bash
+# in your NewGit repo
+claude mcp add newgit -- newgit mcp
+# or with explicit repo path
+claude mcp add newgit -- newgit --repo /path/to/repo mcp
+```
+
+Claude Code then exposes the 13 tools from §3 as the `newgit` server. This is
+one client of the standard stdio transport — any MCP client works the same
+way, and no AI model is needed to use NewGit. The server inherits the
+privileges of the process that starts it (see the §3 security note).
+
 ## 4. Web UI (read-only explorer)
 
 ```bash
