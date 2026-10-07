@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://newgit.lovie.me/sitemap.xml
